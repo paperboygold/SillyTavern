@@ -1,0 +1,4 @@
+# Isolated SillyTavern data root used by the Playwright webServer.
+.st-data/
+playwright-report/
+test-results/

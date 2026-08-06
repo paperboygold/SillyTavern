@@ -104,6 +104,14 @@ declare global {
         /** When false, the message cannot be swiped. */
         swipeable?: boolean;
         overswipe_behavior?: OVERSWIPE_BEHAVIOR;
+        /** The instruction this swipe was generated under. See scripts/extensions/fold/steer-table.js. */
+        fold_steer?: {
+            text: string;
+            direction: 'steer' | 'retry' | 'edit';
+            at?: number;
+            template?: string;
+            source?: string;
+        };
         files?: FileAttachment[];
         inline_image?: boolean;
         media_display?: string;

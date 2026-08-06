@@ -19,6 +19,14 @@ module.exports = {
         sourceType: 'module',
     },
     overrides: [
+        {
+            // Playwright specs and helpers carry browser code inside page.evaluate() callbacks,
+            // which run in the page rather than in Node.
+            files: ['frontend/**/*.js', 'util/st-driver.mjs'],
+            env: {
+                browser: true,
+            },
+        },
     ],
     ignorePatterns: [
         '*.min.js',

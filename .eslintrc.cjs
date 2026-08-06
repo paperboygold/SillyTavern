@@ -79,6 +79,8 @@ module.exports = {
         '**/*.min.js',
         'public/scripts/extensions/quick-reply/lib/**',
         'public/scripts/extensions/tts/lib/**',
+        // Vendored verbatim from the Sanguine proof corpus — do not lint or reformat.
+        'public/scripts/extensions/fold/lib/**',
     ],
     rules: {
         'jsdoc/no-undefined-types': ['warn', { disableReporting: true, markVariablesAsUsed: true }],
