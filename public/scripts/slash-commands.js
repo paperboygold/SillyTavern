@@ -1542,7 +1542,7 @@ export function initDefaultSlashCommands() {
         ],
         helpString: `
         <div>
-            ${t`Regenerates the latest reply in the chat.`}
+            ${t`Regenerates the latest reply in the chat. This discards the current reply and all of its swipes — use <code>/steer</code> to add a new variant instead of replacing them.`}
         </div>
         <div>
             ${t`If <code>await=true</code> named argument is passed, the command will await for the regeneration before proceeding.`}
@@ -1577,9 +1577,19 @@ export function initDefaultSlashCommands() {
                 'false',
             ),
         ],
+        unnamedArgumentList: [
+            SlashCommandArgument.fromProps({
+                description: t`optional steering instruction for the new swipe`,
+                typeList: [ARGUMENT_TYPE.STRING],
+                isRequired: false,
+            }),
+        ],
         helpString: `
         <div>
             ${t`Swipes the latest reply. Defaults to <code>direction=right</code>; use <code>direction=left</code> to go to the previous reply. If no next swipe exists, behavior depends on message context.`}
+        </div>
+        <div>
+            ${t`If an instruction is provided, the new swipe is generated under it, e.g. <code>/swipe make her angrier</code>. Existing swipes are kept.`}
         </div>
         <div>
             ${t`If <code>await=true</code> named argument is passed, the command will await for the swipe action before proceeding.`}
@@ -5671,9 +5681,10 @@ async function regenerateChatCallback(args) {
     return '';
 }
 
-async function swipeChatCallback(args) {
+async function swipeChatCallback(args, instruction) {
     const shouldAwait = isTrueBoolean(args?.await);
     const direction = args?.direction === SWIPE_DIRECTION.LEFT ? SWIPE_DIRECTION.LEFT : SWIPE_DIRECTION.RIGHT;
+    const steerText = String(instruction ?? '').trim();
 
     const outerPromise = new Promise((outerResolve) => setTimeout(async () => {
         try {
@@ -5682,6 +5693,14 @@ async function swipeChatCallback(args) {
             console.warn('Timeout waiting for generation unlock');
             toastr.warning(t`Cannot run /swipe command while the reply is being generated.`);
             outerResolve(Promise.resolve(''));
+            return '';
+        }
+
+        // A steering instruction only makes sense for a forward swipe, which is the one that
+        // generates. Imported lazily so core carries no static dependency on the extension.
+        if (steerText && direction === SWIPE_DIRECTION.RIGHT) {
+            const { requestSteer } = await import('./extensions/fold/steer.js');
+            outerResolve(Promise.resolve(requestSteer(chat.length - 1, steerText, { source: 'swipe_cmd' })));
             return '';
         }
 

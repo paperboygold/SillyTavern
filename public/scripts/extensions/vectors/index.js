@@ -1178,7 +1178,7 @@ async function queryCollection(collectionId, searchText, topK) {
  * @param {number} threshold - Score threshold
  * @returns {Promise<Record<string, { hashes: number[], metadata: object[] }>>} - Results mapped to collection IDs
  */
-async function queryMultipleCollections(collectionIds, searchText, topK, threshold) {
+export async function queryMultipleCollections(collectionIds, searchText, topK, threshold) {
     const args = await getAdditionalArgs([searchText]);
     const response = await fetch('/api/vector/query-multi', {
         method: 'POST',

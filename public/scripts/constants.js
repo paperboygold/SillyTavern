@@ -177,6 +177,12 @@ export const SWIPE_SOURCE = {
     AUTO_SWIPE: 'auto_swipe',
     SLASH_COMMAND: 'slash_command',
     SWIPE_PICKER: 'swipe_picker',
+    /**
+     * A swipe generated under an explicit user instruction (fold's steering).
+     * Deliberately NOT in swipe()'s source bypass list: steering should obey the normal
+     * isSwipingAllowed()/isGenerating() guards rather than skip them.
+     */
+    STEER: 'steer',
 };
 
 /**
