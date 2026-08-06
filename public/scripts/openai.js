@@ -2584,7 +2584,7 @@ function getReasoningEffort(settings = null, model = null) {
                 }
 
                 if ([chat_completion_sources.OPENAI, chat_completion_sources.AZURE_OPENAI].includes(settings.chat_completion_source)) {
-                    if (/^gpt-5\.(4|5)/.test(model)) {
+                    if (/^gpt-5\.(4|5|6)/.test(model)) {
                         return 'none';
                     }
                     if (/^gpt-5/.test(model)) {
@@ -3007,6 +3007,10 @@ export async function createGenerationParameters(settings, model, type, messages
         delete generate_data.max_tokens;
         delete generate_data.logprobs;
         delete generate_data.top_logprobs;
+        // GPT-5.6 Chat Completions only supports function tools with reasoning disabled.
+        if (/^gpt-5\.6(?:$|-)/.test(model) && generate_data.tools?.length) {
+            generate_data.reasoning_effort = 'none';
+        }
         if (/gpt-5-chat-latest/.test(model)) {
             delete generate_data.tools;
             delete generate_data.tool_choice;
@@ -4970,6 +4974,7 @@ function getMaxContextOpenAI(value) {
 
     /** @type {[RegExp, number][]} */
     const contextMap = [
+        [/^gpt-5\.6(?:$|-)/, max_1mil],
         [/^gpt-5\.[45]/, max_1mil],
         [/^gpt-5/, max_400k],
         [/gpt-4\.1/, max_1mil],
