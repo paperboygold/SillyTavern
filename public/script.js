@@ -4291,7 +4291,11 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     if (selected_group && !is_group_generating) {
         if (!dryRun) {
             // Returns the promise that generateGroupWrapper returns; resolves when generation is done
-            return generateGroupWrapper(false, type, { quiet_prompt, force_chid, signal: abortController.signal, quietImage, jsonSchema });
+            // quietToLoud and depth must be forwarded: without quietToLoud, a group generation
+            // carrying a quiet_prompt hits the early bail-out in modifyLastPromptLine or gets
+            // attributed to 'System' instead of the character. This affects /continue <prompt>
+            // and /impersonate <prompt> in groups, not just steering.
+            return generateGroupWrapper(false, type, { quiet_prompt, quietToLoud, force_chid, signal: abortController.signal, quietImage, jsonSchema, depth });
         }
 
         const characterIndexMap = new Map(characters.map((char, index) => [char.avatar, index]));
@@ -9890,8 +9894,10 @@ function formatSwipeCounter(current, total) {
  * @param {number} [params.forceMesId] The message id to swipe.
  * @param {number} [params.forceSwipeId] The target swipe_id. When out of range, it will be looped or clamped.
  * @param {number} [params.forceDuration] Overwrites the default swipe duration.
+ * @param {object} [params.generateOptions] Extra options passed verbatim to Generate('swipe', ...) when this swipe triggers a generation.
+ * @param {object} [params.newSwipeExtra] Merged into the message's `extra` after it is cleared and before generating, so it is carried onto the newly created swipe by saveReply's structuredClone. Only applied on the overswipe-regenerate path.
  */
-export async function swipe(event, direction, { source, repeated, message = chat[chat.length - 1], forceMesId, forceSwipeId, forceDuration } = {}) {
+export async function swipe(event, direction, { source, repeated, message = chat[chat.length - 1], forceMesId, forceSwipeId, forceDuration, generateOptions, newSwipeExtra } = {}) {
     if (chat.length === 0) {
         console.warn('Swipe was called on an empty chat.');
         return;
@@ -10068,6 +10074,10 @@ export async function swipe(event, direction, { source, repeated, message = chat
             delete message.extra.negative;
             delete message.extra.title;
             delete message.extra.append_title;
+            // A steering instruction belongs to the swipe it produced. Without this, syncSwipeToMes
+            // restores it when navigating onto a steered swipe and the next plain overswipe would
+            // silently inherit an instruction it was never generated under.
+            delete message.extra.fold_steer;
         }
         delete message.gen_started;
         delete message.gen_finished;
@@ -10256,7 +10266,7 @@ export async function swipe(event, direction, { source, repeated, message = chat
 
         if (run_generate && !is_send_press) {
             is_send_press = true;
-            generation = Generate('swipe');
+            generation = Generate('swipe', generateOptions ?? {});
         }
 
         //Swipe in from the opposite side.
@@ -10350,6 +10360,14 @@ export async function swipe(event, direction, { source, repeated, message = chat
             } else if (overswipe == OVERSWIPE_BEHAVIOR.REGENERATE) {
                 //Regenerate the message
                 clearMessageData(chat[mesId]);
+                // Seed the incoming swipe's extra. This MUST happen here and not before swipe()
+                // was called: syncMesToSwipe(mesId) above already copied `extra` onto the swipe we
+                // are leaving, so an earlier write would stamp this data onto the PREVIOUS swipe.
+                // saveReply's tail carries it forward via structuredClone(item.extra), which is the
+                // only write that runs on both the streaming and non-streaming paths.
+                if (newSwipeExtra && typeof newSwipeExtra === 'object') {
+                    chat[mesId].extra = Object.assign(chat[mesId].extra ?? {}, structuredClone(newSwipeExtra));
+                }
                 let run_generate = true;
                 //Generate.
                 await animateSwipe(run_generate);
@@ -11522,13 +11540,6 @@ jQuery(async function () {
         const fromSlashCommand = customData?.fromSlashCommand || false;
         var id = $(this).attr('id');
 
-        // Check whether a custom prompt was provided via custom data (for example through a slash command)
-        const additionalPrompt = customData?.additionalPrompt?.trim() || undefined;
-        const buildOrFillAdditionalArgs = (args = {}) => ({
-            ...args,
-            ...(additionalPrompt !== undefined && { quiet_prompt: additionalPrompt, quietToLoud: true }),
-        });
-
         if (id == 'option_select_chat') {
             if (this_chid === undefined && !is_send_press && !selected_group) {
                 await openPermanentAssistantCard();
@@ -11575,13 +11586,13 @@ jQuery(async function () {
                     regenerateGroup();
                 } else {
                     is_send_press = true;
-                    Generate('regenerate', buildOrFillAdditionalArgs());
+                    Generate('regenerate');
                 }
             }
         } else if (id == 'option_impersonate') {
             if (is_send_press == false || fromSlashCommand) {
                 is_send_press = true;
-                Generate('impersonate', buildOrFillAdditionalArgs());
+                Generate('impersonate');
             }
         } else if (id == 'option_continue') {
             if (swipeState == SWIPE_STATE.EDITING) {
@@ -11595,7 +11606,7 @@ jQuery(async function () {
 
             if (is_send_press == false || fromSlashCommand) {
                 is_send_press = true;
-                Generate('continue', buildOrFillAdditionalArgs());
+                Generate('continue');
             }
         } else if (id == 'option_delete_mes') {
             setTimeout(() => openMessageDelete(fromSlashCommand), animation_duration);

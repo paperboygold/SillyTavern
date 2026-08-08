@@ -1,0 +1,439 @@
+/**
+ * fold/entities.js — people and leads, persisted and folded.
+ *
+ * The pure logic is in entity-table.js; this file is the half that touches storage and the
+ * extraction pass.
+ *
+ * ── Why these are stored rather than derived ──
+ *
+ * Inventory is a fold over the chronicle because every change to it was caused by an event. People
+ * and leads are not like that. "Maria is reachable by email" is not the *result* of anything that
+ * happened; it is a standing fact about the world that a turn happened to reveal. Folding it would
+ * mean inventing an event whose only content is that something was mentioned, which inflates the
+ * ledger with non-events and makes the audit trail worse rather than better.
+ *
+ * The cost is honest and worth naming: this table is not branch-aware. Swipe away the turn that
+ * introduced Adele Ricci and she stays on the panel. That matches how scene context already
+ * behaves, and the alternative — an event per mention — buys correctness on a rare case by
+ * degrading the common one.
+ */
+
+import { lookup, table_entries } from './lib/hash.js';
+import {
+    ENTITY_STALE,
+    LEAD,
+    MAX_THREAT,
+    PERSON,
+    castAt,
+    foldEntities,
+    foldEntity,
+    mergeEntities,
+    renderEntities,
+    resolveEntity,
+    splitEntityKey,
+    threatOf,
+} from './entity-table.js';
+// The join between the cast table and the marks table happens here and only here: `state-table.js`
+// imports `entity-table.js` (to normalise owner names), so the reverse import would be a cycle, and
+// this file already depends on both halves.
+import { markPhrases } from './state-table.js';
+import { identityPairs } from './thread-table.js';
+import * as observe from './observe.js';
+import { commit, loadTable, loadValue } from './store.js';
+
+/**
+ * Where the cast lives under v2.
+ *
+ * Renamed from `state.entities` by the migration (`migrate.js`), and the rename is not cosmetic:
+ * the old table held two kinds of thing under one key space, and half of them — leads — are now
+ * threads. `cast` is what is left once that is true, and a key that means one thing is a key a
+ * reader can trust. The v1 key survives beside this one until the v2 blob has come back off disk
+ * (FOLD-REDESIGN.md §9), so a rollback loses nothing.
+ */
+const ENTITIES_PATH = 'state.cast';
+const TURN_PATH = 'state.turn';
+
+/** @returns {Map<string, object>} The entity table. */
+export function load() {
+    return loadTable(ENTITIES_PATH);
+}
+
+/**
+ * The turn counter used for staleness.
+ *
+ * Stored rather than taken from `chat.length`, because a chat can be trimmed, branched or loaded
+ * mid-way and an entity's age must not jump when that happens.
+ *
+ * @returns {number} The current turn.
+ */
+export function turn() {
+    const value = Number(lookup(loadTable(TURN_PATH), 'n', 0));
+    return Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * Advance the turn counter.
+ * @returns {number} The new turn.
+ */
+export function advanceTurn() {
+    const next = turn() + 1;
+    const table = loadTable(TURN_PATH);
+    table.set('n', next);
+    commit(TURN_PATH, table);
+    return next;
+}
+
+/**
+ * The schema fragment for the entity probe.
+ *
+ * Every nested object carries `additionalProperties: false` and lists every property in `required`,
+ * because OpenAI's strict mode demands it on EVERY object and one omission fails the shared call
+ * for every probe at once.
+ *
+ * @returns {object} A JSON Schema fragment.
+ */
+export function schema() {
+    return {
+        type: 'object',
+        description: 'People and leads the excerpt establishes.',
+        properties: {
+            people: {
+                type: 'array',
+                description: 'People the excerpt places somewhere — in the scene or elsewhere. Not people merely talked about.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        name: { type: 'string', description: 'The person\'s name, or a short description if unnamed.' },
+                        aka: {
+                            type: 'string',
+                            description: 'Every OTHER name, title or epithet the excerpt uses for this same person, comma-separated: "the Hero, the marked one". Empty if they are only ever called one thing. Never repeat the name itself.',
+                        },
+                        place: {
+                            type: 'string',
+                            description: 'The PLACE they are in right now, as a bare place name and nothing else: "the stableyard", "manor bedroom", "the dining hall". No prepositions, no activity, no description. Use the same words the narration uses for that place. Empty only if the excerpt truly does not say where they are.',
+                        },
+                        detail: {
+                            type: 'string',
+                            description: 'What they are doing right now, as a short phrase: "sparring with Marote", "counting the till". NOT where they are — that goes in "place". NOT how to contact them — that goes in "reach".',
+                        },
+                        reach: {
+                            type: 'string',
+                            description: 'How the point-of-view character can contact this person when they are not in the room, as a short phrase: "phone number", "reachable by email", "leaves messages at the Goblin Market". Empty if there is no way to reach them. This is a standing capability, not a possession — never report it as an item.',
+                        },
+                        feels: {
+                            type: 'string',
+                            enum: ['hostile', 'wary', 'neutral', 'friendly', 'devoted', ''],
+                            description: 'How this person currently regards the point-of-view character, judged from how they speak and act toward them. Empty if the excerpt gives no sign. Report it every time it is legible, and change it only when the narration gives a reason to.',
+                        },
+                        wants: {
+                            type: 'string',
+                            description: 'What this person is trying to get, as a short phrase: "supplies for the northern march", "to be freed of the brand", "Solomon gone from the manor". Empty if the excerpt does not reveal an agenda. This is their goal, not the player\'s.',
+                        },
+                        knows: {
+                            type: 'string',
+                            description: 'What this person knows about the point-of-view character that matters — a secret, a debt, a suspicion, a promise made to them: "saw the brand", "is owed two hundred crowns", "suspects he is not the real Hero". Empty if nothing.',
+                        },
+                        status: {
+                            type: 'string',
+                            enum: ['present', 'remote', 'unreachable', 'gone'],
+                            description: 'present if physically in the scene, remote if contactable at a distance, unreachable if not, gone ONLY if they have left the story entirely (died, departed for good). Someone who merely walked into another room is still present — say so with "place".',
+                        },
+                        threat: {
+                            type: 'integer',
+                            // Asked of every person and answered 0 for almost all of them, rather
+                            // than asked only of enemies: "is this person an adversary" is a
+                            // judgement, and a schema that only offers the field to adversaries has
+                            // already made it. `FOLD-REDESIGN.md` §12.3 says no live combat has run
+                            // under this schema at all, so the first real fight is the measurement —
+                            // and a field the model never fills is exactly as informative.
+                            description: `How dangerous this person is to the point-of-view character RIGHT NOW, 1 to ${MAX_THREAT}, while they are actively hostile: 1 a thug, 3 a trained fighter, ${MAX_THREAT} something that could kill everyone here. Use 0 for anyone who is not currently a threat, which is nearly everyone, and 0 again the moment a fight ends.`,
+                        },
+                        facts: {
+                            type: 'string',
+                            description: 'Standing truths about this person that do not change with the scene — a rank, a bloodline, a permanent capability: "E-rank hunter", "blind since birth". Empty unless the excerpt establishes one. Never their mood, their location or what they are doing.',
+                        },
+                    },
+                    required: ['name', 'aka', 'place', 'detail', 'reach', 'feels', 'wants', 'knows', 'status', 'threat', 'facts'],
+                    additionalProperties: false,
+                },
+            },
+        },
+        required: ['people'],
+        additionalProperties: false,
+    };
+}
+
+/**
+ * Prompt guidance for the entity probe.
+ *
+ * `leads` left this probe in Phase B. A lead was only ever a thread nobody could measure, and it
+ * now shares a table — and a probe fragment — with clocks and progress tracks, because the live
+ * chat carried one stake as a lead AND as a clock and neither could close (FOLD-REDESIGN.md §4).
+ * See `clocks.js` `schema()`.
+ *
+ * @returns {string} Prompt guidance for the probe.
+ */
+export function instruction() {
+    return [
+        'The people the excerpt places somewhere, as objects rather than a list of phrases.',
+        'A person and where they are are one object: the name goes in "name", the bare place name in "place", what they are doing in "detail", and how to contact them in "reach".',
+        // The single most important instruction here. Presence is computed by comparing this place
+        // to the scene's, so a place written in different words than the narration uses is a person
+        // who silently vanishes from the room.
+        'For each person also give "feels" (how they regard the point-of-view character), "wants" (their own agenda) and "knows" (what they know about him that matters). These drive how they behave and are worth more than any description of their clothes.',
+        'One person, one entry. A character called both by a title and by a name — "the Hero" and "Solomon" — is ONE person: use the proper name in "name" and put every other form in "aka".',
+        'Always give "place" for anyone whose position the excerpt establishes, and word it the same way the narration words that place. If someone walked out, give the place they walked TO — or leave "place" empty if it is unknown. Do not mark them "gone" unless they have left the story for good.',
+        // Contact details are not things in a pocket. The live chat filed "Kang\'s phone number" as
+        // inventory in a place the model invented for itself, and the delta validator now refuses
+        // it outright (`state-table.js:104-110`, `reject:not-an-item`). This is where it goes.
+        'Give "reach" whenever the excerpt establishes a way to contact someone — a number exchanged, an address given, a standing arrangement to meet. Contact details are never items.',
+        // The one integer on this record, and it exists so six enemies are six legible things rather
+        // than one stalled clock (`FOLD-RPG-GAP.md` §6).
+        'Give "threat" only while someone is actively dangerous to the point-of-view character, and set it back to 0 the moment they stop being — defeated, fled, calmed down. Everyone else is 0.',
+        'Re-report anything still true, so it stays current.',
+        'Use an empty array when the excerpt establishes nobody.',
+    ].join(' ');
+}
+
+/**
+ * Apply a probe fragment.
+ * @param {any} fragment The probe's slice of the extraction.
+ * @param {object} context Context from the extraction pass.
+ * @param {string} [context.windowText] Narrative window, for the mention gate.
+ * @returns {{people: number, rejected: object[]}} What was applied.
+ */
+export function applyExtraction(fragment, { windowText = '', turn: at = turn(), sources = [] } = {}) {
+    const table = load();
+
+    // The anchor mid of this pass, stamped onto every relationship change the fold records
+    // (`entity-table.js` `changesBetween`). Newest live source, the same anchor the review's closure
+    // events use, so a trail entry and a closure written by one pass point at one message.
+    const mid = sources[sources.length - 1]?.mid;
+
+    const people = foldEntities(
+        table,
+        (fragment?.people ?? []).map(entry => ({ ...entry, kind: PERSON })),
+        { windowText, turn: at, mid });
+
+    prune(table, at);
+    commit(ENTITIES_PATH, table);
+
+    return { people: people.accepted, rejected: people.rejected };
+}
+
+/**
+ * Cast rows whose names raise the identity question.
+ *
+ * Data only, in this phase: the pairs are computed and handed to whoever asks, and nothing merges
+ * anything. `person␀broker` and `person␀scarred broker` are one man behind one counter and became
+ * two rows in a live chat within 48 hours of being hand-fixed (FOLD-REDESIGN.md §0.1); the merge
+ * itself waits for the review pass, because "one name containing another is not identity"
+ * (`FOLD-RPG-GAP.md` §4) and a wrong merge cannot be undone by silence.
+ *
+ * @returns {Array<{a: string, b: string, why: string}>} Pairs, by table key.
+ */
+export function questions() {
+    return identityPairs(table_entries(load())
+        .filter(([key]) => splitEntityKey(key).kind === PERSON)
+        .map(([key, row]) => ({ key, name: row?.name ?? '' })));
+}
+
+/**
+ * Drop entities nothing has mentioned for long enough that they will never render again.
+ *
+ * Soft-hiding is the right default while an entity might come back — `entitiesOfKind` already stops
+ * rendering at ENTITY_STALE — but a table that only ever grows eventually dominates the metadata
+ * blob. Deletion is at double the hide threshold, so anything the panel could still show survives.
+ *
+ * @param {Map<string, object>} table Entity table, mutated.
+ * @param {number} at Current turn.
+ */
+function prune(table, at) {
+    let dropped = 0;
+    let legacy = 0;
+    for (const [key, value] of table_entries(table)) {
+        if (at - (value?.turn ?? 0) > ENTITY_STALE * 2) {
+            table.delete(key);
+            dropped++;
+            continue;
+        }
+        // ── One-time heal for leads written before the exposition gate existed ──
+        //
+        // Asked for "information worth acting on", extraction returned lore: what a holy mark
+        // grants, what a brand permits, what someone was told to do and then did. All true, none of
+        // them threads. Those chats still hold them.
+        //
+        // The test is exact rather than heuristic. `foldEntities` now rejects any lead with an
+        // empty `open`, so every lead written since carries a non-empty one; a lead without it can
+        // only predate the gate. Done here rather than in `entitiesOfKind` deliberately — filtering
+        // on read would re-judge records that already passed the gate, so a genuine lead whose
+        // `open` the model happened to omit would vanish on every repaint with no way back.
+        if (splitEntityKey(key).kind === LEAD && !value?.open) {
+            table.delete(key);
+            legacy++;
+        }
+    }
+    if (legacy) {
+        observe.noteCap('leads-ungated', legacy);
+    }
+    // ENTITY_STALE decides who the panel forgets. Counted, so the number can be judged.
+    if (dropped) {
+        observe.noteCap('entities-pruned', dropped);
+    }
+}
+
+/**
+ * Render entities into the injected block.
+ * @returns {string} Lines, or ''.
+ */
+export function render({ exclude = '', at = '', marks = null } = {}) {
+    return renderEntities(load(), turn(), {
+        exclude,
+        at,
+        hurt: marks ? name => markPhrases(marks, name) : null,
+    });
+}
+
+/**
+ * Marks parked on cast rows by the migration, as seeds for the fold.
+ *
+ * The only reader of `row.marks`, and `migrate.js` is the only writer — see `state-table.js`
+ * `seedMarks` for why a mark that predates the ledger cannot be an event. Live marks never come
+ * from here.
+ *
+ * @returns {object[]} Seed marks, each carrying the owner's name.
+ */
+export function markSeeds() {
+    const out = [];
+    for (const [, row] of table_entries(load())) {
+        for (const mark of Array.isArray(row?.marks) ? row.marks : []) {
+            out.push({ ...mark, who: mark?.who ?? row?.name ?? '' });
+        }
+    }
+    // The other half: marks a migration had nowhere to put, because the chat has body-state prose
+    // and no cast row for whoever it is about. Raccoon City is the measured case — `health:
+    // "hangover faded; mild fatigue"` with an empty entity table, since extraction never ran there
+    // (`migrate.js` `migrateBody`). They carry `who: ''`, which the fold reads as the pov's.
+    for (const mark of loadValue('state.migrated', null)?.marks ?? []) {
+        out.push({ ...mark, who: mark?.who ?? '' });
+    }
+    return out;
+}
+
+/**
+ * Set or clear a cast row's threat integer.
+ *
+ * Written whole rather than merged, because 0 is falsy and `merge_entity` reads a falsy field as
+ * silence — which is right for an ordinary sighting that simply does not mention danger, and wrong
+ * for the review saying a fight is over. `FOLD-REDESIGN.md` §3: an adversary's row is closed by the
+ * review, and this is where that lands.
+ *
+ * @param {string} key The cast row's table key.
+ * @param {number} threat The new value; 0 clears it.
+ * @param {number} [at] Turn counter.
+ * @returns {boolean} True if anything changed.
+ */
+export function setThreat(key, threat, at = turn()) {
+    const table = load();
+    const row = lookup(table, key, null);
+    if (!row) {
+        return false;
+    }
+    const value = threatOf(threat);
+    if ((row.threat ?? 0) === value) {
+        return false;
+    }
+    table.set(key, { ...row, threat: value, turn: at });
+    commit(ENTITIES_PATH, table);
+    return true;
+}
+
+/**
+ * Cast rows that are currently a threat, for the review to close.
+ * @returns {Array<{key: string, name: string, threat: number}>} Active adversaries.
+ */
+export function threats() {
+    return table_entries(load())
+        .filter(([key, row]) => splitEntityKey(key).kind === PERSON && (row?.threat ?? 0) > 0)
+        .map(([key, row]) => ({ key, name: row?.name ?? key, threat: row.threat }));
+}
+
+/**
+ * Everything the panel needs.
+ * @returns {{people: object[], unplaced: object[], elsewhere: object[]}} The lists, freshest first.
+ */
+export function snapshot({ at = '', pov = '' } = {}) {
+    const table = load();
+    const now = turn();
+    const cast = castAt(table, now, at);
+    // Resolved here rather than in the panel, so the panel never has to know that a name and a
+    // title can be the same person.
+    const self = resolveEntity(table, PERSON, pov)?.key ?? '';
+    const notSelf = person => !self || person.key !== self;
+    return {
+        povKey: self,
+        // The current tick, so the panel can tell a change from a restatement.
+        turn: now,
+        // Split rather than filtered. The people who have walked out are still known, still worth
+        // showing, and still where the story left them — they are simply not in the room. Deleting
+        // them would lose the one thing that makes a returning character feel remembered.
+        people: cast.here.filter(notSelf),
+        // Kept as its own list all the way to the renderer. The panel shows them inside Here,
+        // dimmed and marked "whereabouts unstated", because merging them into `people` here would
+        // be the same collapse `castAt` used to perform one layer down (FOLD-REDESIGN.md §0.1-1).
+        unplaced: cast.unplaced.filter(notSelf),
+        elsewhere: cast.elsewhere.filter(notSelf),
+    };
+}
+
+/**
+ * Merge two cast rows the review confirmed are one person.
+ *
+ * The rule and its argument live in `entity-table.js` `mergeEntities`; this is the storage half.
+ * Kang existed twice for the whole of the live Solo Leveling chat and could not stop
+ * (`FOLD-RPG-GAP.md` §2), and the broker pair reopened within 48 hours of being hand-fixed — both
+ * are one confirmed answer away from being one row, and this is where that answer lands.
+ *
+ * @param {string} a One table key.
+ * @param {string} b Another.
+ * @returns {{key: string, dropped: string}|null} What survived, or null if nothing merged.
+ */
+export function merge(a, b) {
+    const table = load();
+    const done = mergeEntities(table, a, b);
+    if (done) {
+        commit(ENTITIES_PATH, table);
+    }
+    return done;
+}
+
+/**
+ * Record where an unplaced person actually is.
+ *
+ * The other half of the three-valued `castAt` (`entity-table.js`): the derivation keeps UNPLACED as
+ * a distinct answer all the way to the consumers, the renderers hedge it, and the review resolves
+ * it. A place written here is a place the presence predicate can compare, which is the whole reason
+ * `place` is its own field rather than prose.
+ *
+ * @param {string} key The cast row's table key.
+ * @param {string} place The place, as the story words it.
+ * @param {number} [at] Turn counter.
+ * @returns {boolean} True if it was written.
+ */
+export function setPlace(key, place, at = turn()) {
+    const table = load();
+    const row = lookup(table, key, null);
+    const said = String(place ?? '').trim();
+    if (!row || !said) {
+        return false;
+    }
+    // Through `foldEntity` rather than by assignment, so the write is versioned and merges with a
+    // concurrent sighting the way any other observation would. A bare assignment would be the one
+    // write in this table that `resolution_max_converges` does not cover.
+    return !!foldEntity(table, { ...row, place: said, turn: at }) && (commit(ENTITIES_PATH, table), true);
+}
+
+/** Forget everything. */
+export function clear() {
+    commit(ENTITIES_PATH, new Map());
+}

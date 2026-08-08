@@ -1,0 +1,134 @@
+<div class="fold_settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b data-i18n="Fold">Fold</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <label class="checkbox_label" for="fold_rpg_mode">
+                <input id="fold_rpg_mode" type="checkbox" class="checkbox">
+                <b data-i18n="RPG mode">RPG mode</b>
+            </label>
+            <small class="flex-container flexFlowColumn" data-i18n="Tracks vitals, status and inventory as you play, and shows them in a panel. Picks a small extraction model automatically if you have one. Everything below is a default you can change, not a decision you have to make first.">
+                Tracks vitals, status and inventory as you play, and shows them in a panel. Picks a small extraction model automatically if you have one. Everything below is a default you can change, not a decision you have to make first.
+            </small>
+            <label class="checkbox_label" for="fold_panel">
+                <input id="fold_panel" type="checkbox" class="checkbox">
+                <span data-i18n="Expand the tracker panel">Expand the tracker panel</span>
+            </label>
+            <small data-i18n="The sidebar sits on the right edge either way — a slim rail (time, place, money, the doom dial) when folded, the full tracker when expanded. Use the chevron on its left edge to fold and unfold it.">
+                The sidebar sits on the right edge either way — a slim rail (time, place, money, the doom dial) when folded, the full tracker when expanded. Use the chevron on its left edge to fold and unfold it.
+            </small>
+
+            <hr>
+
+            <label class="checkbox_label" for="fold_enabled">
+                <input id="fold_enabled" type="checkbox" class="checkbox">
+                <span data-i18n="Enable Fold">Enable Fold</span>
+            </label>
+            <label class="checkbox_label" for="fold_steer_enabled">
+                <input id="fold_steer_enabled" type="checkbox" class="checkbox">
+                <span data-i18n="Enable swipe steering">Enable swipe steering</span>
+            </label>
+            <small class="flex-container flexFlowColumn" data-i18n="Adds a wand button to the last reply. Type an instruction and it generates a new swipe under it, keeping the existing ones.">
+                Adds a wand button to the last reply. Type an instruction and it generates a new swipe under it, keeping the existing ones.
+            </small>
+            <label class="checkbox_label" for="fold_steer_remember">
+                <input id="fold_steer_remember" type="checkbox" class="checkbox">
+                <span data-i18n="Prefill the last instruction">Prefill the last instruction</span>
+            </label>
+            <label class="checkbox_label" for="fold_steer_badge">
+                <input id="fold_steer_badge" type="checkbox" class="checkbox">
+                <span data-i18n="Show a badge on steered swipes">Show a badge on steered swipes</span>
+            </label>
+            <label for="fold_steer_template">
+                <span data-i18n="Steering template">Steering template</span>
+                <div id="fold_steer_template_restore" title="Restore default" data-i18n="[title]Restore default" class="right_menu_button fa-solid fa-clock-rotate-left"></div>
+            </label>
+            <small data-i18n="Use {{instruction}} for your text. The instruction is appended to the prompt as if you said it, and is also visible to World Info scanning for that one generation.">
+                Use <code>&#123;&#123;instruction&#125;&#125;</code> for your text. The instruction is appended to the prompt as if you said it, and is also visible to World Info scanning for that one generation.
+            </small>
+            <textarea id="fold_steer_template" class="text_pole textarea_compact" rows="2"></textarea>
+
+            <hr>
+
+            <label for="fold_plot_guide">
+                <span data-i18n="Story direction (plot guide)">Story direction (plot guide)</span>
+            </label>
+            <small data-i18n="The overarching plot the narrator must follow — a synopsis, a scene outline, a direction. Unlike steer it is NOT forgotten next message: it is injected into every narrator prompt until you change it. It is injected as the hidden hand: the characters never know it, only the narrator. Write events, not 'X realizes Y' — solution language in here gets copied into character dialogue.">
+                The overarching plot the narrator must follow — a synopsis, a scene outline, a direction. Unlike steer it is <b>not</b> forgotten next message: it is injected into every narrator prompt until you change it. It is injected as the <b>hidden hand</b>: the characters never know it, only the narrator. Write events, not "X realizes Y" — solution language in here gets copied into character dialogue.
+            </small>
+            <textarea id="fold_plot_guide" class="text_pole textarea_compact" rows="6"></textarea>
+
+            <hr>
+
+            <label class="checkbox_label" for="fold_chronicle_enabled">
+                <input id="fold_chronicle_enabled" type="checkbox" class="checkbox">
+                <span data-i18n="Enable chronicle">Enable chronicle</span>
+            </label>
+            <small class="flex-container flexFlowColumn" data-i18n="Keeps an append-only ledger of significant events and injects the relevant ones. Unlike a rolling summary, nothing is overwritten. Costs one extra request every few replies.">
+                Keeps an append-only ledger of significant events and injects the relevant ones. Unlike a rolling summary, nothing is overwritten. Costs one extra request every few replies.
+            </small>
+            <div id="fold_chronicle_profile_block" class="flex-container flexFlowColumn">
+                <label for="fold_chronicle_profile" data-i18n="Extraction model">Extraction model</label>
+                <small data-i18n="Runs extraction on a separate connection profile. Pick something small and cheap — this is mechanical summarization, not roleplay. Leave unset to use the chat's own model.">
+                    Runs extraction on a separate connection profile. Pick something small and cheap — this is mechanical summarization, not roleplay. Leave unset to use the chat's own model.
+                </small>
+                <select id="fold_chronicle_profile" class="text_pole"></select>
+            </div>
+            <div class="flex-container">
+                <div class="flex1">
+                    <label for="fold_chronicle_interval" data-i18n="Extract every N replies">Extract every N replies</label>
+                    <input id="fold_chronicle_interval" class="text_pole textarea_compact" type="number" min="1" max="50">
+                </div>
+                <div class="flex1">
+                    <label for="fold_chronicle_window" data-i18n="Messages to read">Messages to read</label>
+                    <input id="fold_chronicle_window" class="text_pole textarea_compact" type="number" min="1" max="40">
+                </div>
+            </div>
+            <div class="flex-container">
+                <div class="flex1">
+                    <label for="fold_chronicle_topk" data-i18n="Events to inject">Events to inject</label>
+                    <input id="fold_chronicle_topk" class="text_pole textarea_compact" type="number" min="0" max="20">
+                </div>
+                <div class="flex1">
+                    <label for="fold_chronicle_depth" data-i18n="Injection depth">Injection depth</label>
+                    <input id="fold_chronicle_depth" class="text_pole textarea_compact" type="number" min="0" max="100">
+                </div>
+            </div>
+            <label for="fold_chronicle_template" data-i18n="Chronicle template">Chronicle template</label>
+            <textarea id="fold_chronicle_template" class="text_pole textarea_compact" rows="2"></textarea>
+            <div class="flex-container">
+                <div id="fold_chronicle_extract_now" class="menu_button" data-i18n="Extract now">Extract now</div>
+                <div id="fold_chronicle_view" class="menu_button" data-i18n="View ledger">View ledger</div>
+            </div>
+
+            <hr>
+
+            <label class="checkbox_label" for="fold_state_enabled">
+                <input id="fold_state_enabled" type="checkbox" class="checkbox">
+                <span data-i18n="Track inventory and vitals">Track inventory and vitals</span>
+            </label>
+            <small class="flex-container flexFlowColumn" data-i18n="Tracks what the character carries, their vitals, and status effects. The model proposes changes; implausible ones are rejected rather than trusted. Rides the same extraction call as the chronicle.">
+                Tracks what the character carries, their vitals, and status effects. The model proposes changes; implausible ones are rejected rather than trusted. Rides the same extraction call as the chronicle.
+            </small>
+            <label class="checkbox_label" for="fold_state_absorb">
+                <input id="fold_state_absorb" type="checkbox" class="checkbox">
+                <span data-i18n="Absorb the card's own status block">Absorb the card's own status block</span>
+            </label>
+            <small class="flex-container flexFlowColumn" data-i18n="Some cards end every reply with a status line. This lifts it out of the message, folds it into tracked state, and shows it in the panel instead — so you read prose, and the model gets one current block rather than every past one.">
+                Some cards end every reply with a status line. This lifts it out of the message, folds it into tracked state, and shows it in the panel instead — so you read prose, and the model gets one current block rather than every past one.
+            </small>
+            <div class="flex-container">
+                <div class="flex1">
+                    <label for="fold_state_depth" data-i18n="State injection depth">State injection depth</label>
+                    <input id="fold_state_depth" class="text_pole textarea_compact" type="number" min="0" max="100">
+                </div>
+            </div>
+            <div class="flex-container">
+                <div id="fold_state_view" class="menu_button" data-i18n="View state">View state</div>
+                <div id="fold_state_clear" class="menu_button" data-i18n="Clear state">Clear state</div>
+            </div>
+        </div>
+    </div>
+</div>

@@ -418,6 +418,35 @@ export class TextCompletionService {
 /**
  * Creates & sends a chat completion request.
  */
+/**
+ * Apply per-model request-shape quirks that the main chat path already handles in
+ * openai.js#getGenerateData, but which this service previously did not.
+ *
+ * Without this, every consumer of a connection profile — the Connection Manager's own test
+ * message, extension requests, fold's chronicle extraction — fails with
+ * "Unsupported parameter: 'max_tokens' is not supported with this model" the moment the profile
+ * points at a reasoning-style OpenAI model. The rule is duplicated rather than shared because
+ * openai.js applies it to a differently-shaped object mid-assembly.
+ *
+ * @param {ChatCompletionPayload} payload Request payload, mutated in place.
+ */
+function applyModelParameterQuirks(payload) {
+    const model = String(payload.model ?? '');
+    const source = String(payload.chat_completion_source ?? '');
+
+    const isOpenAiFamily = ['openai', 'azure_openai', 'openrouter', 'electronhub'].includes(source);
+    const usesCompletionTokens = isOpenAiFamily
+        && (/^(openai\/)?(o1|o3|o4)/.test(model) || /gpt-5/.test(model));
+
+    if (usesCompletionTokens && payload.max_tokens !== undefined) {
+        payload.max_completion_tokens = payload.max_tokens;
+        delete payload.max_tokens;
+        // These models reject the sampler knobs the chat path also strips.
+        delete payload.logprobs;
+        delete payload.top_logprobs;
+    }
+}
+
 export class ChatCompletionService {
     static TYPE = 'openai';
 
@@ -440,6 +469,8 @@ export class ChatCompletionService {
             use_sysprompt: true,
             ...props,
         };
+
+        applyModelParameterQuirks(payload);
 
         // Remove undefined values to avoid API errors
         Object.keys(payload).forEach(key => {
