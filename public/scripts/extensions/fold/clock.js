@@ -311,7 +311,7 @@ const SPANS = [
     [/\ba (?:little )?while\b/, 45],
     [/\b(?:several|a few|some) (?:days|weeks)\b/, null],
     [/\b(\d{1,4})\s*(minutes?|hours?|days?|weeks?|months?|years?)\b/, null],
-    [/\b(?:a|one|another) (day|week|month|year)\b/, null],
+    [/\b(?:a|one|another) (day|week|month|year)(?!['’]s)\b/, null],
     // Scene-transition markers that carry their own unit. "Come morning" is one night's passage
     // (the sleep before it); "the week settles" is the week it says. Both are the narrator's way
     // of saying time moved, and both are as concrete as any span. Given explicit minutes rather
@@ -414,41 +414,59 @@ export function parseElapsed(text) {
         return null;
     }
 
+    // The earliest match in the TEXT wins, not the first match in the list. SPANS is ordered by
+    // duration specificity, and a message that says "The week settles into a rhythm... and the
+    // election comes one day later" contains both "the week settles" (position 0) and "one day"
+    // (position 3000+) — the story skipped a WEEK, and the list-ordered loop would have returned
+    // the later "one day". The narrative's opening transition is the one that happened; later
+    // mentions are usually the same duration restated or a detail.
+    let best = null;
     for (const [pattern, minutes] of SPANS) {
         const match = source.match(pattern);
         if (!match) continue;
-        if (minutes !== null) return minutes;
-
-        // ── Scene-transition markers carry their own unit ──
-        //
-        // "come morning" and "the next morning" are a night's passage; "the week settles" and
-        // "a day passes by" are the unit they name. These are NOT "several days" (vague, 3x the
-        // unit) and NOT a counted "N days" — they name one transition, and the unit word sits in
-        // the phrase. Map it to a single unit so the clock moves by what the story said.
-        const transition = match[0].match(/\b(?:morning|afternoon|evening|night|day|week|month|year)s?\b/);
-        if (/^first\s+light/.test(match[0]) || /^the\s+early\s+morning$/.test(match[0])
-            || (transition && /^(morning|afternoon|evening|night|day)$/.test(transition[0]))) {
-            // A transition to a part of a day is one night/day's passage. DAY for a day-name;
-            // for a named part of day the passage is the night that precedes it — bounded by
-            // MAX_SKIP like everything else, so a long story that strings transitions still
-            // accumulates correctly turn by turn.
-            return Math.min(MAX_SKIP, DAY);
+        if (minutes !== null && (!best || match.index < best.match.index)) {
+            best = { match, minutes, unit: null };
+            continue;
         }
-        if (transition && UNIT[transition[0]]) {
-            return Math.min(MAX_SKIP, UNIT[transition[0]]);
+        if (minutes === null && (!best || match.index < best.match.index)) {
+            best = { match, minutes, unit: null };
         }
-
-        const unit = Object.keys(UNIT).find(u => new RegExp(`\\b${u}s?\\b`).test(match[0]));
-        if (!unit) {
-            // "several days" / "a few weeks" — vague, so the coarse reading, same as the hours row.
-            const vague = /weeks/.test(match[0]) ? UNIT.week * 3 : UNIT.day * 3;
-            return Math.min(MAX_SKIP, vague);
-        }
-        const count = Number(match[1]) || 1;
-        if (count <= 0) continue;
-        return Math.min(MAX_SKIP, count * UNIT[unit]);
     }
-    return null;
+    if (!best) {
+        return null;
+    }
+    const { match, minutes } = best;
+
+    if (minutes !== null) return minutes;
+
+    // ── Scene-transition markers carry their own unit ──
+    //
+    // "come morning" and "the next morning" are a night's passage; "the week settles" and
+    // "a day passes by" are the unit they name. These are NOT "several days" (vague, 3x the
+    // unit) and NOT a counted "N days" — they name one transition, and the unit word sits in
+    // the phrase. Map it to a single unit so the clock moves by what the story said.
+    const transition = match[0].match(/\b(?:morning|afternoon|evening|night|day|week|month|year)s?\b/);
+    if (/^first\s+light/.test(match[0]) || /^the\s+early\s+morning$/.test(match[0])
+        || (transition && /^(morning|afternoon|evening|night|day)$/.test(transition[0]))) {
+        // A transition to a part of a day is one night/day's passage. DAY for a day-name;
+        // for a named part of day the passage is the night that precedes it — bounded by
+        // MAX_SKIP like everything else, so a long story that strings transitions still
+        // accumulates correctly turn by turn.
+        return Math.min(MAX_SKIP, DAY);
+    }
+    if (transition && UNIT[transition[0]]) {
+        return Math.min(MAX_SKIP, UNIT[transition[0]]);
+    }
+
+    const unit = Object.keys(UNIT).find(u => new RegExp(`\\b${u}s?\\b`).test(match[0]));
+    if (!unit) {
+        // "several days" / "a few weeks" — vague, so the coarse reading, same as the hours row.
+        const vague = /weeks/.test(match[0]) ? UNIT.week * 3 : UNIT.day * 3;
+        return Math.min(MAX_SKIP, vague);
+    }
+    const count = Number(match[1]) || 1;
+    if (count <= 0) return null;
+    return Math.min(MAX_SKIP, count * UNIT[unit]);
 }
 
 /**

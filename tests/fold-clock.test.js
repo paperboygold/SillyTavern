@@ -292,6 +292,20 @@ describe('parseElapsed — the player is the authority on their own time skips',
         expect(parseElapsed('It was last night that the courier died.')).toBeNull();
         expect(parseElapsed('I remember the week we spent in the capital yesterday.')).toBeNull();
     });
+
+    test('the earliest transition in the text wins over a later detail', () => {
+        // A message that opens with "The week settles" and later mentions "one day" skipped a
+        // WEEK; the loop must not let the later, smaller mention win just because its span sits
+        // earlier in the table.
+        expect(parseElapsed('The week settles into a rhythm of early mornings. The election comes one day later.')).toBe(7 * 1440);
+    });
+
+    test('"a day\'s ride" is a distance, not a passage of time', () => {
+        // The genitive 's marks a measurement ("a day's ride", "a week's wages"), never elapsed
+        // time. Advancing the clock off it would run the story forward for a figure of speech.
+        expect(parseElapsed('He will not march a day\'s ride to meet them.')).toBeNull();
+        expect(parseElapsed('It was a week\'s journey to the capital.')).toBeNull();
+    });
 });
 
 describe('skipClock', () => {
