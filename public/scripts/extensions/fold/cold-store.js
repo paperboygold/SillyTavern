@@ -25,6 +25,7 @@
 import { registerPruner } from './store.js';
 import { loadTable, commit, foldByteSize } from './store.js';
 import { table_entries } from './lib/hash.js';
+import { isMentioned } from './state-table.js';
 
 /** Where the cold rows live. */
 export const COLD_PATH = 'state.cold';
@@ -123,6 +124,76 @@ export function ofKind(kind) {
             demotedAt: entry?.demotedAt ?? 0,
         }))
         .filter(item => item.row !== null);
+}
+
+/**
+ * The cold rows whose subject the window mentions.
+ *
+ * ── Why coverage, never confidence ([ROUTER]) ──
+ *
+ * The served router's failure was substituting a CONFIDENCE proxy for the oracle: entropy looked
+ * like it should work and was wrong on 84% of the tokens it routed, because low entropy meant a
+ * small peaked support, not a correct one. The missing quantity is COVERAGE — does the ledger hold
+ * evidence bearing on this input? For fold, coverage is a mention test: the window literally
+ * contains the thread's name or a discriminating content token. A mention is a fact, not an
+ * estimate; a similarity score would be a confidence proxy and would inherit the router's failure.
+ *
+ * The mention test is the cast's own (`state-table.js` `isMentioned`), imported rather than copied —
+ * two copies of a judgement diverge, and this is the same judgement the presence questions already
+ * make. Each subject — name, aka, about, keywords — is tested as a name, so a possessive
+ * ("the courier's death") is recalled by a window that says "the courier".
+ *
+ * @param {string} windowText The narrative window.
+ * @param {Array<{key: string, row: object}>} rows Cold rows to test.
+ * @returns {Array<{key: string, row: object}>} The rows whose subject is in the window.
+ */
+export function covered(windowText, rows) {
+    const out = [];
+    for (const item of Array.isArray(rows) ? rows : []) {
+        const row = item?.row ?? null;
+        if (!row) continue;
+        const subjects = [
+            row.name,
+            row.aka,
+            row.about,
+            ...(Array.isArray(row.kw) ? row.kw : []),
+        ].filter(Boolean);
+        if (subjects.some(subject => isMentioned(subject, windowText))) {
+            out.push(item);
+        }
+    }
+    return out;
+}
+
+/**
+ * Re-promote a cold row back into its hot table.
+ *
+ * ── Why this is a write, not a paste ([AC-PRODUCT]) ──
+ *
+ * The routed VOTE — pasting retrieved material into the window — was catastrophic: 11/12 → 3/12,
+ * self-repetition 5.7% → 17.9%. Re-promotion is the opposite: the cold row is written back into the
+ * tracked state (the thread table, the cast), where it renders as a normal tracked line and is
+ * reviewable, settled, merged — never as injected prose. A cold thread the window mentions is
+ * returned to the table so the story's return to it is seen, not recited.
+ *
+ * The recalled row's `turn` is bumped to the caller's turn, so the eviction rule (stalest first)
+ * treats it as fresh: the story just returned to it, and a table that is full must evict something
+ * genuinely older rather than immediately re-shedding the thread that was just brought home.
+ *
+ * @param {string} kind The table it belongs to: 'thread' | 'person'.
+ * @param {string} key The cold key.
+ * @param {object} row The cold row.
+ * @param {Map<string, object>} hot The hot table, mutated.
+ * @param {number} [turn] The turn it was recalled on, stamped onto the restored row.
+ * @returns {boolean} True if it was written into the hot table.
+ */
+export function promote(kind, key, row, hot, turn = 0) {
+    if (!hot || typeof hot.set !== 'function') {
+        return false;
+    }
+    hot.set(key, { ...row, restored: true, turn: Number.isFinite(turn) ? turn : (row?.turn ?? 0) });
+    remove(kind, key);
+    return true;
 }
 
 /**

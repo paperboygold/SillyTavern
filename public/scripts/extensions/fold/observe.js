@@ -161,6 +161,11 @@ export const KNOWN_RULES = Object.freeze([
     // the cold store instead of ceasing to exist, so they can be recalled the moment the story
     // returns to them. `cast-archived` counts those demotions.
     'cap:cast-archived',
+    // Re-promotion by coverage: a cold row whose subject the window mentions is written back into
+    // its hot table — a WRITE into the tracked state, never a paste into the window ([AC-PRODUCT]).
+    // `threads:recalled`/`cast:recalled` count the homecomings; the archived-vs-recalled ratio is
+    // the cold store's own throughput, the same way `events-evicted` measures the chronicle's.
+    'threads:recalled', 'cast:recalled',
     // Prose the card wrote into a context field that shadows a structured table, refused by the
     // exposition gate during migration. Phase C raises it live; migration raises it once.
     'reject:block-shadow',

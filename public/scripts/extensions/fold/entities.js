@@ -196,6 +196,20 @@ export function applyExtraction(fragment, { windowText = '', turn: at = turn(), 
     // events use, so a trail entry and a closure written by one pass point at one message.
     const mid = sources[sources.length - 1]?.mid;
 
+    // ── Re-promotion by coverage: a cold person the window mentions comes home ──
+    //
+    // Same rule as the thread table (clocks.js): a person archived by staleness is written back the
+    // moment the window mentions them — a WRITE into the tracked state, never a paste
+    // ([AC-PRODUCT]), admitted by coverage, not a confidence score ([ROUTER]).
+    if (windowText) {
+        const restored = cold.covered(windowText, cold.ofKind('person'));
+        for (const item of restored) {
+            if (cold.promote('person', item.key, item.row, table, at)) {
+                observe.note('cast:recalled');
+            }
+        }
+    }
+
     const people = foldEntities(
         table,
         (fragment?.people ?? []).map(entry => ({ ...entry, kind: PERSON })),

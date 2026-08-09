@@ -196,6 +196,24 @@ export function instruction() {
 export function applyExtraction(fragment, { turn = 0, windowText = '', sources = [] } = {}) {
     const table = load();
     const proposed = fragment?.ticks;
+
+    // ── Re-promotion by coverage: a cold thread the window mentions comes home ──
+    //
+    // A thread that lost its slot to the cap is archived, not destroyed (cold-store.js). When the
+    // story returns to it — the window mentions its name or subject — it is written back into the
+    // table so the probe can tick it and the review can settle it. This is a WRITE into the tracked
+    // state, never a paste of its old text into the window ([AC-PRODUCT]: the routed vote was
+    // catastrophic). Admission is by coverage — a mention in the window — not by a similarity
+    // score ([ROUTER]: confidence proxies are unsound, coverage is the missing quantity).
+    if (windowText) {
+        const restored = cold.covered(windowText, cold.ofKind('thread'));
+        for (const item of restored) {
+            if (cold.promote('thread', item.key, item.row, table, turn)) {
+                observe.note('threads:recalled');
+            }
+        }
+    }
+
     // ── "Proposed nothing" is not "was never asked" ──
     //
     // The same gap that made the delta pipeline unfalsifiable, left in a brand-new subsystem by not
