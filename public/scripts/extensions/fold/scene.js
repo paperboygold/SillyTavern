@@ -31,6 +31,7 @@
  */
 
 import { NARRATIVE, noteSceneElapsed, recordMarks, setContext } from './state.js';
+import { formatClock } from './clock.js';
 import { MAX_MARKS, SEVERITIES } from './state-table.js';
 
 /**
@@ -45,7 +46,7 @@ import { MAX_MARKS, SEVERITIES } from './state-table.js';
  * answer now becomes marks on the point-of-view character's row, and the header shows where, when
  * and what the weather is doing, and nothing about anybody's body.
  */
-const FIELDS = ['location', 'time', 'weather'];
+const FIELDS = ['location', 'time', 'date', 'weather'];
 
 /**
  * The schema fragment for the scene probe.
@@ -71,6 +72,10 @@ export function schema() {
             time: {
                 type: 'string',
                 description: 'The time of day, as written: "just after dawn", "3:15 PM". Empty if not stated or implied.',
+            },
+            date: {
+                type: 'string',
+                description: 'The date or day of the week, as written: "Wednesday", "the 3rd of autumn", "mid-October". Only when the narrative names a day that differs from the last scene\'s. This is what moves the calendar forward a full day when no transition marker or duration said so. Empty otherwise.',
             },
             elapsed: {
                 type: 'string',
@@ -101,7 +106,7 @@ export function schema() {
                 },
             },
         },
-        required: ['pov', 'location', 'time', 'elapsed', 'weather', 'conditions'],
+        required: ['pov', 'location', 'time', 'date', 'elapsed', 'weather', 'conditions'],
         additionalProperties: false,
     };
 }
@@ -113,6 +118,7 @@ export function instruction() {
         'Only what the excerpt establishes. Leave a field empty rather than carrying one forward or guessing.',
         'For "pov", name the character the narration follows — the one whose thoughts and sensations are described from the inside.',
         'For "elapsed", say how much time the story states has passed since the previous scene — "a week", "overnight", "come morning", "three hours". This is what moves the clock; empty only when the narrative says no time passed. The narrator\'s phrasing in any language is what counts, never an inference.',
+        'For "date", name the day only when the narrative states a new one outright — "the next morning" belongs in "elapsed", a named day ("Wednesday", "the 3rd") belongs here. A changed date is the one unambiguous signal that a full day has passed even when no duration says so.',
         '"conditions" is about that character\'s body only: what hurts, what is exhausted, what is impaired. Not mood, not clothes, not weather.',
         'Report every affliction still true, not only the new ones — this list replaces what was recorded before it.',
     ].join(' ');
@@ -148,28 +154,35 @@ export function applyExtraction(fragment, { windowText = '', sources = [] } = {}
     }
 
     if (context.size) {
-        setContext(context, { source: NARRATIVE });
+        // The clock is advanced once, below, from the probe's `elapsed` AND `time` together
+        // (`advanceSceneClock`). `setContext` must not fold `time` in again on the same pass — two
+        // writers on one clock is exactly the defect that froze the face at 19:45 while the day
+        // rolled. `skipClock` stores the display fields without touching the clock.
+        setContext(context, { source: NARRATIVE, skipClock: true });
     }
 
     // ── The clock moves on the model's own reading ──
     //
     // `elapsed` is the model's comprehension answer to "how much time passed since the last
-    // scene?" — reported in the phrase the narrative used, in any language. This is the structure
-    // the clock should have been reading all along: before it, the clock advanced only when the
-    // PLAYER typed a declarative elision ("I spend the night"), and a narrator's "come morning",
-    // "the week settles" or "first light" left it frozen because fold tried to recognise those
-    // phrasings in English. The model reads the prose already; it is asked, not matched. Anchored
-    // to nothing (elapsed is arithmetic, not an event), so a swipe that removes the passage cannot
-    // be retracted by the ledger. That is deliberate: time that passed stays passed, and the clock
-    // is a running position that only moves forward — a swipe rewrites the future, not the past.
-    // Double-counting is prevented structurally by the window gate in `extract.js`: a pass runs
-    // only on messages past the high-water mark, so the same passage is never read twice.
+    // scene?" and `time` is "what does the clock read now?" — reported in the phrase the narrative
+    // used, in any language. This is the structure the clock should have been reading all along:
+    // before it, the clock advanced only when the PLAYER typed a declarative elision ("I spend the
+    // night"), and a narrator's "come morning", "the week settles" or "first light" left it frozen
+    // because fold tried to recognise those phrasings in English. The model reads the prose already;
+    // it is asked, not matched. Anchored to nothing (elapsed is arithmetic, not an event), so a
+    // swipe that removes the passage cannot be retracted by the ledger. That is deliberate: time
+    // that passed stays passed, and the clock is a running position that only moves forward — a
+    // swipe rewrites the future, not the past. Double-counting is prevented structurally by the
+    // window gate in `extract.js`: a pass runs only on messages past the high-water mark, so the
+    // same passage is never read twice.
     const elapsed = String(fragment?.elapsed ?? '').trim();
-    if (elapsed) {
+    const time = String(fragment?.time ?? '').trim();
+    const date = String(fragment?.date ?? '').trim();
+    if (elapsed || time || date) {
         try {
-            const outcome = noteSceneElapsed(elapsed);
+            const outcome = noteSceneElapsed({ elapsed, time, date });
             if (outcome.skipped) {
-                console.debug(`[fold] the clock advanced ${outcome.minutes} minutes on the scene probe's reading`);
+                console.debug(`[fold] the clock moved to ${formatClock(outcome.minutes)} on the scene probe's reading`);
             }
         } catch (error) {
             console.error('[fold] failed to advance the clock from the scene probe', error);

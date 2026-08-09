@@ -377,20 +377,62 @@ export function parseSpan(text) {
 }
 
 /**
- * Read the scene probe's `elapsed` answer as minutes.
+ * The face (minutes since midnight) a scene-transition marker implies.
  *
- * The scene probe reads the narrative with comprehension and reports elapsed time in the phrase the
- * story used. Unlike the PLAYER's own message — which must pass `parseElapsed`'s assertion gate to
- * prove it is not a memory — the model has already asserted that time moved: it answered the
- * question "how much time passed?". So the phrase is read as a bare duration, in any language the
- * model reported it, without an English assertion gate.
+ * ── Why a transition marker carries a phase, not just a day ──
+ *
+ * `skipClock` adds a minute count to the running clock and wraps the day, which is right for a
+ * duration ("three hours") and wrong for a transition marker ("come morning", "first light").
+ * Measured in the Royal Succession chat: a clock sat at 19:45, the story said "come morning", the
+ * parse returned one DAY of minutes, and `skipClock` added it to 19:45 — producing 19:45 the NEXT
+ * day. The day counter rolled and the FACE froze, so a court that assembled "at first light" was
+ * reported at a quarter to eight in the evening. A transition to a part of a day is a statement
+ * about which part of WHICH day the scene moved to; the face is half of that statement.
+ *
+ * The probe also reports `time` ("just after dawn", "3:15 PM"), and a parseable `time` outranks a
+ * marker's implied phase — the model read the scene's clock directly. These are the fallback when
+ * the narrative moved to a named part of a day without writing a clock time.
+ */
+const MORNING = 6 * 60;
+const AFTERNOON = 13 * 60;
+const EVENING = 18 * 60;
+const NIGHT = 21 * 60;
+
+const MARKER_PHASE = new Map([
+    // "come morning", "the next morning", "the early morning": the scene is at morning.
+    ['morning', MORNING],
+    ['afternoon', AFTERNOON],
+    ['evening', EVENING],
+    ['night', NIGHT],
+    // "first light" is a new day's opening; "overnight" is the night just gone, so both land on the
+    // morning that follows them.
+    ['first light', MORNING],
+    ['dawn', MORNING],
+    ['dusk', EVENING],
+    // A bare "come day"/"the next day" carries no part of a day, so no phase — the face keeps
+    // running and only the day moves.
+    ['day', null],
+]);
+
+/**
+ * How much time a scene-transition marker moves the clock.
+ *
+ * ── Why this is NOT `parseElapsed` ──
+ *
+ * `parseElapsed` below reads a NARRATIVE SENTENCE with an assertion gate ("spend", "continue") that
+ * exists to prove the speaker means time to pass. The scene probe answers the question "how much
+ * time passed?" directly — the model has already done the assertion work — so the gate is wrong here
+ * and the phrase is read as a bare duration, in any language the model reported it.
  *
  * The phrase may name a counted span ("3 hours", "a week"), a small word-counted span ("three
  * hours", "a couple of days"), a bare unit, or a scene-transition marker that carries its own unit
- * ("overnight", "come morning", "first light" — a night's passage; "the week settles" — a week).
+ * ("overnight", "come morning", "first light").
  *
  * @param {string} text The scene probe's `elapsed` answer.
- * @returns {number|null} Minutes, or null when the answer names no duration.
+ * @returns {{days: number, minutes: number, phase: number|null}|null} What the clock should do:
+ *   whole `days` to advance, sub-day `minutes` to add to the running face (durations), and a `phase`
+ *   to land on when the marker names a part of a day. `phase` wins over `minutes`; both are null
+ *   when nothing moved.
  */
 export function parseSceneElapsed(text) {
     const said = String(text ?? '').toLowerCase().trim();
@@ -401,19 +443,131 @@ export function parseSceneElapsed(text) {
     if (wordCount) {
         const number = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, 'a couple of': 2, 'a few': 3 }[wordCount[1]];
         if (number) {
-            return Math.min(MAX_SKIP, number * UNIT[wordCount[2]]);
+            return spanOf(Math.min(MAX_SKIP, number * UNIT[wordCount[2]]));
         }
     }
     const span = parseSpan(said);
     if (span !== null) {
-        return span;
+        return spanOf(span);
     }
-    // Scene-transition markers that carry their own unit: a transition to a part of a day is the
-    // night that precedes it; "first light" is a new day's opening; "overnight" is the night just
-    // gone. All map to one day's passage.
-    return /(?:come\s+(?:the\s+)?(?:next\s+)?(?:morning|afternoon|evening|night|day)|first\s+light\b|the\s+(?:next|following)\s+(?:morning|afternoon|evening|night|day)|the\s+early\s+morning|overnight)\b/.test(said)
-        ? Math.min(MAX_SKIP, DAY)
-        : null;
+    // Scene-transition markers: a transition to a part of a day moves the clock to that part of the
+    // NEXT day — the day rolls and the face lands where the marker says.
+    const marker = said.match(/(?:come\s+(?:the\s+)?(?:next\s+)?(?:morning|afternoon|evening|night|day)|first\s+light\b|the\s+(?:next|following)\s+(?:morning|afternoon|evening|night|day)|the\s+early\s+morning|overnight|at\s+(?:dawn|dusk))\b/);
+    if (marker) {
+        const part = /dawn|first\s+light/.test(marker[0]) ? 'first light'
+            : /dusk/.test(marker[0]) ? 'dusk'
+                : /overnight/.test(marker[0]) ? 'morning'
+                    : (marker[0].match(/\b(morning|afternoon|evening|night|day)\b/) || [])[1];
+        return {
+            days: 1,
+            minutes: 0,
+            phase: MARKER_PHASE.has(part) ? MARKER_PHASE.get(part) : null,
+        };
+    }
+    return null;
+}
+
+/**
+ * Split a minute total into whole days and sub-day minutes.
+ * @param {number} minutes Total minutes.
+ * @returns {{days: number, minutes: number, phase: null}} The parts; `phase` is null because a
+ *   duration adds to the running face rather than landing on one.
+ */
+function spanOf(minutes) {
+    const bounded = Math.min(MAX_SKIP, Math.max(0, Number(minutes) || 0));
+    return { days: Math.floor(bounded / DAY), minutes: bounded % DAY, phase: null };
+}
+
+/**
+ * Advance the clock on the scene probe's own reading.
+ *
+ * ── One update, not two ──
+ *
+ * The scene probe reports `elapsed` (how much time passed) and `time` (the clock as it now reads).
+ * Both used to write the same clock through different paths on the same pass — `setContext` folded
+ * `time` in absolutely (`advanceClock`) and `noteSceneElapsed` added `elapsed` on top (`skipClock`)
+ * — so a pass that reported "a week" and "19:45" first set 19:45 and then added a week to it. The
+ * correct reading is complementary, not additive:
+ *
+ *   · a parseable `time` is the FACE — the model read the scene's clock directly;
+ *   · a marker's implied `phase` is the face when no time was read;
+ *   · a duration's `minutes` are added to the running face;
+ *   · `days` roll the day;
+ *   · a changed `date` rolls the day even when no duration or marker said so — a named day is the
+ *     one unambiguous signal that a full day has passed (`advanceClock`'s own rule, line for line).
+ *
+ * `time` outranks the marker's phase because a direct reading is more specific than an inference.
+ *
+ * @param {object} current The stored clock.
+ * @param {object} [stated] The probe's answers.
+ * @param {string} [stated.elapsed] The `elapsed` answer.
+ * @param {string} [stated.time] The `time` answer.
+ * @param {string} [stated.date] The `date` answer.
+ * @returns {object} The new clock, with `accepted` and `reason`.
+ */
+export function advanceSceneClock(current, { elapsed = '', time = '', date = '' } = {}) {
+    const seen = (current?.seen ?? 0) + 1;
+    const kept = { ...current, seen };
+
+    const span = parseSceneElapsed(elapsed);
+    const face = parseClock(time);
+
+    // A changed date is the one evidence of a day boundary that needs no guessing — the same rule
+    // `advanceClock` applies to a card's block. A date that differs from the one stored means a day
+    // turned over somewhere between the last scene and this one. It alone is enough to move the
+    // clock, so the "nothing to do" check happens after it.
+    const stated = String(date ?? '').trim();
+    const known = String(current?.date ?? '').trim();
+    const dateChanged = stated && known && stated !== known;
+
+    if (!span && face === null && !dateChanged) {
+        return { ...kept, accepted: false, reason: 'unstated' };
+    }
+
+    let days = (current?.day ?? 0);
+    let minutes;
+    if (face !== null) {
+        // The probe read the clock directly — that is the face. The elapsed still rolls the day.
+        days += span?.days ?? 0;
+        minutes = face;
+    } else if (span && span.phase !== null) {
+        // A marker named a part of a day; land on it, on the day the marker moved to.
+        days += span.days;
+        minutes = span.phase;
+    } else {
+        // A duration: add its sub-day minutes to the running face, rolling the day on overflow.
+        const total = (current?.minutes ?? 0) + (span?.minutes ?? 0);
+        days += (span?.days ?? 0) + Math.floor(total / DAY);
+        minutes = total % DAY;
+    }
+
+    if (dateChanged) {
+        days += 1;
+    }
+
+    const next = {
+        ...kept,
+        day: days,
+        minutes,
+        raw: formatClock(minutes),
+        date: stated || known,
+    };
+
+    if (!Number.isFinite(current?.minutes)) {
+        return { ...next, moved: seen, accepted: true, reason: 'established' };
+    }
+
+    const before = clockScalar(current.day, current.minutes);
+    const after = clockScalar(days, minutes);
+    if (after < before) {
+        return { ...kept, accepted: false, reason: 'reversed' };
+    }
+    return {
+        ...next,
+        moved: after > before ? seen : (current.moved ?? seen),
+        accepted: true,
+        reason: after > before ? 'advanced' : 'unchanged',
+    };
 }
 
 /**

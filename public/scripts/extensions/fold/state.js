@@ -10,7 +10,7 @@
  */
 
 import { insert_with, lookup, merge_b, merge_bu, table_entries } from './lib/hash.js';
-import { advanceClock, clockAge, clockScalar, isClockStale, parseElapsed, parseSceneElapsed, skipClock } from './clock.js';
+import { advanceClock, advanceSceneClock, clockAge, clockScalar, isClockStale, parseElapsed, skipClock } from './clock.js';
 import { MIN_INTERVAL } from './trigger-table.js';
 import * as chronicle from './chronicle.js';
 import * as entities from './entities.js';
@@ -159,45 +159,49 @@ export function noteElapsed(text) {
     if (minutes === null) {
         return { skipped: false };
     }
-    return advanceClockBy(minutes, 'player');
+    return advanceClockBy(minutes);
 }
 
 /**
- * Advance the clock on the scene probe's report of elapsed time.
+ * Advance the clock on the scene probe's report of elapsed time and current time.
  *
- * The scene probe reads the narrative with comprehension and reports `elapsed` as the phrase the
- * story used — "a week", "overnight", "come morning". Unlike the player's own message (which has
- * to pass the assertion gate in `parseElapsed` to prove it is not a memory), the model has already
- * asserted that time moved: it is answering the question "how much time passed?". So the phrase is
- * read as a bare duration and, when it is a scene-transition marker rather than a unit ("overnight",
- * "come morning", "first light"), as the day its marker implies — `parseSceneElapsed` handles both,
- * without the player's assertion gate, because the model is the authority here, in any language.
+ * The scene probe reads the narrative with comprehension and reports `elapsed` (the phrase the
+ * story used — "a week", "overnight", "come morning") AND `time` (the clock as it now reads). These
+ * are one update, not two: `advanceSceneClock` moves the DAY by the elapsed and sets the FACE from
+ * the time (or the marker's implied phase). Before this, `time` was folded in absolutely by
+ * `setContext` and `elapsed` was added on top by a minute count — a pass reporting "come morning"
+ * and "19:45" set the clock to 19:45 and then added a day to it, leaving the face frozen at 19:45
+ * while the day rolled (the Royal Succession court that assembled "at first light" and read 19:45).
  *
- * @param {string} text The scene probe's `elapsed` answer.
+ * Unlike the player's own message (which must pass the assertion gate in `parseElapsed` to prove it
+ * is not a memory), the model has already asserted that time moved: it is answering the questions
+ * "how much time passed?" and "what time is it now?". So no English gate is applied — the model is
+ * the authority here, in any language.
+ *
+ * @param {object} [stated] The scene probe's answers.
+ * @param {string} [stated.elapsed] The `elapsed` answer.
+ * @param {string} [stated.time] The `time` answer.
+ * @param {string} [stated.date] The `date` answer.
  * @returns {{skipped: boolean, minutes?: number}} Whether the clock moved.
  */
-export function noteSceneElapsed(text) {
-    const minutes = parseSceneElapsed(text);
-    if (minutes === null) {
-        return { skipped: false };
-    }
-    return advanceClockBy(minutes, 'scene');
-}
-
-/**
- * Advance the persisted clock by a number of minutes and keep its consumers in step.
- *
- * The shared half of `noteElapsed` and `noteSceneElapsed`: skip the clock, persist it, tick any
- * calendar fronts that the elapse runs past, and push the new time into the scene's display field.
- * @param {number} minutes Minutes to advance.
- * @param {'player'|'scene'} source Who asserted the passage, for the audit trail.
- * @returns {{skipped: boolean, minutes: number}} The outcome.
- */
-function advanceClockBy(minutes, source) {
-    const clock = skipClock(loadClock(), minutes);
+export function noteSceneElapsed({ elapsed = '', time = '', date = '' } = {}) {
+    const clock = advanceSceneClock(loadClock(), { elapsed, time, date });
     if (!clock.accepted) {
         return { skipped: false };
     }
+    return applyClock(clock, 'scene');
+}
+
+/**
+ * Advance the persisted clock and keep its consumers in step.
+ *
+ * The shared tail of every clock writer: persist it, tick any calendar fronts that the elapse runs
+ * past, and push the new time into the scene's display field.
+ * @param {object} clock The new clock from a pure `advanceClock`/`advanceSceneClock`/`skipClock`.
+ * @param {'player'|'scene'} source Who asserted the passage, for the audit trail.
+ * @returns {{skipped: boolean, minutes?: number}} The outcome.
+ */
+function applyClock(clock, source) {
     saveClock(clock);
 
     // A declared elapse is the one high-precision signal a `per`-front can tick against. The
@@ -221,7 +225,24 @@ function advanceClockBy(minutes, source) {
     if (source === 'scene') {
         observe.note('clock:scene-elapsed');
     }
-    return { skipped: true, minutes };
+    return { skipped: true, minutes: clock.minutes };
+}
+
+/**
+ * Advance the persisted clock by a number of minutes and keep its consumers in step.
+ *
+ * The player's own elision path: `skipClock` adds a minute count to the running clock and wraps the
+ * day, which is exactly right for a declared duration ("I spend three hours") and would be wrong for
+ * a scene-transition marker — which is why the scene path uses `advanceSceneClock` instead.
+ * @param {number} minutes Minutes to advance.
+ * @returns {{skipped: boolean, minutes?: number}} The outcome.
+ */
+function advanceClockBy(minutes) {
+    const clock = skipClock(loadClock(), minutes);
+    if (!clock.accepted) {
+        return { skipped: false };
+    }
+    return applyClock(clock, 'player');
 }
 
 /**
@@ -331,7 +352,24 @@ export function noteExtractedWindow({ mid, key }) {
     saveClock({ ...loadClock(), extractMid: mid, extractKey: String(key ?? '') });
 }
 
-export function setContext(context, { source = BLOCK } = {}) {
+/**
+ * Store scene/block context fields, folding the clock when the source asserts one.
+ *
+ * ── Why `skipClock` exists ──
+ *
+ * A card's status block is the narrator asserting the time in its own words, so `setContext` folds
+ * `time`/`date` into the clock through `advanceClock` — the block is the clock's writer. The scene
+ * probe reports BOTH `time` and `elapsed`, and those are ONE update (`advanceSceneClock`, via
+ * `noteSceneElapsed`); letting `setContext` fold `time` in separately would write the same pass
+ * twice. So the scene path stores its fields here with `skipClock: true` and advances the clock in
+ * `noteSceneElapsed` instead. The display field still needs the face, which `applyClock` pushes.
+ *
+ * @param {Map<string, string>} context Fields to store.
+ * @param {object} [opts] Options.
+ * @param {'block'|'narrative'} [opts.source] Who asserted the fields.
+ * @param {boolean} [opts.skipClock] Do not fold `time`/`date` into the clock; the caller does.
+ */
+export function setContext(context, { source = BLOCK, skipClock = false } = {}) {
     if (!context?.size) {
         return;
     }
@@ -340,10 +378,12 @@ export function setContext(context, { source = BLOCK } = {}) {
     // `seen` is already current — `noteTurn` ran for this turn before the block was parsed — so
     // advanceClock must not count it again.
     const before = loadClock();
-    const clock = { ...advanceClock({ ...before, seen: before.seen - 1 }, {
-        time: context.get('time'),
-        date: context.get('date'),
-    }), block: source === BLOCK ? before.seen : before.block };
+    const clock = skipClock
+        ? { ...before, seen: before.seen - 1, accepted: true }
+        : { ...advanceClock({ ...before, seen: before.seen - 1 }, {
+            time: context.get('time'),
+            date: context.get('date'),
+        }), block: source === BLOCK ? before.seen : before.block };
     saveClock(clock);
     if (clock.reason === 'reversed') {
         noteRejections([{ item: String(context.get('time') ?? ''), reason: 'clock-reversed' }]);

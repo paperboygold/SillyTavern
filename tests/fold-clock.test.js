@@ -3,6 +3,7 @@ import { describe, expect, test } from '@jest/globals';
 import {
     CLOCK_STALE_AFTER,
     advanceClock,
+    advanceSceneClock,
     clockAge,
     clockScalar,
     findDeadline,
@@ -314,14 +315,26 @@ describe('parseSceneElapsed — the scene probe is the authority, not an English
         // The scene probe answers "how much time passed?" with the phrase the narrative used. No
         // assertion gate, because the model has already asserted it — the gate exists only to prove
         // a PLAYER's free-form message is not a memory.
-        expect(parseSceneElapsed('a week')).toBe(7 * 1440);
-        expect(parseSceneElapsed('3 hours')).toBe(180);
-        expect(parseSceneElapsed('three hours')).toBe(180);
-        expect(parseSceneElapsed('a couple of days')).toBe(2 * 1440);
-        expect(parseSceneElapsed('overnight')).toBe(1440);
-        expect(parseSceneElapsed('come morning')).toBe(1440);
-        expect(parseSceneElapsed('the next morning')).toBe(1440);
-        expect(parseSceneElapsed('first light')).toBe(1440);
+        expect(parseSceneElapsed('a week')).toEqual({ days: 7, minutes: 0, phase: null });
+        expect(parseSceneElapsed('3 hours')).toEqual({ days: 0, minutes: 180, phase: null });
+        expect(parseSceneElapsed('three hours')).toEqual({ days: 0, minutes: 180, phase: null });
+        expect(parseSceneElapsed('a couple of days')).toEqual({ days: 2, minutes: 0, phase: null });
+    });
+
+    test('scene-transition markers carry a phase, not just a day', () => {
+        // "come morning" does NOT mean "add 24 hours to whatever time it is" — it means the scene
+        // moved to the MORNING of the next day. The day rolls AND the face lands. This is the fix
+        // for the Royal Succession court that assembled "at first light" and read 19:45.
+        expect(parseSceneElapsed('overnight')).toEqual({ days: 1, minutes: 0, phase: 6 * 60 });
+        expect(parseSceneElapsed('come morning')).toEqual({ days: 1, minutes: 0, phase: 6 * 60 });
+        expect(parseSceneElapsed('the next morning')).toEqual({ days: 1, minutes: 0, phase: 6 * 60 });
+        expect(parseSceneElapsed('the early morning')).toEqual({ days: 1, minutes: 0, phase: 6 * 60 });
+        expect(parseSceneElapsed('first light')).toEqual({ days: 1, minutes: 0, phase: 6 * 60 });
+        expect(parseSceneElapsed('come afternoon')).toEqual({ days: 1, minutes: 0, phase: 13 * 60 });
+        expect(parseSceneElapsed('the next evening')).toEqual({ days: 1, minutes: 0, phase: 18 * 60 });
+        expect(parseSceneElapsed('the next night')).toEqual({ days: 1, minutes: 0, phase: 21 * 60 });
+        // A bare "the next day" carries no part of a day — the face keeps running, only the day moves.
+        expect(parseSceneElapsed('the next day')).toEqual({ days: 1, minutes: 0, phase: null });
     });
 
     test('is empty-total and needs no assertion gate', () => {
@@ -329,7 +342,78 @@ describe('parseSceneElapsed — the scene probe is the authority, not an English
         expect(parseSceneElapsed(null)).toBeNull();
         expect(parseSceneElapsed('yesterday')).toBeNull();
         // The model reported the passage already; the phrase needs no "spend/continue" to be read.
-        expect(parseSceneElapsed('passage of one week')).toBe(7 * 1440);
+        expect(parseSceneElapsed('passage of one week')).toEqual({ days: 7, minutes: 0, phase: null });
+    });
+});
+
+describe('advanceSceneClock — elapsed moves the day, time sets the face, one update', () => {
+    const fresh = () => ({ day: 0, minutes: 19 * 60 + 45, raw: '19:45', seen: 0, moved: 0, date: '' });
+
+    test('a transition marker moves to the next day at the marker\'s phase', () => {
+        // The Royal Succession bug, end to end: the clock sat at 19:45, the story said "come
+        // morning", and the clock must land on MORNING of the next day, not 19:45 again.
+        const after = advanceSceneClock(fresh(), { elapsed: 'come morning' });
+        expect(after.accepted).toBe(true);
+        expect(after.day).toBe(1);
+        expect(formatClock(after.minutes)).toBe('06:00');
+    });
+
+    test('first light opens a new day at dawn', () => {
+        const after = advanceSceneClock(fresh(), { elapsed: 'first light' });
+        expect(after.day).toBe(1);
+        expect(formatClock(after.minutes)).toBe('06:00');
+    });
+
+    test('a duration keeps the running face and rolls the day', () => {
+        const after = advanceSceneClock(fresh(), { elapsed: 'three hours' });
+        expect(after.day).toBe(0);
+        expect(formatClock(after.minutes)).toBe('22:45');
+    });
+
+    test('a long duration rolls into the next day', () => {
+        const after = advanceSceneClock(fresh(), { elapsed: 'a week' });
+        expect(after.day).toBe(7);
+        expect(after.minutes).toBe(fresh().minutes);
+    });
+
+    test('a parseable time outranks the marker\'s phase', () => {
+        // The probe read the clock directly — "3:15 PM" — which is more specific than "the next
+        // afternoon" (13:00). The model's direct read wins; the marker still moves the day.
+        const after = advanceSceneClock(fresh(), { elapsed: 'come afternoon', time: '3:15 PM' });
+        expect(after.day).toBe(1);
+        expect(formatClock(after.minutes)).toBe('15:15');
+    });
+
+    test('a time alone sets the face without moving the day', () => {
+        const after = advanceSceneClock(fresh(), { time: '9:30 PM' });
+        expect(after.day).toBe(0);
+        expect(formatClock(after.minutes)).toBe('21:30');
+    });
+
+    test('a changed date rolls the day even with no duration', () => {
+        const at = { day: 0, minutes: 19 * 60 + 45, raw: '19:45', seen: 3, moved: 3, date: 'Wed' };
+        const after = advanceSceneClock(at, { date: 'Thu' });
+        expect(after.day).toBe(1);
+        expect(formatClock(after.minutes)).toBe('19:45');
+        expect(after.date).toBe('Thu');
+    });
+
+    test('an unchanged date does not roll the day', () => {
+        const at = { day: 0, minutes: 19 * 60 + 45, raw: '19:45', seen: 3, moved: 3, date: 'Wed' };
+        const after = advanceSceneClock(at, { date: 'Wed', time: '9:30 PM' });
+        expect(after.day).toBe(0);
+    });
+
+    test('neither elapsed nor a parseable time is a decline, not a reversal', () => {
+        const after = advanceSceneClock(fresh(), { elapsed: '', time: 'just after dawn' });
+        expect(after.accepted).toBe(false);
+        expect(after.reason).toBe('unstated');
+    });
+
+    test('a clock that would go backwards is refused', () => {
+        const after = advanceSceneClock(fresh(), { time: '7:38 AM' });
+        expect(after.accepted).toBe(false);
+        expect(after.reason).toBe('reversed');
     });
 });
 
