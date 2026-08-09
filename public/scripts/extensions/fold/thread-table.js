@@ -585,7 +585,8 @@ export function foldTicks(table, observations, { turn = 0, windowText = '' } = {
         }
 
         const before = lookup(table, canonicalThreadKey(table, parsed.key, observed?.aka), null);
-        if (!foldThread(table, { ...observed, tick, turn })) {
+        const key = foldThread(table, { ...observed, tick, turn });
+        if (!key) {
             rejected.push({ item: parsed.display, reason: 'threads-full', raw: observed, snippet });
             continue;
         }
@@ -593,10 +594,11 @@ export function foldTicks(table, observations, { turn = 0, windowText = '' } = {
 
         // Firing is the whole point of a dial, and it happens exactly once — on the tick that
         // completes it. Reporting it here rather than leaving the panel to notice means the caller
-        // can act on it in the turn it occurred.
-        const after = lookup(table, canonicalThreadKey(table, parsed.key, observed?.aka), null);
+        // can act on it in the turn it occurred. The fired record carries its key so the caller can
+        // close it the same way a review closure would.
+        const after = lookup(table, key, null);
         if (isFull(after) && !isFull(before)) {
-            fired.push(after);
+            fired.push({ ...after, key });
         }
     }
 
@@ -712,7 +714,7 @@ export function tickCalendar(table, { now, turn = 0 } = {}) {
         const after = lookup(table, written, null);
         ticked.push({ key, name: row.name, steps, per, from: row.ticked, to: row.ticked + steps * per });
         if (isFull(after) && !isFull(row)) {
-            fired.push(after);
+            fired.push({ ...after, key });
         }
     }
 
@@ -873,8 +875,8 @@ const NAME_NOISE = new Set(['the', 'a', 'an', 'of', 'and', 'with', 'for', 'to', 
  * every miss is recoverable by a hand merge. This function returns a reason for asking and never
  * merges anything.
  *
- * The rule is: same head token AND (one name's tokens are a subset of the other's, OR the two
- * token sets differ by at most one substitution). Both halves were forced by measured pairs:
+ * The rule is: strict containment, OR same first token with one substitution. Both halves were
+ * forced by measured pairs:
  *
  *   subset        `person␀broker` (turn 11) and `person␀scarred broker` (turn 10) are one man
  *                 behind one counter; "broker" ⊂ "scarred broker".
@@ -883,28 +885,21 @@ const NAME_NOISE = new Set(['the', 'a', 'an', 'of', 'and', 'with', 'for', 'to', 
  *                 which is what `samePlace` uses and what the first draft proposed — CANNOT
  *                 catch it. One substitution can.
  *
- * ── "Head token" means a different end for each branch, and that was measured ──
+ * ── Subset needs no shared head token, and the measured duplicates said so ──
  *
- * The obvious reading is "first token". It catches `Kang` / `Kang Min-seo` and the squad/team
- * substitution and misses `broker` / `scarred broker` entirely, because an English noun phrase
- * puts its head LAST: "scarred broker" is a kind of broker. Reading the head as the last token
- * catches the broker and loses both of the others.
+ * The earlier rule required a shared first OR last token before the subset check ran, so a name
+ * that REFINED another at neither end was never asked about. An echoed review label breaks both
+ * ends at once: "T1 Karr of the Red Hand gathers strength — the east falls to rai" is a strict
+ * superset of "Karr of the Red Hand gathers strength" (the `T1` is a block id the model copied and
+ * the tail is the dial's own `about` restated), and it sat as a duplicate dial — one at 1/6, one
+ * filled to 6/6 and still open — until a hand merge. A name fully inside another IS "one refines
+ * the other" whether or not the refinement lands at an end, and a detector that ASKS costs a
+ * question slot, never a wrong merge.
  *
- * Accepting either end catches all three — and, run over the four live chat files, raises five
- * questions instead of three. The two extra were `Lord Everard` / `Evangeline Everard` and
- * `Lord Everard` / `Lillian Everard`: a family, not a person, flagged because they agree on a
- * shared surname in final position and differ in one token. That is the same shape as
- * "the dining hall" versus "the great hall", which `samePlace`'s docblock already names as the
- * error a subset test exists to avoid.
- *
- * So the two branches take different ends, and the asymmetry says something true about names:
- *
- *   subset        either end. One name REFINES the other — "scarred broker" IS a broker,
- *                 "Kang Min-seo" IS Kang — and refinement is what a shared head expresses at
- *                 whichever end the language puts it.
- *   substitution  first token only. Two names that DISAGREE in one position are the same thing
- *                 only if they agree on what they start from. Agreement in final position with
- *                 disagreement before it is what a surname looks like.
+ * The substitution branch keeps a first-token gate, and the measured false pairs are all
+ * substitutions, not subsets: `Lord Everard` / `Lillian Everard` agree on a surname in final
+ * position and differ in one token; `the dining hall` / `the great hall` share a last noun and
+ * differ in the adjective. Neither is a subset, so neither is touched by relaxing the subset gate.
  *
  * Measured result across all four live chats: three questions, all three genuine — two Evil Hero
  * Party splits (`Paulette` / `Paulette Le Maltildis`, `Lillian` / `Lillian Everard`) and, through
@@ -919,23 +914,34 @@ export function nearIdentity(a, b) {
     if (!left.length || !right.length) {
         return null;
     }
-    const sameFirst = left[0] === right[0];
-    const sameLast = left[left.length - 1] === right[right.length - 1];
-    if (!sameFirst && !sameLast) {
-        return null;
-    }
-    const [small, large] = left.length <= right.length ? [new Set(left), new Set(right)] : [new Set(right), new Set(left)];
+    const [smallArr, largeArr] = left.length <= right.length ? [left, right] : [right, left];
+    const small = new Set(smallArr);
+    const large = new Set(largeArr);
+    // Identical token sets. Not a question — either the keys already collapsed or the names differ
+    // only in noise words, and asking "are these two the same?" about one thing is a question that
+    // erodes trust in every other question.
     if (small.size === large.size && [...small].every(token => large.has(token))) {
-        // Identical token sets. Not a question — either the keys already collapsed or the names
-        // differ only in noise words, and asking "are these two the same?" about one thing is a
-        // question that erodes trust in every other question.
         return null;
     }
+    // Strict containment is the refinement signal, and it needs no shared head token.
+    //
+    // "T1 Karr of the Red Hand gathers strength — the east falls to rai" contains every token of
+    // "Karr of the Red Hand gathers strength": the `T1` is a review-block label the model echoed
+    // into the name and the tail is the dial's own `about` restated. A head-token gate checks the
+    // FIRST or LAST position, and an echoed prefix defeats both — this pair sat unreconciled as a
+    // duplicate dial in the Royal Succession chat, one at 1/6 and one filled to 6/6 and still open.
+    //
+    // The spurious pairs the head gate was added to exclude — Lord Everard / Lillian Everard, the
+    // dining hall / the great hall — are SUBSTITUTIONS (same size, disagree in one position), and
+    // the substitution branch below keeps its own gate. A name fully inside another is "one refines
+    // the other" whether or not the refinement lands at an end.
     if ([...small].every(token => large.has(token))) {
         return 'subset';
     }
     // One substitution: the sets are the same size and differ in exactly one member each way.
-    if (sameFirst && small.size === large.size) {
+    // First token only — agreement in final position with disagreement before it is what a surname
+    // looks like (the Everards), and only a shared first token licenses that question.
+    if (left[0] === right[0] && small.size === large.size) {
         const missing = [...small].filter(token => !large.has(token));
         if (missing.length === 1) {
             return 'substitution';

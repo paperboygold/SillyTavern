@@ -249,6 +249,17 @@ describe('nearIdentity — a trigger for a question, never a decision', () => {
         expect(nearIdentity('the dining hall', 'the great hall')).toBeNull();
     });
 
+    test('an echoed review label is a subset, not a new dial', () => {
+        // The Royal Succession duplicate: the model copied a block id into a thread name, so
+        // "T1 Karr of the Red Hand gathers strength — the east falls to rai" is a strict superset
+        // of "Karr of the Red Hand gathers strength". Neither the first nor the last token agrees
+        // (the prefix defeats both ends), yet one name fully contains the other — it is one dial
+        // recorded twice, at 1/6 and at 6/6, the second left open after firing.
+        expect(nearIdentity('Karr of the Red Hand gathers strength',
+            'T1 Karr of the Red Hand gathers strength — the east falls to rai')).toBe('subset');
+        expect(nearIdentity('the smith finishes the blade', 'the smith finishes the blade — completed')).toBe('subset');
+    });
+
     test('names sharing nothing raise nothing, which no metric could fix anyway', () => {
         expect(nearIdentity('Solomon', 'the Hero')).toBeNull();
     });

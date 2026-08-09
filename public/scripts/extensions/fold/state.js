@@ -16,7 +16,7 @@ import * as chronicle from './chronicle.js';
 import * as entities from './entities.js';
 import * as clocks from './clocks.js';
 import * as observe from './observe.js';
-import { LEAD_LABELS, PERSON, PERSON_LABELS, resolveEntity } from './entity-table.js';
+import { ENTITY_STALE, LEAD_LABELS, PERSON, PERSON_LABELS, resolveEntity } from './entity-table.js';
 import {
     BLOCK,
     CONTEXT_OVERRIDE_AFTER,
@@ -541,6 +541,20 @@ const SHADOW_PATH = 'state.shadow';
 /** How many refused clauses to keep. Enough for several turns of one card's block, no more. */
 export const MAX_SHADOW = 12;
 
+/**
+ * How many turns an entity may sit recorded ELSEWHERE before the review asks where it actually is.
+ *
+ * The cast-starvation fix asked `[where now?]` of people with no place and of people recorded
+ * elsewhere whose NAME re-appeared in the window — but a person who left the scene and is never
+ * named again sat frozen in their last room, `present`, for up to ENTITY_STALE turns. The court
+ * dispersed at message 32 of the Royal Succession chat and Ulrich, Gerhard and Rathold stayed in
+ * "the throne room" for the rest of it. This is the dispatch law applied to staleness: a place
+ * that has contradicted the scene for this long is evidence the code cannot decide about, so it is
+ * asked rather than asserted. A fraction of ENTITY_STALE, so the question fires long before the
+ * prune would silently forget the person.
+ */
+export const PLACE_STALE_AFTER = Math.max(1, Math.floor(ENTITY_STALE / 4));
+
 /** @returns {object[]} Refused block clauses, newest first. */
 export function shadow() {
     const stored = loadTable(SHADOW_PATH);
@@ -600,7 +614,7 @@ export function deltaSchema() {
         properties: {
             inv: {
                 type: 'array',
-                description: 'Things gained or lost: objects, plus property owned (a house, a ship, a mount) and capabilities gained (a spell, a skill, a granted power). A capability gained is quantity +1.',
+                description: 'Things gained or lost: money and objects, plus property owned (a house, a ship, a mount) and capabilities gained (a spell, a skill, a granted power). A capability gained is quantity +1.',
                 items: {
                     type: 'object',
                     properties: {
@@ -673,10 +687,19 @@ export function deltaInstruction() {
         'For each event, record what it CHANGED — changes, not totals. dq is how many were gained or lost, not held afterwards.',
         'Record only what the excerpt NAMES and actually changes; nothing merely mentioned, held over, or unchanged.',
         'Record only what changed in the NEW part of the excerpt — anything shown as already recorded has been counted; do not gain it again.',
+        // ── Money first, because it is the state that pays for everything else ──
+        //
+        // The old list mentioned money in the middle of "things gained or lost" and in the whole of
+        // a financial-intrigue chat it produced ZERO money deltas across 46 events — a treasury, a
+        // discretionary fund "off the books", tolls cut, a twelve-barge purchase, all recorded as
+        // narrative and none as state. The model read "gold" and heard "inventory item", which it
+        // reported and fold silently ignored (a money line with no delta is not even a rejection).
+        // So money leads the list, and the treasury cases that are NOT a pocketed balance are named
+        // outright: a fund granted, a debt incurred, a revenue change — those are money moving too.
+        'Money is "at": "money" — name the currency (won, credits, gold, silver), amount in dq, exact as the story says. Grants, purchases, taxes, tolls, debts and funds are money changing hands: a discretionary fund granted is a money gain for the recipient and a loss for the giver, not an inventory item.',
         'dcur is the change from the current value, never the new total; max only when newly established.',
         'Contact details (phone number, address, email) are NOT items — never record them as gained.',
         'Set "at": "carried" when on the character, otherwise the place; moving between places is a loss in one and a gain in the other.',
-        'Money is "at": "money" — name the currency (won, credits, gold), amount in dq, exact as the story says.',
         '"at": "assets" for owned property (house, ship, mount); "at": "abilities" for a capability gained or lost (spell, skill, power). These are the most commonly missed.',
         'Every condition belongs to somebody: "who" is the person\'s name, exactly as in the people list; empty only for the point-of-view character.',
         'Record the affliction, never the reassurance — "otherwise unhurt" is not a condition.',
@@ -842,10 +865,24 @@ export function ledgerBlock({ windowText = '' } = {}) {
     // question, so it is asked, the same way the unplaced are. It stays a code gate: no window
     // means no misplaced questions (the narrator's own block never sees them).
     const castRows = entities.snapshot({ at, pov });
+    // ── The doubt signal is "recorded elsewhere", not "named in the window" ──
+    //
+    // A person whose stored place contradicts the current scene and who has not been re-reported
+    // recently may have moved — the court disperses, a guest retires, a rider leaves. The review's
+    // `[where now?]` is the "ask rather than guess" half of the dispatch law
+    // (`SelectionDispatch.lean:223`), and before this it was asked only of people with no place at
+    // all, plus people recorded elsewhere whose NAME re-appeared in the window. Everyone else sat
+    // frozen in the panel: Ulrich, Gerhard and Rathold stayed `present` in "the throne room" for
+    // the whole of the Royal Succession chat after the court dismissed at message 32, because the
+    // scene moved and nobody ever asked where they went. A stale record is exactly the "evidence
+    // cannot decide" case the law names — ask, rather than let the panel assert a room they left.
+    // Only mentioned-elsewhere and stale-elsewhere; a person freshly placed needs no question.
     const misplaced = windowText
         ? castRows.elsewhere.filter(person => isMentioned(person.name, windowText))
         : [];
-    const unplaced = [...castRows.unplaced, ...misplaced];
+    const staleElsewhere = castRows.elsewhere
+        .filter(person => !isMentioned(person.name, windowText) && (person.stale ?? 0) >= PLACE_STALE_AFTER);
+    const unplaced = [...castRows.unplaced, ...misplaced, ...staleElsewhere];
     const { text: asked, index } = reviewBlock({
         // Every open thread, dialled or not, LOCAL OR NOT, stale or not — `clocks.reviewable`
         // rather than `clocks.sections`, and its docblock has the hand-check that forced the

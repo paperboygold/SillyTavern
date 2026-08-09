@@ -24,6 +24,7 @@
 
 import {
     CLOCK_SIZES,
+    CLOSED,
     DIAL_KINDS,
     DOOM,
     HIDDEN,
@@ -217,6 +218,23 @@ export function applyExtraction(fragment, { turn = 0, windowText = '', sources =
         // happens once. Counted so it can never fill unnoticed.
         observe.noteCap('clock-fired');
         console.debug(`[fold] a dial filled: ${thread.name}${thread.about ? ` — ${thread.about}` : ''}`);
+        // ── Firing CLOSES the dial, the same way a review closure does ──
+        //
+        // A filled dial was deliberately excluded from the review's open lines ("already fired is
+        // not an open line", `thread-table.js` reviewable) — and nothing else ever wrote its exit,
+        // so it sat `open` in storage forever: one turn of `done`, then invisible, then a
+        // duplicate re-report could even tick it again. The consequence of a filled dial is
+        // already on the record (`about` — "the east falls to raiders" IS what completing the dial
+        // means), so closing it is arithmetic, not a model guess. Written through the chronicle so
+        // it carries the same anchor and liveness a review closure does: a swipe that removes the
+        // completing message retracts the fire with it.
+        chronicle.recordReviewEvent({
+            summary: `${thread.name} completes: ${thread.about || 'the dial filled'}`,
+            keywords: [thread.name, ...(thread.about ? thread.about.split(/[^a-z0-9']+/i).filter(w => w.length > 3) : [])],
+            delta: { threads: [{ key: thread.key, status: CLOSED }] },
+            srcKey: (sources ?? [])[sources.length - 1]?.key ?? '',
+            mid: (sources ?? [])[sources.length - 1]?.mid,
+        });
     }
     if (ticks.accepted) {
         observe.note('pressure:ok');
@@ -264,6 +282,15 @@ export function tickCalendar({ now, turn = 0 } = {}) {
         // whether a model or the calendar caused it is recorded in the audit trail, not the histogram.
         observe.noteCap('clock-fired');
         console.debug(`[fold] a calendar front filled: ${thread.name}${thread.about ? ` — ${thread.about}` : ''}`);
+        // Same arithmetic close as extraction: the calendar fills the dial, so the calendar closes
+        // it. Anchored to the user message that declared the elapse (no extraction source exists
+        // here), which is what `recordReviewEvent` uses when srcKey is empty anyway.
+        chronicle.recordReviewEvent({
+            summary: `${thread.name} completes: ${thread.about || 'the dial filled'}`,
+            keywords: [thread.name, ...(thread.about ? thread.about.split(/[^a-z0-9']+/i).filter(w => w.length > 3) : [])],
+            delta: { threads: [{ key: thread.key, status: CLOSED }] },
+            mid: undefined,
+        });
     }
     return result;
 }
