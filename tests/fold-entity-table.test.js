@@ -340,7 +340,7 @@ describe('the exposition gate, wired', () => {
         ], { windowText: window, turn: 1 });
 
         expect(result.accepted).toBe(1);
-        expect(result.rejected).toEqual([{ item: 'hero abilities', reason: 'exposition' }]);
+        expect(result.rejected).toEqual([expect.objectContaining({ item: 'hero abilities', reason: 'exposition' })]);
         expect(entitiesOfKind(table, LEAD, 1).map(l => l.name)).toEqual(['marote brand']);
     });
 

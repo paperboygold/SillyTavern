@@ -51,11 +51,12 @@
 
 import { isNegation, itemHead, sameItemHead } from './block-parse.js';
 import { CLOCK_STALE_AFTER } from './clock.js';
+import { windowSnippet } from './diag.js';
 // Marks are OWNED, and an owner is a cast row, so the two tables have to agree about what a name
 // is. Importing the one normaliser rather than re-deriving a key here is the same discipline
 // `itemHead` enforces for items: two definitions of "what is this called" is how a gate comes to
 // refuse the very thing its window was about (Phase A's LANDED note). `entity-table.js` imports
-// nothing but `lib/hash.js`, so this adds no cycle.
+// nothing but `lib/hash.js` (and the shared `diag.js`), so this adds no cycle.
 import { PERSON, normalizeEntityName, resolveEntity } from './entity-table.js';
 import { fold, insert_with, lookup, merge_b, merge_graph, table_entries } from './lib/hash.js';
 
@@ -1220,6 +1221,8 @@ export function isMentioned(name, windowText) {
 export function validateInventory({ inv, deltas, windowText, budget = MAX_CHANGES_PER_TURN, shown = null, contributors = null }) {
     const accepted = [];
     const rejected = [];
+    // The window excerpt every rejection records, for the caret-level diagnostics log.
+    const snippet = windowSnippet(windowText);
     const projected = new Map(inv);
     // Counted apart from `accepted` because a restated total is not a change: see the
     // MAX_CHANGES_PER_TURN docblock for the measured starvation that shared counting caused.
@@ -1228,7 +1231,7 @@ export function validateInventory({ inv, deltas, windowText, budget = MAX_CHANGE
     for (const raw of Array.isArray(deltas) ? deltas : []) {
         const parsed = normalizeItemName(raw?.item);
         if (!parsed) {
-            rejected.push({ item: String(raw?.item ?? ''), reason: 'unusable-name' });
+            rejected.push({ item: String(raw?.item ?? ''), reason: 'unusable-name', raw, snippet });
             continue;
         }
 
@@ -1261,7 +1264,7 @@ export function validateInventory({ inv, deltas, windowText, budget = MAX_CHANGE
         // become `reach` on the person's row in a later phase; until then not-an-item is the honest
         // answer, and a silently accepted `contacts` row is not.
         if (CONTACT_PLACE.test(place)) {
-            rejected.push({ item: name, reason: 'not-an-item' });
+            rejected.push({ item: name, reason: 'not-an-item', raw, snippet });
             continue;
         }
         // An absolute quantity from a restated block. Bounds-checked like everything else, but it
@@ -1271,20 +1274,20 @@ export function validateInventory({ inv, deltas, windowText, budget = MAX_CHANGE
         const dq = Number.isFinite(raw?.dq) && raw.dq !== 0 ? Math.trunc(raw.dq) : (parsed.qty ?? 0);
 
         if (!restated && !dq) {
-            rejected.push({ item: name, reason: 'no-change' });
+            rejected.push({ item: name, reason: 'no-change', raw, snippet });
             continue;
         }
         // The rate limit bounds how much a single turn may CHANGE. A restated total is not a
         // change proposal — it is the same list you already have, re-read — so counting it here
         // would let a card with nine items starve its own last item of refreshes forever.
         if (!restated && changes >= budget) {
-            rejected.push({ item: name, reason: 'rate-limited' });
+            rejected.push({ item: name, reason: 'rate-limited', raw, snippet });
             continue;
         }
         // The strongest and cheapest rule: a model cannot invent a change to something the
         // excerpt never mentions.
         if (!isMentioned(name, windowText)) {
-            rejected.push({ item: name, reason: 'not-mentioned' });
+            rejected.push({ item: name, reason: 'not-mentioned', raw, snippet });
             continue;
         }
         const canonical = canonicalItemName(projected, name, place);
@@ -1293,7 +1296,7 @@ export function validateInventory({ inv, deltas, windowText, budget = MAX_CHANGE
         // See the docblock: only a positive delta, only against a line the model was actually
         // shown, only when the ledger already covers the whole proposal, and never for money.
         if (shown && dq > 0 && !restated && place !== MONEY && shown.has(key) && (held?.qty ?? 0) >= dq) {
-            rejected.push({ item: canonical, reason: 'already-recorded' });
+            rejected.push({ item: canonical, reason: 'already-recorded', raw, snippet });
             continue;
         }
         // ── The contributor trail closes what `shown` cannot ──
@@ -1308,22 +1311,22 @@ export function validateInventory({ inv, deltas, windowText, budget = MAX_CHANGE
         if (dq > 0 && !restated && (held?.qty ?? 0) >= dq
             && contributors?.has(key)
             && contributors.get(key).some(c => Number(c.dq) === dq)) {
-            rejected.push({ item: canonical, reason: 'already-recorded' });
+            rejected.push({ item: canonical, reason: 'already-recorded', raw, snippet });
             continue;
         }
         if (!held && !restated && dq < 0) {
-            rejected.push({ item: canonical, reason: 'remove-unknown' });
+            rejected.push({ item: canonical, reason: 'remove-unknown', raw, snippet });
             continue;
         }
         if (!held && projected.size >= MAX_ITEMS) {
-            rejected.push({ item: canonical, reason: 'inventory-full' });
+            rejected.push({ item: canonical, reason: 'inventory-full', raw, snippet });
             continue;
         }
 
         // Growth against what is held, then corroboration for anything past it. See DELTA_GROWTH.
         if (!restated && Math.abs(dq) > deltaAllowance(held?.qty ?? 0, place)
             && !magnitudeCorroborated(dq, windowText)) {
-            rejected.push({ item: canonical, reason: 'implausible-delta' });
+            rejected.push({ item: canonical, reason: 'implausible-delta', raw, snippet });
             continue;
         }
 
@@ -1339,7 +1342,7 @@ export function validateInventory({ inv, deltas, windowText, budget = MAX_CHANGE
         // Underflow clamps rather than rejects: our count may simply be behind, and the narrative
         // is the more trustworthy source about what just happened.
         if ((held?.qty ?? 0) + dq < 0) {
-            rejected.push({ item: canonical, reason: 'clamped-underflow' });
+            rejected.push({ item: canonical, reason: 'clamped-underflow', raw, snippet });
         }
 
         bumpQty(projected, key, dq);
@@ -1361,26 +1364,28 @@ export function validateInventory({ inv, deltas, windowText, budget = MAX_CHANGE
 export function validateVitals({ vitals, deltas, windowText }) {
     const accepted = [];
     const rejected = [];
+    // The window excerpt every rejection records, for the caret-level diagnostics log.
+    const snippet = windowSnippet(windowText);
 
     for (const raw of Array.isArray(deltas) ? deltas : []) {
         const name = normalizeKey(raw?.name);
         if (!name) {
-            rejected.push({ item: String(raw?.name ?? ''), reason: 'unusable-name' });
+            rejected.push({ item: String(raw?.name ?? ''), reason: 'unusable-name', raw, snippet });
             continue;
         }
         if (!isMentioned(name, windowText)) {
-            rejected.push({ item: name, reason: 'not-mentioned' });
+            rejected.push({ item: name, reason: 'not-mentioned', raw, snippet });
             continue;
         }
 
         const held = lookup(vitals, name, null);
         if (!held && vitals.size + accepted.length >= MAX_VITALS) {
-            rejected.push({ item: name, reason: 'vitals-full' });
+            rejected.push({ item: name, reason: 'vitals-full', raw, snippet });
             continue;
         }
         // A max that moves by more than half in one turn is a hallucination, not a level-up.
         if (held && Number.isFinite(raw?.max) && Math.abs(raw.max - held.max) > held.max * 0.5) {
-            rejected.push({ item: name, reason: 'implausible-max' });
+            rejected.push({ item: name, reason: 'implausible-max', raw, snippet });
             continue;
         }
 
@@ -1389,7 +1394,7 @@ export function validateVitals({ vitals, deltas, windowText }) {
             entry.max = raw.max;
         }
         if (!entry.dcur && entry.max === undefined) {
-            rejected.push({ item: name, reason: 'no-change' });
+            rejected.push({ item: name, reason: 'no-change', raw, snippet });
             continue;
         }
         accepted.push(entry);
@@ -1430,15 +1435,17 @@ export function validateStatus({ status, deltas, windowText, cast = null, pov = 
     const accepted = [];
     const rejected = [];
     let capped = 0;
+    // The window excerpt every rejection records, for the caret-level diagnostics log.
+    const snippet = windowSnippet(windowText);
 
     for (const raw of Array.isArray(deltas) ? deltas : []) {
         const flag = normalizeKey(raw?.flag);
         if (!flag) {
-            rejected.push({ item: String(raw?.flag ?? ''), reason: 'unusable-name' });
+            rejected.push({ item: String(raw?.flag ?? ''), reason: 'unusable-name', raw, snippet });
             continue;
         }
         if (!isMentioned(flag, windowText)) {
-            rejected.push({ item: flag, reason: 'not-mentioned' });
+            rejected.push({ item: flag, reason: 'not-mentioned', raw, snippet });
             continue;
         }
 
@@ -1446,7 +1453,7 @@ export function validateStatus({ status, deltas, windowText, cast = null, pov = 
         if (!owner.ok) {
             // Named somebody fold has never heard of. Counted with the name it invented, so the
             // report says which name rather than only how often.
-            rejected.push({ item: String(raw?.who ?? '').slice(0, MAX_ITEM_NAME), reason: 'unknown-owner' });
+            rejected.push({ item: String(raw?.who ?? '').slice(0, MAX_ITEM_NAME), reason: 'unknown-owner', raw, snippet });
             continue;
         }
 
@@ -1458,7 +1465,7 @@ export function validateStatus({ status, deltas, windowText, cast = null, pov = 
         // flag — "the hangover is gone" is information — and otherwise there is nothing to record.
         if (isNegation(flag)) {
             if (!status.has(subject)) {
-                rejected.push({ item: flag, reason: 'negation' });
+                rejected.push({ item: flag, reason: 'negation', raw, snippet });
                 continue;
             }
             accepted.push({ who: owner.name, flag, on: false });
@@ -1466,7 +1473,7 @@ export function validateStatus({ status, deltas, windowText, cast = null, pov = 
         }
 
         if (!status.has(subject) && status.size + accepted.length >= MAX_FLAGS) {
-            rejected.push({ item: flag, reason: 'flags-full' });
+            rejected.push({ item: flag, reason: 'flags-full', raw, snippet });
             continue;
         }
         // The per-owner slot bound is not a refusal — `placeMark` owns what actually happens to the

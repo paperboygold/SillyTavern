@@ -309,7 +309,9 @@ export function applyExtraction(fragment, { sources = [], now = Date.now(), wind
     invalidateIndex();
 
     if (rejections.length && onRejections) {
-        onRejections(rejections);
+        // Anchor every refusal to the message the pass was reading, so the log's cause-link can
+        // jump a rejection to the narrative that prompted it.
+        onRejections(rejections.map(rejection => ({ ...rejection, mid: anchor.mid })));
     }
 
     return {

@@ -11,14 +11,16 @@
  */
 
 import { chat, generateRaw, getCurrentChatId } from '../../../script.js';
+import { oai_settings } from '../../openai.js';
 import { ConnectionManagerRequestService } from '../shared.js';
 import { contentKey, liveHashes } from './chronicle.js';
 import * as entities from './entities.js';
 import { splitWindow } from './extract-table.js';
 import { analyzeExtraction } from './json-parse.js';
 import * as observe from './observe.js';
-import { extractMark, ledgerBlock, noteExtracted, noteExtractedWindow } from './state.js';
-import { takePendingCost } from './verdict.js';
+import { extractMark, ledgerBlock, noteExtracted, noteExtractedWindow, setSync } from './state.js';
+import * as log from './log.js';
+import { peekPendingCost, takePendingCost } from './verdict.js';
 
 /**
  * How much bigger the retry's budget is than the first attempt's.
@@ -28,6 +30,26 @@ import { takePendingCost } from './verdict.js';
  * Tripling clears the reasoning and leaves room for the answer.
  */
 export const RETRY_GROWTH = 3;
+
+/**
+ * Consecutive JSON failures before the read mark advances anyway.
+ *
+ * The mark is the one piece of state that, set wrongly, silently skips messages forever — so a
+ * single failure must never move it. But a window the model simply cannot parse (a reasoning model
+ * whose budget the scene outgrew, a profile gone wrong) would otherwise freeze the ledger at that
+ * point and re-read the same unreadable stretch every interval, forever. After this many failures
+ * in a row the stretch is established as unreadable by the CURRENT model, and the mark is advanced
+ * past it with a warning: the ledger goes stale either way, and a stale ledger that can still see
+ * the future is strictly better than one that cannot move. The budget raise is the real cure; this
+ * is the safety so a misbehaving model cannot wedge the whole extension.
+ */
+export const FAILURE_BACKSTOP = 5;
+
+/** Failure reasons that mean "the model could not produce usable JSON", which feed the backstop. */
+const JSON_FAILURES = new Set(['empty', 'truncated', 'unparseable']);
+
+/** Consecutive passes that failed to produce usable JSON, for the backstop above. */
+let consecutiveFailures = 0;
 
 /** @type {Array<{schemaKey: string, schema: () => object, instruction: () => string, apply: Function}>} */
 const probes = [];
@@ -111,6 +133,34 @@ const SYSTEM_PROMPT = [
 ].join(' ');
 
 /**
+ * How long an extraction request may take before it is abandoned.
+ *
+ * There is no timeout on `generateRaw`/`sendRequest`, and a request that never resolves leaves
+ * `busy` true forever — the pass never finishes, the sync chip pulses `syncing` indefinitely, and
+ * every later trigger bails on `busy`. That is what made the chip a liar. This bounds the call so
+ * extraction ALWAYS terminates: a hang becomes a failure (red chip, next turn retries) instead of
+ * an eternal spinner. The underlying request is not aborted, only given up on — the cost of a
+ * provider that never answers is bounded.
+ */
+export const EXTRACT_TIMEOUT_MS = 60_000;
+
+/**
+ * Race a promise against a timeout, rejecting if it does not settle in time.
+ * @param {Promise<any>} promise The request.
+ * @param {number} ms Budget.
+ * @returns {Promise<any>} The settled value.
+ */
+function withTimeout(promise, ms) {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`extraction timed out after ${Math.round(ms / 1000)}s`)), ms);
+        promise.then(
+            (value) => { clearTimeout(timer); resolve(value); },
+            (error) => { clearTimeout(timer); reject(error); },
+        );
+    });
+}
+
+/**
  * Send the extraction request, either through a dedicated connection profile or through the
  * chat's own model.
  *
@@ -123,30 +173,54 @@ const SYSTEM_PROMPT = [
  * @param {number} params.responseLength Token budget.
  * @param {object} params.schema The JSON schema.
  * @param {string} [params.profileId] Connection profile to use; falls back to the chat's model.
+ * @param {boolean} [params.reasoning] Allow the model's full reasoning; default disables it.
  * @returns {Promise<any>} Raw result: a string, or already-parsed content.
  */
-async function requestExtraction({ prompt, responseLength, schema, profileId }) {
+async function requestExtraction({ prompt, responseLength, schema, profileId, reasoning = false }) {
     if (!profileId) {
-        return await generateRaw({ prompt, systemPrompt: SYSTEM_PROMPT, responseLength, jsonSchema: schema });
+        // ── Disable reasoning for extraction ──
+        //
+        // Measured against the real API: deepseek-v4-flash spends ~3,500-10,000 tokens THINKING on
+        // the extraction task, and at a 4096 budget that reasoning consumed the whole allowance and
+        // `content` came back empty. `reasoning_effort` is not honored by this model (low made it
+        // think MORE). But `show_thoughts: false` → the server sends `thinking: {type: "disabled"}`
+        // → the model skips reasoning entirely and still returns valid extraction JSON (verified).
+        // This saves most of the latency and makes the budget matter far less. The chat's own
+        // `show_thoughts` setting is saved and restored around the call.
+        const previousShowThoughts = oai_settings?.show_thoughts;
+        if (oai_settings && !reasoning) {
+            oai_settings.show_thoughts = false;
+        }
+        try {
+            return await withTimeout(
+                generateRaw({ prompt, systemPrompt: SYSTEM_PROMPT, responseLength, jsonSchema: schema }),
+                EXTRACT_TIMEOUT_MS);
+        } finally {
+            if (oai_settings && previousShowThoughts !== undefined) {
+                oai_settings.show_thoughts = previousShowThoughts;
+            }
+        }
     }
 
-    const result = await ConnectionManagerRequestService.sendRequest(
-        profileId,
-        [
-            { role: 'system', content: SYSTEM_PROMPT },
-            { role: 'user', content: prompt },
-        ],
-        responseLength,
-        {
-            extractData: true,
-            // Deliberately not inheriting the profile's presets. Extraction wants low variance and
-            // no instruct wrapping; the schema does the shaping. A roleplay preset's temperature
-            // and penalties actively work against structured output.
-            includePreset: false,
-            includeInstruct: false,
-        },
-        { json_schema: schema },
-    );
+    const result = await withTimeout(
+        ConnectionManagerRequestService.sendRequest(
+            profileId,
+            [
+                { role: 'system', content: SYSTEM_PROMPT },
+                { role: 'user', content: prompt },
+            ],
+            responseLength,
+            {
+                extractData: true,
+                // Deliberately not inheriting the profile's presets. Extraction wants low variance and
+                // no instruct wrapping; the schema does the shaping. A roleplay preset's temperature
+                // and penalties actively work against structured output.
+                includePreset: false,
+                includeInstruct: false,
+            },
+            { json_schema: schema },
+        ),
+        EXTRACT_TIMEOUT_MS);
 
     return result?.content;
 }
@@ -160,7 +234,7 @@ async function requestExtraction({ prompt, responseLength, schema, profileId }) 
  * @param {string} [options.why] The reason this pass ran — arms the world fragment on a time skip.
  * @returns {Promise<{ok: boolean, reason?: string, results?: object}>} Outcome.
  */
-export async function runExtraction({ windowSize = 6, responseLength = 800, profileId = '', why = '' } = {}) {
+export async function runExtraction({ windowSize = 6, responseLength = 800, profileId = '', why = '', reasoning = false } = {}) {
     // ── Every outcome is recorded, including the ones that are not errors ──
     //
     // A chat ran to 74 turns with zero extracted events and NOTHING in the data said why. The pass
@@ -172,6 +246,10 @@ export async function runExtraction({ windowSize = 6, responseLength = 800, prof
     // The bounds have had this since observe.js existed. The pass itself did not.
     const outcome = (reason) => {
         observe.note(`extract:${reason}`);
+        // A decline that was not the model failing to produce JSON breaks the run of failures.
+        if (!JSON_FAILURES.has(reason)) {
+            consecutiveFailures = 0;
+        }
         return { ok: false, reason };
     };
 
@@ -199,6 +277,8 @@ export async function runExtraction({ windowSize = 6, responseLength = 800, prof
 
     busy = true;
     try {
+        // FOLD-SLA §2.1: the wait must be visible. Extraction is in flight.
+        setSync('syncing', { mid: window.sources[window.sources.length - 1]?.mid });
         const instructions = probes.map(p => `- ${p.schemaKey}: ${p.instruction()}`).join('\n');
         // ── The ledger is pinned, not retrieved ──
         //
@@ -214,7 +294,7 @@ export async function runExtraction({ windowSize = 6, responseLength = 800, prof
         // taken here — read and cleared — and the extractor is told to record what the cost consumed
         // as a delta. This is the loop §6 closes: the concrete cost the judge imposed no longer has
         // to happen to survive the narrator's prose into re-extraction.
-        const pendingCost = takePendingCost();
+        const pendingCost = peekPendingCost();
         const prompt = [
             'Transcript excerpt:',
             '---',
@@ -230,35 +310,105 @@ export async function runExtraction({ windowSize = 6, responseLength = 800, prof
         ].join('\n');
 
         const schema = buildSchema();
-        let analysis = analyzeExtraction(await requestExtraction({ prompt, responseLength, schema, profileId }));
 
-        // Budget failures are a different thing from garbage, and the only ones worth retrying: the
-        // model ran out of allowance rather than refusing or rambling. Thinking models hit this
-        // routinely, spending the whole budget on reasoning before emitting any JSON.
+        // ── Retry the model call, not just the budget ──
         //
-        // `empty` belongs here alongside `truncated`, and leaving it out cost a chat every one of
-        // its extractions. Reasoning tokens are charged against the same `max_tokens` as the answer,
-        // so an under-budgeted reasoning model does not return a half-written object — it returns
-        // nothing at all, which has no unterminated structure for `looksTruncated` to find. Measured
-        // on a real chat: `extract:unparseable` 6, `extract:ok` 3, and a second chat that was 2 for 2
-        // failures with the panel never updating once. The retry existed and could not fire.
-        if (!analysis.value && (analysis.truncated || analysis.empty)) {
-            console.debug(`[fold] extraction came back ${analysis.empty ? 'empty' : 'cut off'}; retrying with a larger budget`);
+        // One retry with a tripled budget absorbs a budget shortfall and nothing else. The measured
+        // reality of this model (median 34 thinking tokens) says most `empty` passes are NOT budget
+        // starvation — they are transient: a rate limit right after the main generation, a provider
+        // hiccup, a momentarily empty `content`. Those are absorbed by RETRYING THE SAME CALL after
+        // a short backoff, not by spending more tokens. So the loop below retries up to
+        // `MAX_EXTRACT_ATTEMPTS` times: the budget grows once on an empty/truncated first pass (the
+        // one genuinely budget-shaped case), and every other retry waits a beat and asks again.
+        //
+        // `unparseable` is NOT retried — a reply the parser cannot read is a structural problem
+        // (schema, prompt, model) and a retry returns the same garbage. It fails immediately.
+        const MAX_EXTRACT_ATTEMPTS = 3;
+        const backoffMs = (attempt) => 500 * attempt;  // 0.5s, 1s, 1.5s
+        const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+        let rawReply = '';
+        let analysis = null;
+        let lastError = null;
+        for (let attempt = 1; attempt <= MAX_EXTRACT_ATTEMPTS; attempt++) {
+            // A budget-shaped failure (empty/truncated) earns the tripled budget on the retries;
+            // anything else — the transient case — retries at the same budget.
+            const budget = attempt > 1 && (analysis?.empty || analysis?.truncated)
+                ? responseLength * RETRY_GROWTH
+                : responseLength;
+            try {
+                rawReply = String(await requestExtraction({ prompt, responseLength: budget, schema, profileId, reasoning }) ?? '');
+            } catch (error) {
+                // A hung request (now bounded by `EXTRACT_TIMEOUT_MS`) is not fixed by retrying the
+                // same call in-pass — fail it and let the next turn try. This is what keeps `busy`
+                // from wedging and the sync chip from pulsing forever.
+                lastError = error;
+                console.error('[fold] extraction request failed or timed out', error);
+                break;
+            }
+            analysis = analyzeExtraction(rawReply);
+            // Success, or a failure that is NOT budget-shaped (empty/truncated) — a reply the parser
+            // cannot read at all is structural and a retry returns the same garbage.
+            if (analysis.value || (!analysis.empty && !analysis.truncated)) {
+                break;
+            }
+            if (attempt < MAX_EXTRACT_ATTEMPTS) {
+                observe.note(`extract:retry-${attempt}`);
+                console.debug(`[fold] extraction returned nothing on attempt ${attempt}; retrying in ${backoffMs(attempt)}ms`);
+                await sleep(backoffMs(attempt));
+            }
+        }
+        if (analysis?.truncated || analysis?.empty) {
             observe.note(`extract:retry-${analysis.empty ? 'empty' : 'truncated'}`);
-            analysis = analyzeExtraction(await requestExtraction({
-                prompt,
-                responseLength: responseLength * RETRY_GROWTH,
-                schema,
-                profileId,
-            }));
         }
 
-        const parsed = analysis.value;
+        const parsed = analysis?.value;
         if (!parsed) {
             console.warn('[fold] extraction produced no usable JSON; abandoning this cycle');
-            // Three distinct failures, counted separately. They have different remedies — raise the
+            // The distinct failures, counted separately. They have different remedies — raise the
             // budget, change the model, fix the prompt — and one bucket cannot tell you which.
-            return outcome(analysis.empty ? 'empty' : analysis.truncated ? 'truncated' : 'unparseable');
+            const reason = lastError ? 'error'
+                : analysis?.empty ? 'empty'
+                    : analysis?.truncated ? 'truncated'
+                        : 'unparseable';
+            observe.note(`extract:${reason}`);
+            // FOLD-SLA §2.3: a failure is shown, named, and given its fix — never silent.
+            const detail = lastError
+                ? `extraction request failed: ${lastError.message} — the pass was abandoned, not stuck; the next turn retries.`
+                : reason === 'empty'
+                    ? `no JSON after ${MAX_EXTRACT_ATTEMPTS} attempts (budget + backoff retries) — for this model (median 34 thinking tokens) that is a transient failure, likely a rate limit; see the raw reply below.`
+                    : reason === 'truncated'
+                        ? 'reply cut off mid-JSON across retries — a structural ceiling, not transient.'
+                        : 'JSON present but unusable across retries — prompt, schema or model, not a budget issue.';
+            setSync('failed', { mid: window.sources[window.sources.length - 1]?.mid, reason, detail });
+            // The diagnostics log distinguishes the two cures: an EMPTY reply ran its allowance down
+            // thinking and never answered (raise the token budget); UNPARSEABLE produced JSON the
+            // parser could not read (prompt/schema/model — no budget fixes it); TRUNCATED was cut
+            // off and unrecoverable (budget). This is the surface for "is it the budget or is it
+            // structural?".
+            //
+            // The RAW reply is recorded so the next failure shows WHAT the API actually returned —
+            // empty content, a rate-limit body, an error envelope, or prose that failed to parse.
+            // The measurement of this model (median 34 thinking tokens) says the "spent its
+            // allowance thinking" theory is wrong for the common case; only the raw reply settles it.
+            const rawReplyText = String(rawReply ?? '');
+            log.note({
+                kind: 'extract',
+                reason,
+                mid: window.sources[window.sources.length - 1]?.mid,
+                detail,
+                raw: rawReplyText ? `reply: ${rawReplyText}` : 'reply: (empty string)',
+            });
+            // ── The backstop: a window the model cannot parse must not freeze the ledger ──
+            consecutiveFailures++;
+            if (consecutiveFailures >= FAILURE_BACKSTOP) {
+                const read = window.sources[window.sources.length - 1];
+                console.warn(`[fold] extraction failed ${consecutiveFailures} times in a row for this window; `
+                    + 'advancing the read mark so the ledger does not stay frozen on an unreadable stretch.');
+                noteExtractedWindow(read);
+                consecutiveFailures = 0;
+            }
+            return { ok: false, reason };
         }
 
         // The call is async and unblocking, so the world may have moved. Applying results from a
@@ -320,6 +470,17 @@ export async function runExtraction({ windowSize = 6, responseLength = 800, prof
         // finds no event of consequence is behaving correctly; one that never returns anything is
         // not, and only the counts can tell them apart.
         observe.note(results?.events?.added ? 'extract:ok' : 'extract:no-events');
+        // The pass succeeded — the model was actually shown the pending-cost note and the probes
+        // have applied. Only now is the note cleared; a note consumed by a failing pass would have
+        // been a cost the judge imposed and the ledger never saw (nine costs lost to empty passes
+        // in one fight). The failure path above deliberately leaves it for a pass that can read it.
+        takePendingCost();
+        // A success, even an empty one, breaks any run of JSON failures.
+        consecutiveFailures = 0;
+        // FOLD-SLA §2.1/2.2: the ledger now reflects `read`. If a newer message rendered while the
+        // pass was in flight, say so — the next pass covers the gap — rather than claiming current.
+        const newestMid = (chat ?? []).reduce((last, m, i) => (m?.mes && !m.is_system ? i : last), -1);
+        setSync(read.mid >= newestMid ? 'up-to-date' : 'behind', { mid: read.mid });
         // Success includes "read six messages, found nothing worth recording". That is the case the
         // mark most needs to cover: re-reading a quiet stretch on the next pass is how a window
         // comes to be read three times, and the model declining to re-report it is the behaviour

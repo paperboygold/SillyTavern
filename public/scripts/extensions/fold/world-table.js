@@ -112,16 +112,16 @@ export function schema() {
                         },
                         what: {
                             type: 'string',
-                            description: 'One phrase: how their agenda or situation advanced during the elapsed time. "ran two D-rank raids", "filed the quarterly return", "moved on the border".',
+                            description: 'One phrase: how their agenda advanced: "ran two D-rank raids", "moved on the border".',
                         },
                         where: {
                             type: 'string',
-                            description: 'The place this happened, as a bare place name, when it is tied to one. Empty for something that follows the actor anywhere.',
+                            description: 'The bare place name where this happened, when tied to one. Empty if it follows the actor anywhere.',
                         },
                         seen: {
                             type: 'string',
                             enum: [OPEN, HIDDEN],
-                            description: `${OPEN} if the point-of-view character could plausibly learn of this (a public broadcast, a message received, a visible change), ${HIDDEN} if it happened beyond their knowledge. Default ${HIDDEN} for anything they would have to be told about and were not.`,
+                            description: `${OPEN} if the point-of-view character could plausibly learn of this, ${HIDDEN} if beyond their knowledge. Default ${HIDDEN} for anything they would have to be told about and were not.`,
                         },
                     },
                     required: ['who', 'what', 'where', 'seen'],
@@ -138,10 +138,10 @@ export function schema() {
 export function instruction() {
     return [
         'What the people and factions already on the cast did while the camera was elsewhere, given the time the excerpt says has passed.',
-        'A move must name a person or faction FROM THE CAST ABOVE — never invent a new actor. fold advances the world it knows about; new actors arrive only by being established on-screen.',
-        'Root each move in that actor’s stated wants where one is recorded. An agenda with no advance under the elapsed span contributes no move.',
+        'A move must name a person or faction FROM THE CAST ABOVE — never invent a new actor. fold advances the world it knows; new actors arrive only on-screen.',
+        'Root each move in that actor\'s stated wants where one is recorded. An agenda with no advance contributes no move.',
         `Say whether the point-of-view character could plausibly learn of it ("${OPEN}") or not ("${HIDDEN}"). Default "${HIDDEN}" for anything they would have to be told about and were not.`,
-        'Off-screen only. If the excerpt showed an event directly, it is not a world move — the other probes already recorded it.',
+        'Off-screen only. If the excerpt showed an event directly, the other probes already recorded it.',
         'Use an empty array when the span was short, nothing plausibly advanced, or the pass was not triggered by elapsed time.',
     ].join(' ');
 }

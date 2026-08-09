@@ -946,10 +946,176 @@ li.fold_cond.fold_mark_severe { color: var(--fold-crit); }
 
 .fold_foot_gap { color: var(--fold-warn); opacity: 0.85; }
 
+/* Footer counts that open the diagnostics log: a tally that is one click from its causes. */
+.fold_foot_count {
+    cursor: pointer;
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+}
+.fold_foot_count:hover { opacity: 1; }
+.fold_foot_rejects { color: var(--fold-crit); opacity: 0.9; }
+.fold_foot_extract { color: var(--fold-warn); opacity: 0.9; }
+
+/* ── the diagnostics log ──────────────────────────────────────────────────────── */
+
+.fold_log {
+    border-top: 1px solid var(--fold-hair);
+    padding-top: 0.5em;
+}
+.fold_log_closed { display: none; }
+.fold_log_head {
+    font-family: var(--fold-mono);
+    font-size: calc(var(--mainFontSize) * 0.66);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    opacity: 0.5;
+    margin-bottom: 0.3em;
+}
+.fold_log_list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 14em;
+    overflow-y: auto;
+}
+.fold_log_row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 0 0.6em;
+    align-items: baseline;
+    font-size: calc(var(--mainFontSize) * 0.78);
+    line-height: 1.35;
+    padding: 0.15em 0;
+}
+.fold_log_tag {
+    font-family: var(--fold-mono);
+    font-size: calc(var(--mainFontSize) * 0.6);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+}
+.fold_log_reject .fold_log_tag { color: var(--fold-crit); }
+.fold_log_extract .fold_log_tag { color: var(--fold-warn); }
+.fold_log_item { font-weight: 600; }
+.fold_log_reason {
+    font-family: var(--fold-mono);
+    opacity: 0.7;
+}
+.fold_log_turn {
+    font-family: var(--fold-mono);
+    font-size: calc(var(--mainFontSize) * 0.62);
+    opacity: 0.45;
+    white-space: nowrap;
+}
+.fold_log_jump { cursor: pointer; }
+.fold_log_jump:hover { background: rgba(128, 128, 128, 0.08); }
+.fold_log_note {
+    font-size: calc(var(--mainFontSize) * 0.74);
+    font-style: italic;
+    opacity: 0.6;
+    line-height: 1.4;
+    margin: 0.2em 0 0.4em;
+}
+
+/* The caret-level report: raw proposal, underline, window, help — song's `error L:C` shape. */
+.fold_log_report {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1em;
+    min-width: 0;
+}
+.fold_log_line {
+    display: flex;
+    gap: 0.5em;
+    align-items: baseline;
+    flex-wrap: wrap;
+}
+.fold_log_sep { opacity: 0.4; }
+.fold_log_raw,
+.fold_log_caret {
+    font-family: var(--fold-mono);
+    font-size: calc(var(--mainFontSize) * 0.72);
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.25;
+}
+.fold_log_raw { color: var(--SmartThemeBodyColor); opacity: 0.95; }
+.fold_log_caret {
+    color: var(--fold-crit);
+    user-select: none;
+}
+.fold_log_snippet {
+    font-style: italic;
+    opacity: 0.55;
+    font-size: calc(var(--mainFontSize) * 0.72);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.fold_log_help {
+    color: var(--fold-fresh);
+    opacity: 0.85;
+    font-size: calc(var(--mainFontSize) * 0.72);
+    font-family: var(--fold-mono);
+    word-break: break-word;
+}
+.fold_log_extract .fold_log_help { color: var(--fold-warn); }
+
+
 .fold_empty {
     font-size: calc(var(--mainFontSize) * 0.85);
     opacity: 0.6;
     line-height: 1.4;
+}
+
+/* ── the extraction lifecycle chip (FOLD-SLA.md §2) ─────────────────────────── */
+
+.fold_sync {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    font-size: calc(var(--mainFontSize) * 0.62);
+    font-family: var(--fold-mono);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    opacity: 0.9;
+    margin: 0 0 0.4em;
+}
+.fold_sync_dot {
+    width: 0.5em;
+    height: 0.5em;
+    border-radius: 50%;
+    background: currentColor;
+    flex: none;
+}
+.fold_sync_up_to_date { color: var(--fold-ok, #5aa26f); }
+.fold_sync_acknowledged,
+.fold_sync_behind { color: var(--fold-warn); }
+.fold_sync_syncing { color: var(--fold-rel); }
+.fold_sync_failed { color: var(--fold-crit); font-weight: 700; }
+.fold_sync_unknown { color: var(--fold-warn); }
+.fold_sync_syncing .fold_sync_dot {
+    animation: fold_sync_pulse 1s ease-in-out infinite;
+}
+@keyframes fold_sync_pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.25; }
+}
+/* The collapsed-rail form is a bare dot; the strip is already dense. */
+.fold_sync_compact { margin: 0; }
+.fold_sync_compact .fold_sync_dot {
+    width: 0.45em;
+    height: 0.45em;
+}
+
+/* Warning line in the settings: e.g. no extraction model set (FOLD-SLA.md §3). */
+.fold_settings_warn {
+    font-size: calc(var(--mainFontSize) * 0.8);
+    color: var(--fold-warn);
+    opacity: 0.9;
+    margin: 0.3em 0;
+    line-height: 1.35;
 }
 
 @media (prefers-reduced-motion: reduce) {

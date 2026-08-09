@@ -296,7 +296,7 @@ export function reviewSchema() {
         properties: {
             lines: {
                 type: 'array',
-                description: 'One entry for each T, M or A line you can judge from this excerpt. Omit any line the excerpt says nothing about.',
+                description: 'One entry for each T, M or A line you can judge from this excerpt. Omit any the excerpt says nothing about.',
                 items: {
                     type: 'object',
                     properties: {
@@ -304,7 +304,7 @@ export function reviewSchema() {
                         still: {
                             type: 'string',
                             enum: STILL,
-                            description: `${OPEN} if anything about it is still unsettled; ${ADVANCED} if it moved closer without finishing; ${SETTLED} if this excerpt resolved it; ${MOOT} if it stopped being about anything — the danger is gone, the errand no longer matters.`,
+                            description: `${OPEN} if still unsettled; ${ADVANCED} if it moved closer without finishing; ${SETTLED} if this excerpt resolved it; ${MOOT} if it stopped being about anything.`,
                         },
                         note: { type: 'string', description: 'Five words at most saying why, quoting the excerpt where you can. Empty if nothing to add.' },
                     },
@@ -314,12 +314,12 @@ export function reviewSchema() {
             },
             answers: {
                 type: 'array',
-                description: 'One entry for each L or P or Q question you can answer from this excerpt or from what you have read. Omit any you cannot.',
+                description: 'One entry for each L, P or Q question you can answer from this excerpt. Omit any you cannot.',
                 items: {
                     type: 'object',
                     properties: {
                         id: { type: 'string', description: 'The id exactly as listed, e.g. "Q1".' },
-                        answer: { type: 'string', description: 'The answer in the form the question asks for: a place name, "same" or "different", "doom" or "progress", or an amount.' },
+                        answer: { type: 'string', description: 'The answer in the form the question asks: a place name, "same" or "different", "doom" or "progress", or an amount.' },
                         note: { type: 'string', description: 'Five words at most saying why. Empty if nothing to add.' },
                     },
                     required: ['id', 'answer', 'note'],
@@ -335,13 +335,13 @@ export function reviewSchema() {
 /** @returns {string} Prompt guidance for the probe. */
 export function reviewInstruction() {
     return [
-        'Read back the lines listed under "Tracked now" in the already-recorded block and say, for each one you can judge, whether it is still open.',
-        'Judge from what the excerpt actually says. A thread the excerpt does not touch is still open — say nothing about it rather than guessing.',
-        `A thread is ${SETTLED} when the thing it was waiting on has happened, whether or not anyone announced it: a purchase made, a question answered, a place entered.`,
-        `It is ${MOOT} when it stopped being about anything — the danger was removed, the errand no longer matters, the person it concerned is gone. ${MOOT} is not failure and not success.`,
-        `An M line is an injury somebody is carrying: ${SETTLED} once it has healed or been treated away, ${ADVANCED} while it is mending, ${OPEN} otherwise. Nobody announces that a bruise has faded, so judge it from time passing and from treatment, not from a sentence saying so.`,
-        `An A line is somebody actively dangerous: ${SETTLED} once they are beaten, ${MOOT} once the fight stopped being a fight, ${OPEN} while it is still going.`,
-        'Then answer the numbered questions. They were asked because something in the record is ambiguous, not because the answer is in doubt in the fiction.',
+        'Read the lines under "Tracked now" and say, for each you can judge, whether it is still open.',
+        'Judge from what the excerpt says. A thread the excerpt does not touch is still open — say nothing about it rather than guessing.',
+        `A thread is ${SETTLED} when the thing it was waiting on has happened, whether or not anyone announced it.`,
+        `It is ${MOOT} when it stopped being about anything — the danger is gone, the errand no longer matters.`,
+        `An M line is an injury: ${SETTLED} once healed or treated, ${ADVANCED} while mending, ${OPEN} otherwise. Nobody announces a bruise has faded — judge from time and treatment.`,
+        `An A line is somebody dangerous: ${SETTLED} once beaten, ${MOOT} once the fight stopped being a fight, ${OPEN} while it continues.`,
+        'Then answer the numbered questions — they were asked because something is ambiguous in the record, not in the fiction.',
         'Never answer a question the excerpt and your reading cannot settle. An omitted answer is asked again; a wrong one is acted on.',
     ].join(' ');
 }

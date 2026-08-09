@@ -90,8 +90,16 @@ const DEFAULT_CHRONICLE_TEMPLATE = 'Relevant past events:\n{{text}}';
  * Reasoning tokens are charged against the same `max_tokens` as the answer, so this has to cover
  * the model's deliberation AND three probes' worth of JSON. Below it the observed behaviour is not
  * a partial answer but no answer: `extract:empty`, every cycle, silently.
+ *
+ * 16384 is measured, not guessed: against the real API, `deepseek-v4-flash` spends ~3,500-4,100
+ * tokens REASONING on the extraction task alone (the structured task, not ordinary chat), and at a
+ * 4096 budget that reasoning consumed the entire allowance and `content` came back empty. 16k gives
+ * the thinking twice the headroom it needed plus room for a rich scene's JSON. A ceiling costs
+ * nothing unless the reply genuinely grows into it — the model emits only what it needs. The retry
+ * multiplies by `RETRY_GROWTH`, so the fallback is ~49k. The settings control (`response_length`)
+ * goes higher still.
  */
-const MIN_RESPONSE_LENGTH = 2400;
+const MIN_RESPONSE_LENGTH = 16384;
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -141,8 +149,14 @@ const defaultSettings = Object.freeze({
         // Both halves of that assumption have since failed. There are three probes now, and a
         // reasoning model is charged for its thinking out of the same allowance — so 800 bought a
         // few hundred tokens of deliberation and no answer at all. A chat ran nine turns and
-        // extracted nothing, twice out of two attempts, with the panel never once updating.
+        // extracted nothing, twice out of two attempts, with the panel never once updating. 2400
+        // was the first raise; 4096 is the floor for ledgers that outgrow this chat's scale.
         response_length: MIN_RESPONSE_LENGTH,
+        // Disable reasoning for extraction. Measured against the real API: the reasoning model
+        // spends thousands of tokens THINKING on the extraction task (which is why a small budget
+        // returned empty content), but `thinking: disabled` skips it and still yields valid JSON.
+        // Off = fast and reliable; on = the model's full deliberation.
+        reasoning: false,
     }),
 });
 
@@ -546,11 +560,16 @@ async function onAssistantMessage() {
         windowSize: settings.chronicle.window,
         responseLength: settings.chronicle.response_length,
         profileId: settings.chronicle.profile,
+        reasoning: settings.chronicle.reasoning,
         // The reason this pass ran arms the world fragment: only a declared time skip or scene
         // break lets the off-screen world move (FOLD-REDESIGN.md §7.4). The same `why` was already
         // counted above as `extract:on-…`; this is its load-bearing use.
         why: decision.why,
     });
+    // The pass finished — success, failure, or timeout. Re-render so the sync chip reflects the
+    // terminal state now, not on the next message. Without this the chip shows whatever the last
+    // message render left it at, which is how `syncing` appeared to pulse forever.
+    panel.render();
     if (result.ok) {
         // Let the answer set the next question. A pass that found the scene had moved earns a
         // tighter cadence; one that found nothing earns a longer wait.
@@ -618,13 +637,23 @@ async function renderSettingsUi() {
         console.warn('[fold] connection profiles unavailable; extraction will use the chat model', error);
         $('#fold_chronicle_profile_block').hide();
     }
+    // FOLD-SLA §3: with no extraction profile, extraction runs on the roleplay model — a reasoning
+    // model that frequently returns empty JSON (the #1 measured cause of stale state). Say so in the
+    // settings, not just in the log.
+    const syncProfileWarn = () => {
+        $('#fold_chronicle_profile_warn').toggle(!settings.chronicle.profile);
+    };
+    syncProfileWarn();
+    $('#fold_chronicle_profile').on('change', syncProfileWarn);
 
     bindCheckbox('#fold_state_enabled', () => settings.state.enabled, v => { settings.state.enabled = v; });
     bindCheckbox('#fold_state_absorb', () => settings.state.absorb_block, v => { settings.state.absorb_block = v; });
     bindNumber('#fold_state_depth', () => settings.state.depth, v => { settings.state.depth = v; });
     bindNumber('#fold_chronicle_interval', () => settings.chronicle.interval, v => { settings.chronicle.interval = v; });
     bindNumber('#fold_chronicle_window', () => settings.chronicle.window, v => { settings.chronicle.window = v; });
+    bindNumber('#fold_chronicle_response', () => settings.chronicle.response_length, v => { settings.chronicle.response_length = v; });
     bindNumber('#fold_chronicle_topk', () => settings.chronicle.top_k, v => { settings.chronicle.top_k = v; });
+    bindCheckbox('#fold_chronicle_reasoning', () => settings.chronicle.reasoning, v => { settings.chronicle.reasoning = v; });
     bindNumber('#fold_chronicle_depth', () => settings.chronicle.depth, v => { settings.chronicle.depth = v; });
 
     $('#fold_steer_template').val(settings.steer.template).on('input', function () {
@@ -937,6 +966,9 @@ export async function init() {
     // The player's own elision moves the clock. Measured: three of twenty-nine player turns skip
     // time explicitly and nothing acted on any of them.
     eventSource.on(event_types.USER_MESSAGE_RENDERED, (messageId) => {
+        // FOLD-SLA §2.1: the player's input is acknowledged immediately — the panel shows
+        // `acknowledged` (amber) from the moment the message renders until extraction catches up.
+        state.setSync('acknowledged', { mid: Number(messageId) });
         if (!isStateEnabled()) {
             return;
         }
@@ -961,6 +993,26 @@ export async function init() {
         chronicle.invalidateIndex();
         recall.clearActivatedWorldInfo();
     });
+
+    // FOLD-SLA §2.3, the "syncing forever" backstop: a non-terminal sync older than the extraction
+    // window is a hang or an interrupted session, and while extraction is stuck nothing re-renders
+    // to apply the stale-guard — so the chip could pulse `syncing` indefinitely. This periodic
+    // check corrects the persisted state to `failed` (stalled) so the chip tells the truth, and
+    // renders once. A healthy pass completes in well under this window (thinking is disabled for
+    // extraction, timeout 60s); anything this old genuinely never finished.
+    setInterval(() => {
+        const sync = state.getSync();
+        if ((sync.state === 'syncing' || sync.state === 'acknowledged')
+            && Number.isFinite(sync.since) && Date.now() - sync.since > 150_000) {
+            console.warn('[fold] extraction sync has been non-terminal for >150s; marking it stalled.');
+            state.setSync('failed', {
+                mid: sync.mid,
+                reason: 'stalled',
+                detail: 'The last extraction never finished (hung or interrupted). It retries on the next message.',
+            });
+            panel.render();
+        }
+    }, 20_000);
 
     // The plot guide is per-chat, but renderSettingsUi binds the textarea once at page load —
     // potentially before the chat (and its chat_metadata.fold.plot) has arrived. Re-populate the

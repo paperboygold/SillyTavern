@@ -62,43 +62,34 @@ export function schema() {
         properties: {
             pov: {
                 type: 'string',
-                description: 'The name of the character whose point of view the story is told from — the one the reader is meant to be. Use the SAME name you gave them in the people list, not a title or role. Empty if the narration does not settle on one.',
+                description: 'The character whose point of view the story is told from — the one the reader is meant to be. Same name as in the people list. Empty if the narration does not settle on one.',
             },
             location: {
                 type: 'string',
-                description: 'Where the scene is happening right now, as a short place name: "the stableyard", "Paulette\'s inn, upstairs". Empty if the excerpt does not say.',
+                description: 'Where the scene is happening right now: "the stableyard", "Paulette\'s inn, upstairs". Empty if the excerpt does not say.',
             },
             time: {
                 type: 'string',
-                description: 'The time of day if the excerpt establishes one, as written: "just after dawn", "3:15 PM". Empty if not stated or implied.',
+                description: 'The time of day, as written: "just after dawn", "3:15 PM". Empty if not stated or implied.',
             },
             weather: {
                 type: 'string',
-                description: 'Weather or ambient conditions, if the excerpt establishes them. Empty otherwise.',
+                description: 'Weather or ambient conditions, if established. Empty otherwise.',
             },
             conditions: {
                 type: 'array',
-                // ── An ARRAY, because the string was a list that fold had to guess the shape of ──
-                //
-                // As one string, "left arm heavily bruised but functional" reached `splitConditions`,
-                // which cut on "but" and then trusted `isNegation`'s enumerated English to drop the
-                // reassuring half. "Functional" was not on the list, so the panel carried the good
-                // news as a wound (`FOLD-REDESIGN.md` §0.1-4). Every repair to that list is another
-                // enumerated judgement about English, which §11 bans with a standing measurement. An
-                // array moves the judgement to the reader of the sentence: one entry per affliction,
-                // and the model decides what counts as one.
-                description: `What is physically wrong with the point-of-view character right now — injuries, exhaustion, pain, intoxication. One entry per affliction, at most ${MAX_MARKS}, worst first. Empty array if nothing is wrong with them.`,
+                description: `What is physically wrong with the point-of-view character right now — injuries, exhaustion, pain. One entry per affliction, at most ${MAX_MARKS}, worst first. Empty if nothing is wrong.`,
                 items: {
                     type: 'object',
                     properties: {
                         phrase: {
                             type: 'string',
-                            description: 'The affliction itself, as a short lowercase phrase: "bruised left arm", "bandaged calf", "exhausted". Record the affliction and never the reassurance — "bruised but functional" is ONE entry, "bruised left arm". Never report that they are fine or unhurt; the absence of a wound is not a wound.',
+                            description: 'The affliction as a short lowercase phrase: "bruised left arm", "exhausted". The affliction, never the reassurance — "bruised but functional" is ONE entry. Never report that they are fine.',
                         },
                         severity: {
                             type: 'string',
                             enum: SEVERITIES,
-                            description: 'minor for something that stings, moderate for something that hinders, severe for something that could end the scene or the character.',
+                            description: 'minor (stings), moderate (hinders), severe (could end the scene).',
                         },
                     },
                     required: ['phrase', 'severity'],
@@ -115,10 +106,10 @@ export function schema() {
 export function instruction() {
     return [
         'The scene as it stands at the END of the excerpt, not as it was at the start.',
-        'Only what the excerpt establishes. Leave a field empty rather than carrying one forward or guessing at it.',
+        'Only what the excerpt establishes. Leave a field empty rather than carrying one forward or guessing.',
         'For "pov", name the character the narration follows — the one whose thoughts and sensations are described from the inside.',
-        '"conditions" is about that character\'s body only: what hurts, what is exhausted, what is impaired. Not their mood, not what they are wearing, and not the weather.',
-        'Report every affliction that is still true, not only the new ones — this list replaces what was recorded before it.',
+        '"conditions" is about that character\'s body only: what hurts, what is exhausted, what is impaired. Not mood, not clothes, not weather.',
+        'Report every affliction still true, not only the new ones — this list replaces what was recorded before it.',
     ].join(' ');
 }
 

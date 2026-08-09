@@ -95,47 +95,39 @@ export function schema() {
         properties: {
             ticks: {
                 type: 'array',
-                description: 'Dials that advanced or retreated in this excerpt, and new ones the excerpt establishes.',
+                description: 'Dials that advanced or retreated in this excerpt, and new ones it establishes.',
                 items: {
                     type: 'object',
                     properties: {
                         name: {
                             type: 'string',
-                            description: 'What is closing in or being worked toward, as a short phrase naming the OUTCOME rather than the activity: "the Blight reaches Briarwood", "Lord Everard withdraws his offer", "twenty D-rank raids logged".',
+                            description: 'The outcome being worked toward, as a short phrase: "the Blight reaches Briarwood", "twenty D-rank raids logged".',
                         },
                         tick: {
                             type: 'integer',
-                            description: `How much it advanced in this excerpt: 1 for a step, 2 for a serious one, ${MAX_TICK} at the very most. Negative if it was pushed back. Never zero. "Advanced" always means TOWARD the outcome named, whether that outcome is good or bad.`,
+                            description: `How much it advanced: 1 for a step, 2 for a serious one, at most ${MAX_TICK}. Negative if pushed back. Never zero.`,
                         },
-                        // ── Polarity, asked because it cannot be inferred ──
-                        //
-                        // Two dials coexisted for one stake in the live chat, one filling toward
-                        // the player's sponsorship lapsing and one toward him WINNING his
-                        // residency, and both were injected under "Pressure:" because the code had
-                        // no way to tell them apart (FOLD-REDESIGN.md §0.1-3). Size cannot carry
-                        // the distinction — a four-segment "finish the ritual" is progress — so it
-                        // is asked once, when the dial is established.
                         kind: {
                             type: 'string',
                             enum: DIAL_KINDS,
-                            description: `${DOOM} if filling this dial is BAD for the characters — a danger closing in, a deadline running out, a patron losing patience. ${PROGRESS} if filling it is GOOD — a long effort being completed, a journey being made, a reputation being earned. Only when the dial is newly established.`,
+                            description: `${DOOM} if filling it is BAD for the characters (a danger closing in, a deadline running out). ${PROGRESS} if filling it is GOOD (a long effort completing). Only when newly established.`,
                         },
                         size: {
                             type: 'integer',
-                            description: `How many steps it takes in total, only when the dial is newly established. For a ${DOOM} dial: 4 if it is imminent, 6 for ordinary trouble, 8 for a slow catastrophe. For a ${PROGRESS} dial: the number the story actually states, up to ${MAX_TRACK_SIZE} — "twenty raids" is 20, not 8.`,
+                            description: `Total steps, only when newly established. ${DOOM}: 4 imminent, 6 ordinary, 8 slow catastrophe. ${PROGRESS}: the number the story states, up to ${MAX_TRACK_SIZE} — "twenty raids" is 20.`,
                         },
                         about: {
                             type: 'string',
-                            description: 'What actually happens when it completes, in a short phrase: "the village is abandoned", "the visa is granted". Empty if the excerpt does not say.',
+                            description: 'What happens when it completes: "the village is abandoned". Empty if the excerpt does not say.',
                         },
                         where: {
                             type: 'string',
-                            description: 'The place this applies, as a bare place name, when it is tied to one: "the goblin nest", "Verdant Reach manor". Leave EMPTY for something that follows the characters anywhere — a debt, a deadline, a rumour, a pursuer. A danger that lives in a dungeon does not follow anyone to a noodle shop.',
+                            description: 'The place this applies, as a bare place name, when tied to one. Empty for something that follows the characters anywhere.',
                         },
                         seen: {
                             type: 'string',
                             enum: [OPEN, HIDDEN],
-                            description: `${OPEN} if the point-of-view character could plausibly perceive this, ${HIDDEN} if it is happening beyond their knowledge.`,
+                            description: `${OPEN} if the point-of-view character could plausibly perceive this, ${HIDDEN} if beyond their knowledge.`,
                         },
                     },
                     required: ['name', 'tick', 'kind', 'size', 'about', 'where', 'seen'],
@@ -144,27 +136,27 @@ export function schema() {
             },
             leads: {
                 type: 'array',
-                description: 'Unresolved threads with no measurable position — something a character could act on and has not yet. Never lore, abilities, rules of the world, descriptions of an object, or a fact that is simply true. If nothing about it is still open, it is not a thread.',
+                description: 'Unresolved threads with no measurable position — something a character could act on and has not yet. Not lore, abilities, or plain facts. If nothing about it is still open, it is not a thread.',
                 items: {
                     type: 'object',
                     properties: {
-                        name: { type: 'string', description: 'A short title for the thread, five words at most.' },
+                        name: { type: 'string', description: 'A short title, five words at most.' },
                         detail: {
                             type: 'string',
-                            description: 'The specifics: who, where, when. One short phrase, not a sentence.',
+                            description: 'The specifics: who, where, when. One short phrase.',
                         },
                         open: {
                             type: 'string',
-                            description: 'What is still unknown or still undone — the gap, not the goal. Phrase the unsettled part explicitly, in words not already in "detail": "the final command is unknown", "the orders have not been read", "nobody has searched the cellar", "six wolves still to be killed". A flat objective such as "kill six wolves" will be discarded; leave empty if nothing is unresolved.',
+                            description: 'What is still unknown or undone — the gap, not the goal, phrased explicitly: "the final command is unknown", "six wolves still to be killed". A flat objective ("kill six wolves") will be discarded; empty if nothing is unresolved.',
                         },
                         status: {
                             type: 'string',
                             enum: THREAD_STATUSES,
-                            description: 'open if anything about it is still unsettled, closed if the excerpt settled it, moot if it stopped being about anything.',
+                            description: 'open if still unsettled, closed if the excerpt settled it, moot if it stopped being about anything.',
                         },
                         source: {
                             type: 'string',
-                            description: 'Where this was learned and when, as a short phrase: "RPD dispatch, 11:18 AM", "overheard at the ramen shop", "radio bulletin". Empty if the excerpt does not say.',
+                            description: 'Where this was learned: "RPD dispatch, 11:18 AM", "overheard at the ramen shop". Empty if the excerpt does not say.',
                         },
                     },
                     required: ['name', 'detail', 'open', 'status', 'source'],
@@ -181,14 +173,13 @@ export function schema() {
 export function instruction() {
     return [
         'What is at stake, as dials that move and threads that do not.',
-        'A dial is a named outcome with a number of steps. Report one only when the excerpt actually moved it; a danger merely mentioned has not advanced. A tick measures pressure, not bodies: downing a whole pack in one scene is still a tick of 1, 2, or at most 3 — never one per kill.',
+        'A dial is a named outcome with steps. Report one only when the excerpt actually moved it — a danger merely mentioned has not advanced. Never re-report an already-recorded dial just to confirm it still exists; "still open" is the review section\'s question, and a re-report with no movement is rejected. A tick measures pressure, not bodies: downing a pack in one scene is still a tick of at most 3, never one per kill.',
         'Name the outcome, not the activity: "the Blight reaches Briarwood", never "dealing with the Blight".',
-        `Say whether filling the dial is bad for the characters ("${DOOM}") or good ("${PROGRESS}"). A deadline running out is ${DOOM}; twenty raids toward a visa is ${PROGRESS}. Set "kind" and "size" once, when the dial is first established; afterwards send only the tick.`,
-        'A thread with no dial is a title plus its specifics, not a sentence: "missing-persons cluster" with detail "Arklay County, 15-18 September".',
-        'A thread must have something unresolved in it, and "open" must SAY what that is — the gap, not the goal. Accepted: "the final command is unknown", "the orders have not been read", "nobody has searched the cellar", "six wolves still to be killed". Discarded: a flat objective such as "kill six wolves" or a bare fact such as "the First Steps quest" — name what is still undone about it, or it is background.',
-        'Exposition is not a thread. What a power does, what a mark means, what an object is for, what someone was told to do and then did — all background, however new to the scene.',
-        'Say where each thread came from in "source" — a dispatch entry, a broadcast, something a person said — with its time if one was given. A thread with no provenance is half a thread.',
-        'Use empty arrays when nothing advanced and nothing new opened.',
+        `Say whether filling the dial is bad ("${DOOM}") or good ("${PROGRESS}"). Set "kind" and "size" once, when the dial is first established; afterwards send only the tick.`,
+        'A thread with no dial is a title plus specifics: "missing-persons cluster" with detail "Arklay County, 15-18 September".',
+        'A thread must have something unresolved, and "open" must say it — the gap, not the goal: "the final command is unknown", "six wolves still to be killed". A flat objective ("kill six wolves") is discarded.',
+        'Exposition is not a thread: what a power does, what an object is for, what someone was told to do and then did — background, however new.',
+        'Say where each thread came from in "source". Use empty arrays when nothing advanced and nothing new opened.',
     ].join(' ');
 }
 
@@ -199,7 +190,7 @@ export function instruction() {
  * @param {number} [context.turn] Turn counter.
  * @returns {{accepted: number, fired: object[], rejected: object[]}} What was applied.
  */
-export function applyExtraction(fragment, { turn = 0 } = {}) {
+export function applyExtraction(fragment, { turn = 0, windowText = '', sources = [] } = {}) {
     const table = load();
     const proposed = fragment?.ticks;
     // ── "Proposed nothing" is not "was never asked" ──
@@ -214,12 +205,13 @@ export function applyExtraction(fragment, { turn = 0 } = {}) {
         observe.note('pressure:empty');
     }
 
-    const ticks = foldTicks(table, proposed ?? [], { turn });
-    const opened = foldThreads(table, fragment?.leads ?? [], { turn });
+    const ticks = foldTicks(table, proposed ?? [], { turn, windowText });
+    const opened = foldThreads(table, fragment?.leads ?? [], { turn, windowText });
     commit(THREADS_PATH, table);
 
     const rejected = [...ticks.rejected, ...opened.rejected];
-    observe.noteRejections(rejected);
+    // Anchor refusals to the newest message the pass read, for the log's cause-link.
+    observe.noteRejections(rejected.map(rejection => ({ ...rejection, mid: sources[sources.length - 1]?.mid, turn })));
     for (const thread of ticks.fired) {
         // A dial filling is the single most consequential thing this subsystem produces, and it
         // happens once. Counted so it can never fill unnoticed.

@@ -1024,7 +1024,7 @@ describe('reject:already-recorded — the model was shown the line and billed it
     test('a re-report of a line already on the ledger is refused', () => {
         const { accepted, rejected } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', dq: 2 }], windowText, shown });
         expect(accepted).toEqual([]);
-        expect(rejected).toEqual([{ item: 'wrapped candy', reason: 'already-recorded' }]);
+        expect(rejected).toEqual([expect.objectContaining({ item: 'wrapped candy', reason: 'already-recorded' })]);
     });
 
     test('nothing is refused when no ledger was pinned', () => {
@@ -1070,7 +1070,7 @@ describe('reject:already-recorded — the model was shown the line and billed it
             contributors,
         });
         expect(accepted).toEqual([]);
-        expect(rejected).toEqual([{ item: 'won', reason: 'already-recorded' }]);
+        expect(rejected).toEqual([expect.objectContaining({ item: 'won', reason: 'already-recorded' })]);
     });
 
     test('a different amount on money is not a re-record', () => {
@@ -1098,7 +1098,7 @@ describe('reject:already-recorded — the model was shown the line and billed it
             contributors,
         });
         expect(accepted).toEqual([]);
-        expect(rejected).toEqual([{ item: 'rusty hunter\'s knife with sheath', reason: 'already-recorded' }]);
+        expect(rejected).toEqual([expect.objectContaining({ item: 'rusty hunter\'s knife with sheath', reason: 'already-recorded' })]);
     });
 
     test('a restated total is exempt, because it is idempotent by construction', () => {
@@ -1135,7 +1135,7 @@ describe('reject:not-an-item — contact details are not things in a pocket', ()
                 windowText: 'he reads out Kang\'s number while Solomon types',
             });
             expect(accepted).toEqual([]);
-            expect(rejected).toEqual([{ item: 'kang\'s phone number', reason: 'not-an-item' }]);
+            expect(rejected).toEqual([expect.objectContaining({ item: 'kang\'s phone number', reason: 'not-an-item' })]);
         }
     });
 
@@ -1147,7 +1147,7 @@ describe('reject:not-an-item — contact details are not things in a pocket', ()
             deltas: [{ item: 'kang\'s phone number', dq: 1, at: 'contacts' }],
             windowText: '',
         });
-        expect(rejected).toEqual([{ item: 'kang\'s phone number', reason: 'not-an-item' }]);
+        expect(rejected).toEqual([expect.objectContaining({ item: 'kang\'s phone number', reason: 'not-an-item' })]);
     });
 });
 

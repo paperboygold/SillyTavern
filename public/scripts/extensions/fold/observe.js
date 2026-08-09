@@ -30,6 +30,7 @@
  */
 
 import { insert_with, merge_bu, table_entries } from './lib/hash.js';
+import * as log from './log.js';
 import { commit, loadTable } from './store.js';
 
 const OBSERVED_PATH = 'state.observed';
@@ -60,7 +61,12 @@ export function note(rule, times = 1) {
 
 /**
  * Record a batch of validator rejections.
- * @param {Array<{reason: string}>} rejections Rejections from a validator.
+ *
+ * The tally (`reject:<reason>`) says how often a rule fired; this ALSO writes each refusal to the
+ * diagnostics log (`log.js`), so the panel can show WHAT was refused — the raw proposal and the
+ * window it was read from — not just that something was. The entry carries `mid`/`turn` when the
+ * caller knew them, for the cause-link jump.
+ * @param {Array<{reason: string, item?: string, mid?: number, turn?: number, raw?: object, snippet?: string}>} rejections Rejections from a validator.
  */
 export function noteRejections(rejections) {
     if (!rejections?.length) {
@@ -71,6 +77,19 @@ export function noteRejections(rejections) {
         const reason = String(rejection?.reason ?? '').trim();
         if (reason) {
             insert_with(table, merge_bu, `reject:${reason}`, 1);
+            log.note({
+                kind: 'reject',
+                reason,
+                item: rejection?.item,
+                mid: rejection?.mid,
+                turn: rejection?.turn,
+                // The caret-level record: what the model literally proposed, and the window it
+                // was reading. `raw` may be an object or a scalar — serialize for storage.
+                raw: typeof rejection?.raw === 'object' && rejection.raw !== null
+                    ? JSON.stringify(rejection.raw)
+                    : String(rejection?.raw ?? ''),
+                snippet: rejection?.snippet,
+            });
         }
     }
     commit(OBSERVED_PATH, table);

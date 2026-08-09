@@ -48,6 +48,7 @@ import {
 import { reviewBlock } from './review-table.js';
 import * as review from './review.js';
 import { commit, loadTable } from './store.js';
+import * as log from './log.js';
 import { renderWorldEvents, revealContract } from './world-table.js';
 
 const REJECTS_PATH = 'state.rejects';
@@ -55,6 +56,51 @@ const CONTEXT_PATH = 'state.context';
 const CLOCK_PATH = 'state.clock';
 const LOCKS_PATH = 'state.locks';
 const CONTESTS_PATH = 'state.contests';
+const SYNC_PATH = 'state.sync';
+
+/**
+ * The extraction lifecycle, as the player should see it.
+ *
+ * FOLD-SLA.md §2: freshness and failure must be VISIBLE. This is the record the strip and the
+ * panel render, so a stale panel is never presented as current and a failed pass is never silent.
+ *
+ *   up-to-date    the ledger reflects the newest processed message. Green.
+ *   acknowledged  a message just rendered; extraction is pending. Amber — your input is seen.
+ *   syncing       an extraction pass is in flight. Blue pulse.
+ *   behind        extraction succeeded but a newer message arrived before it finished; the next
+ *                 pass covers the gap. Amber.
+ *   failed        the pass returned empty/truncated/unparseable; red, with the reason and fix,
+ *                 until the next success clears it.
+ *
+ * @param {'up-to-date'|'acknowledged'|'syncing'|'behind'|'failed'} state The state.
+ * @param {object} [opts] Extra record.
+ * @param {number} [opts.mid] The newest message the ledger reflects.
+ * @param {string} [opts.reason] For `failed`: the pass reason.
+ * @param {string} [opts.detail] For `failed`: the fix hint.
+ */
+export function setSync(state, { mid = null, reason = '', detail = '' } = {}) {
+    const table = loadTable(SYNC_PATH);
+    insert_with(table, merge_b, 'sync', {
+        state: String(state ?? ''),
+        mid: Number.isFinite(mid) ? mid : null,
+        reason: String(reason ?? '').slice(0, 80),
+        detail: String(detail ?? '').slice(0, 200),
+        since: Date.now(),
+    });
+    commit(SYNC_PATH, table);
+}
+
+/** @returns {{state: string, mid: number|null, reason: string, detail: string, since: number}} The sync record, defaulting to up-to-date. */
+export function getSync() {
+    const row = lookup(loadTable(SYNC_PATH), 'sync', null);
+    return {
+        state: row?.state ?? 'up-to-date',
+        mid: Number.isFinite(row?.mid) ? row.mid : null,
+        reason: row?.reason ?? '',
+        detail: row?.detail ?? '',
+        since: row?.since ?? 0,
+    };
+}
 
 /**
  * Scene context lifted from a card's own state block — time, location, leads and whatever else it
@@ -550,19 +596,11 @@ export function pov() {
 export function deltaSchema() {
     return {
         type: 'object',
-        description: 'What this event changed about the character. Omit anything it did not change.',
+        description: 'What this event changed. Omit anything it did not change.',
         properties: {
             inv: {
                 type: 'array',
-                // ── The headline description is the only one a model reliably reads ──
-                //
-                // This said "Items gained or lost by this event, as changes in quantity", and the
-                // `assets`/`abilities` categories were described only inside the `at` field below.
-                // A model decides whether an array applies from the ARRAY's description, so it
-                // filtered out capability gains before ever reaching `at` — measured on a real
-                // chat, "Hero learned to actively control the Divine Favor brand" is exactly what
-                // the abilities category was built for and was never proposed.
-                description: 'Things the character gained or lost by this event: objects, but also standing property they now own (a house, a ship, a mount) and capabilities they now possess (a spell, a skill, a granted power). Each as a change in quantity — an ability gained is quantity +1.',
+                description: 'Things gained or lost: objects, plus property owned (a house, a ship, a mount) and capabilities gained (a spell, a skill, a granted power). A capability gained is quantity +1.',
                 items: {
                     type: 'object',
                     properties: {
@@ -570,16 +608,7 @@ export function deltaSchema() {
                         dq: { type: 'integer', description: 'Change in quantity: positive gained, negative lost.' },
                         at: {
                             type: 'string',
-                            // ── No place for contact details, and it is said out loud ──
-                            //
-                            // The model invented one. Event mid 52 of the live Solo Leveling chat
-                            // proposed `{"item":"kang's phone number","dq":1,"at":"contacts"}`
-                            // against this description, which has never offered a contacts place —
-                            // so leaving the omission implicit demonstrably does not work. Naming
-                            // the exclusion is cheap; `validateInventory` refuses the place anyway,
-                            // and a refusal the model could have avoided is a wasted slot in a
-                            // budgeted list.
-                            description: 'Where it is, or what kind of thing it is. Use "carried" for anything on the character including worn clothing and drawn weapons; a place name such as "apartment", "car boot", "locker 3" for things left somewhere; "assets" for standing property they own but do not carry — a house, a ship, a business, a mount; "abilities" for capabilities they possess rather than objects — a spell, a skill, a granted power; "money" for currency of any kind, where the item name is the currency (won, credits, gold) and dq is the amount gained or lost. Contact details are not items and have no place here: a phone number, an address, an email or a social handle is never an inventory entry, however it was obtained.',
+                            description: 'Where it is: "carried" (on the character, incl. worn or drawn), a place name ("apartment", "car boot"), "assets" (owned property not carried), "abilities" (a capability), or "money" (the currency name, dq = amount). Contact details — a phone number, address, email — are never items.',
                         },
                     },
                     required: ['item', 'dq', 'at'],
@@ -593,8 +622,8 @@ export function deltaSchema() {
                     type: 'object',
                     properties: {
                         name: { type: 'string', description: 'Vital name, lowercase: "hp", "mana", "stamina".' },
-                        dcur: { type: 'number', description: 'Change in the current value — the drop or gain this turn, never the new total: "HP drops from 62 to 44" is dcur -18.' },
-                        max: { type: 'number', description: 'Maximum value, the ceiling. Only when newly established: report it once, and afterwards send only dcur.' },
+                        dcur: { type: 'number', description: 'Change from the current value this turn, never the new total: "HP 62 to 44" is dcur -18.' },
+                        max: { type: 'number', description: 'Ceiling; send only when newly established, then omit afterwards.' },
                     },
                     required: ['name', 'dcur', 'max'],
                     additionalProperties: false,
@@ -602,42 +631,27 @@ export function deltaSchema() {
             },
             st: {
                 type: 'array',
-                // ── Every consequence has an owner, and the owner is the first field ──
-                //
-                // Measured: two events at mid 30 of the live Solo Leveling chat — "Lee gets raked
-                // across the ribs" and "Park's bandaged thigh re-opens" — both wrote
-                // `{"flag":"bleeding","on":true}`, because the schema had nowhere to put a subject,
-                // and the panel showed the PLAYER bleeding for the rest of the session
-                // (`FOLD-RPG-GAP.md` §3). Five people were wounded in that fight and fold had one
-                // undifferentiated line. `who` is listed first because a model reads the fields in
-                // order and the subject of a sentence is not an afterthought.
                 description: 'Injuries and conditions that started or ended, and WHO they happened to.',
                 items: {
                     type: 'object',
                     properties: {
                         who: {
                             type: 'string',
-                            description: 'Whose condition this is — the name of the person, exactly as you gave it in the people list. Leave empty ONLY when it is the point-of-view character. Never guess a name you have not used elsewhere in this answer.',
+                            description: 'Whose condition — the person\'s name, exactly as in the people list. Empty only for the point-of-view character.',
                         },
                         flag: {
                             type: 'string',
-                            // The judgement moves from a word list to the probe, which is the whole of
-                            // `FOLD-REDESIGN.md` §3's second half. `splitConditions` used to cut on
-                            // "but" and then trust `isNegation`'s enumerated English to drop the
-                            // reassuring half; "functional" was not on the list, so "left arm heavily
-                            // bruised but functional" became TWO live flags, one of which was the
-                            // good news (§0.1-4). A model can read a sentence; a list cannot.
-                            description: 'The affliction itself, as a short lowercase phrase: "bruised left arm", "twisted ankle", "poisoned". Record the affliction and never the reassurance — "bruised but functional" is ONE condition, and it is "bruised left arm". Never record that someone is fine, unhurt or otherwise uninjured; the absence of a wound is not a wound.',
+                            description: 'The affliction as a short lowercase phrase: "bruised left arm". Record the affliction, never the reassurance — "otherwise unhurt" is not a condition.',
                         },
                         on: { type: 'boolean', description: 'True if it started, false if it healed or was treated away.' },
                         severity: {
                             type: 'string',
                             enum: SEVERITIES,
-                            description: 'How bad it is: minor for something that stings, moderate for something that hinders, severe for something that could end the scene or the character. Judge it from the narration, not from the words used.',
+                            description: 'How bad: minor (stings), moderate (hinders), severe (could end the scene or the character).',
                         },
                         turns: {
                             type: 'integer',
-                            description: 'Roughly how many exchanges this lasts before wearing off on its own. Use 0 for anything that persists until something in the story changes it, such as a wound or a disease.',
+                            description: 'How many exchanges it lasts on its own; 0 for a wound or anything that needs treatment or time.',
                         },
                     },
                     required: ['who', 'flag', 'on', 'severity', 'turns'],
@@ -656,27 +670,16 @@ export function deltaSchema() {
  */
 export function deltaInstruction() {
     return [
-        'For each event, also record what it CHANGED, as changes rather than totals:',
-        'dq is how many were gained or lost by that event, not how many are held afterwards.',
-        'Picking up two coins is dq 2, even if the character now has fifty.',
-        'Record nothing for things merely mentioned, described or looked at.',
-        'Record a change only for something the excerpt NAMES and actually changes. An item held over from before, a vital that was not touched this turn, a condition that neither started nor ended — nothing to record, however true it remains.',
-        'For a vital, dcur is the change from the current value the ledger shows: if the excerpt says HP goes from 62 to 44, dcur is -18 and max is sent only if it was not already established.',
-        // Two instructions, one job: stop billing the same beat twice. The first is what the window
-        // split (`extract-table.js`) and `reject:already-recorded` (`state-table.js`) enforce in
-        // code; saying it in words is what lets the model spend its budget on the new thing instead
-        // of having a refused proposal counted against it. Measured motivation: the phone-number
-        // exchange sits in the live ledger three times, the candies twice, the knife twice.
-        'Record only what changed in the NEW part of the excerpt. Anything shown as already recorded, and anything narrated in the earlier context section, has been counted — do not gain it again, even if this excerpt describes it once more.',
-        'A phone number, an address, an email or a social handle is NOT an item. Never record contact details as something gained.',
-        'Set "at" to where the item is: "carried" when on the character, otherwise the place — a home, a vehicle, a locker. Moving something between places is a loss in one and a gain in the other.',
-        'Money is "at": "money", never an item in a pocket. Name the currency itself — "won", "credits", "gold" — and put the amount in dq. Amounts are whatever the story says; do not round them to something tidy.',
-        'Use "at": "assets" for property acquired or lost — a house, a ship, a business, a mount — and "at": "abilities" for a capability gained or lost, such as learning a spell, mastering a skill or being granted a power. These are the two most commonly missed: a character who learns to do something new has gained an ability, and it belongs here.',
-        'For a status effect, "turns" is how long it lasts on its own: a few exchanges for drunkenness or a hangover, 0 for a wound, an infection or anything that needs treatment or time to change.',
-        // The instruction the schema description cannot carry alone: `who` is refused when it names
-        // nobody fold knows (`reject:unknown-owner`), and a refused wound is a wound nobody carries.
-        'Every condition belongs to somebody. Put the name of the person it happened to in "who", spelled exactly as you spelled it in the people list; leave "who" empty only for the point-of-view character. A wound with the wrong name on it is worse than no wound at all.',
-        'Record the affliction, never the reassurance. "Bruised but functional" is one condition — "bruised left arm" — and "otherwise unhurt" is not a condition at all.',
+        'For each event, record what it CHANGED — changes, not totals. dq is how many were gained or lost, not held afterwards.',
+        'Record only what the excerpt NAMES and actually changes; nothing merely mentioned, held over, or unchanged.',
+        'Record only what changed in the NEW part of the excerpt — anything shown as already recorded has been counted; do not gain it again.',
+        'dcur is the change from the current value, never the new total; max only when newly established.',
+        'Contact details (phone number, address, email) are NOT items — never record them as gained.',
+        'Set "at": "carried" when on the character, otherwise the place; moving between places is a loss in one and a gain in the other.',
+        'Money is "at": "money" — name the currency (won, credits, gold), amount in dq, exact as the story says.',
+        '"at": "assets" for owned property (house, ship, mount); "at": "abilities" for a capability gained or lost (spell, skill, power). These are the most commonly missed.',
+        'Every condition belongs to somebody: "who" is the person\'s name, exactly as in the people list; empty only for the point-of-view character.',
+        'Record the affliction, never the reassurance — "otherwise unhurt" is not a condition.',
         'Use empty arrays when an event changed nothing.',
     ].join(' ');
 }
@@ -757,8 +760,10 @@ export function noteRejections(rejections) {
     }
     commit(REJECTS_PATH, rejects);
     // Also into the one table that answers "did this bound ever bind" for every constant, not just
-    // the ones that reject. See observe.js.
-    observe.noteRejections(rejections);
+    // the ones that reject. See observe.js. The diagnostics log gets the same refusals with the
+    // turn they happened on; `mid` was attached by `chronicle.applyExtraction` for the cause-jump,
+    // and the state probe's own `recordMarks` refusals carry neither.
+    observe.noteRejections(rejections.map(rejection => ({ ...rejection, turn: entities.turn() })));
 }
 
 /**
@@ -1054,6 +1059,12 @@ export function snapshot() {
                 };
             }),
         rejects: table_entries(loadRejects()).map(([reason, count]) => ({ reason, count })),
+        // The diagnostics log: what was rejected and which extraction passes failed, newest first.
+        // The panel's "N rejected" footer opens it, so a tally is one click from its causes.
+        log: log.load(),
+        // The extraction lifecycle, so the panel can show acknowledged/syncing/failed instead of a
+        // stale value presented as current (FOLD-SLA.md §2).
+        sync: getSync(),
         locks: lockedFields(),
         // ── The lock's argument with the narrator, made visible ──
         //

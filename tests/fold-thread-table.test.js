@@ -133,6 +133,44 @@ describe('the §0.1-3 pair — one doom, one progress, never one heading', () =>
         foldTicks(table, [{ name: 'p', tick: -1 }], { turn: 2 });
         expect(threads(table, 2)[0].filled).toBe(2);
     });
+
+    test('a dial may only advance when the window mentions it', () => {
+        // Symmetric with the entity probe's mention gate: a tick for a dial the new excerpt never
+        // touches is a hallucinated advance — it was being accepted at non-zero tick before this
+        // gate existed, and only a zero tick got caught as `no-change`.
+        const table = new Map();
+        const { accepted, rejected } = foldTicks(
+            table,
+            [{ name: 'east falls to raiders', tick: 2, kind: DOOM, size: 6, where: 'the east' }],
+            { turn: 1, windowText: 'Sol reads the letter, and looks sidelong at Zareena.' });
+
+        expect(accepted).toBe(0);
+        expect(rejected[0].reason).toBe('not-mentioned');
+        expect(table.size).toBe(0);
+    });
+
+    test('a dial advances when the window names its subject or consequence', () => {
+        // "the Blight" in the window is still the "the Blight reaches Briarwood" dial; "the east"
+        // names where the doom clock applies. The gate reads name, `about` and `where`.
+        const table = new Map();
+        const byName = foldTicks(table,
+            [{ name: 'the Blight reaches Briarwood', tick: 1, kind: DOOM, size: 6 }],
+            { turn: 1, windowText: 'the Blight creeps closer to the village' });
+        expect(byName.accepted).toBe(1);
+
+        const byWhere = foldTicks(table,
+            [{ name: 'east falls to raiders', tick: 1, kind: DOOM, size: 6, where: 'the east' }],
+            { turn: 2, windowText: 'raiders torch a farmhouse in the east' });
+        expect(byWhere.accepted).toBe(1);
+    });
+
+    test('the mention gate is off without a window, for migrations and absorption', () => {
+        const table = new Map();
+        const { accepted } = foldTicks(table,
+            [{ name: 'the guard alert rises', tick: 1, kind: DOOM, size: 6 }],
+            { turn: 1 });
+        expect(accepted).toBe(1);
+    });
 });
 
 /*

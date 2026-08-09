@@ -42,7 +42,7 @@ export function instruction() {
  * @param {string} [context.why] The reason this pass ran — armed when it is a `WORLD_TRIGGERS` entry.
  * @returns {{accepted: number, rejected: object[], armed: boolean}} What was applied.
  */
-export function applyExtraction(fragment, { why = '' } = {}) {
+export function applyExtraction(fragment, { why = '', turn = 0, sources = [] } = {}) {
     const armed = WORLD_TRIGGERS.includes(why);
 
     // Not armed: the fragment is expected empty. Anything the model proposed here was proposed on a
@@ -58,7 +58,12 @@ export function applyExtraction(fragment, { why = '' } = {}) {
     }
 
     const { accepted, rejected } = planWorld(fragment, { entities: entities.load() });
-    observe.noteRejections(rejected);
+    // Anchor refusals to the newest message the pass read, for the log's cause-link.
+    observe.noteRejections(rejected.map(rejection => ({
+        ...rejection,
+        mid: (sources ?? [])[sources.length - 1]?.mid,
+        turn,
+    })));
 
     // World moves land as ordinary ledger events (`src: 'world'`), so they fold forward, surface in
     // recall, and stay auditable like everything else (§7.3). The summary is the assertion the model

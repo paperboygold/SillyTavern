@@ -86,8 +86,10 @@ export function notePendingCost(text) {
  * Take the pending-cost note for the next extraction, clearing it in the same call.
  *
  * Read-then-delete is the whole point: the note describes a cost from LAST turn, and a note that
- * survives to the turn after would bill a cost the story has moved past. Taken before the extraction
- * prompt is built; cleared even if the pass then declines, so a note can never be read twice.
+ * survives to the turn after would bill a cost the story has moved past. The extraction pass now
+ * PEEKS the note to build its prompt and calls this only once the pass has succeeded — a note must
+ * never be consumed by a pass that then returns nothing, or the cost it describes is lost the way
+ * nine adjudicated costs were lost to empty passes mid-fight.
  *
  * @returns {string} The note, or '' when there is nothing pending.
  */
@@ -96,6 +98,21 @@ export function takePendingCost() {
     const row = lookup(table, 'cost', null);
     table.delete('cost');
     commit(PENDING_COST_PATH, table);
+    return row?.v ?? '';
+}
+
+/**
+ * Read the pending-cost note without clearing it.
+ *
+ * The extraction pass builds its prompt from this so the model is told what the last verdict cost,
+ * then clears the note with `takePendingCost()` only after the pass actually applied. Clearing on
+ * failure destroyed the cost: the note was consumed by the very pass that returned nothing.
+ *
+ * @returns {string} The note, or '' when there is nothing pending.
+ */
+export function peekPendingCost() {
+    const table = loadTable(PENDING_COST_PATH);
+    const row = lookup(table, 'cost', null);
     return row?.v ?? '';
 }
 

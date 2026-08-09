@@ -57,6 +57,7 @@
  */
 
 import { parseSpan } from './clock.js';
+import { windowSnippet } from './diag.js';
 import { isExposition } from './entity-table.js';
 import { insert_with, lookup, table_entries } from './lib/hash.js';
 
@@ -507,39 +508,85 @@ export function foldThread(table, {
 }
 
 /**
+ * Does the new window mention a dial — by its name, its subject, or the place it applies?
+ *
+ * The window names the dial as often as it names an entity, but the gates that licence each kind
+ * disagree about how to read a match: the entity gate heads on a single discriminating token
+ * (`entity-table.js` `mentions`), and a dial should be read the same way — "the Blight" in the
+ * window is still the "the Blight reaches Briarwood" dial. The name is matched first, then its
+ * `about` (what completing it does) and `where` (where it applies), because a dial is referred to
+ * by its consequence at least as often as by its label.
+ *
+ * @param {string} windowText The narrative window.
+ * @param {object} observed The proposed tick.
+ * @returns {boolean} True if the window mentions the dial or its subject.
+ */
+function mentionsDial(windowText, observed) {
+    const haystack = String(windowText ?? '').toLowerCase();
+    const needles = [observed?.name, observed?.about, observed?.where];
+    return needles.some((raw) => {
+        const needle = String(raw ?? '').toLowerCase().trim();
+        if (!needle) {
+            return false;
+        }
+        if (haystack.includes(needle)) {
+            return true;
+        }
+        return needle.split(/[^a-z0-9']+/)
+            .filter(token => token.length > 3)
+            .some(token => haystack.includes(token));
+    });
+}
+
+/**
  * Fold a batch of dial ticks, refusing the ones the narrative does not support.
  *
  * @param {Map<string, object>} table Thread table, mutated.
  * @param {object[]} observations Proposed ticks.
  * @param {object} [options] Options.
  * @param {number} [options.turn] Turn counter.
+ * @param {string} [options.windowText] Narrative window, for the diagnostics record.
  * @returns {{accepted: number, rejected: object[], fired: object[]}} What happened.
  */
-export function foldTicks(table, observations, { turn = 0 } = {}) {
+export function foldTicks(table, observations, { turn = 0, windowText = '' } = {}) {
     const rejected = [];
     const fired = [];
     let accepted = 0;
+    // The window excerpt every rejection records, for the caret-level diagnostics log.
+    const snippet = windowSnippet(windowText);
 
     for (const observed of Array.isArray(observations) ? observations : []) {
         const parsed = normalizeThreadName(observed?.name);
         if (!parsed) {
-            rejected.push({ item: String(observed?.name ?? ''), reason: 'unusable-name' });
+            rejected.push({ item: String(observed?.name ?? ''), reason: 'unusable-name', raw: observed, snippet });
+            continue;
+        }
+        // ── The mention gate, symmetric with the entity probe's ──
+        //
+        // The entity probe refuses people the window never names, and a dial should be held to the
+        // same evidence: a dial can only advance when the new excerpt mentions it — its outcome,
+        // or the thing that moves it. Without this, a dial proposed with a non-zero tick for
+        // something the window never touched was ACCEPTED (a hallucinated advance); only a zero
+        // tick got caught, and only as `no-change`. A tick for an unmentioned dial is
+        // `not-mentioned`, the same refusal an unmentioned person gets.
+        if (windowText && !mentionsDial(windowText, observed)) {
+            rejected.push({ item: parsed.display, reason: 'not-mentioned', raw: observed, snippet });
             continue;
         }
         const tick = Number(observed?.tick);
         if (!Number.isFinite(tick) || tick === 0) {
-            rejected.push({ item: parsed.display, reason: 'no-change' });
+            rejected.push({ item: parsed.display, reason: 'no-change', raw: observed, snippet });
             continue;
         }
         // A dial that leaps in one turn has skipped the story it was supposed to measure.
         if (Math.abs(tick) > MAX_TICK) {
-            rejected.push({ item: parsed.display, reason: 'implausible-tick' });
+            rejected.push({ item: parsed.display, reason: 'implausible-tick', raw: observed, snippet });
             continue;
         }
 
         const before = lookup(table, canonicalThreadKey(table, parsed.key, observed?.aka), null);
         if (!foldThread(table, { ...observed, tick, turn })) {
-            rejected.push({ item: parsed.display, reason: 'threads-full' });
+            rejected.push({ item: parsed.display, reason: 'threads-full', raw: observed, snippet });
             continue;
         }
         accepted++;
@@ -684,29 +731,32 @@ export function tickCalendar(table, { now, turn = 0 } = {}) {
  * @param {object[]} observations Proposed threads.
  * @param {object} [options] Options.
  * @param {number} [options.turn] Turn counter.
+ * @param {string} [options.windowText] Narrative window, for the diagnostics record.
  * @returns {{accepted: number, rejected: object[]}} What happened.
  */
-export function foldThreads(table, observations, { turn = 0 } = {}) {
+export function foldThreads(table, observations, { turn = 0, windowText = '' } = {}) {
     const rejected = [];
     let accepted = 0;
+    // The window excerpt every rejection records, for the caret-level diagnostics log.
+    const snippet = windowSnippet(windowText);
 
     for (const observed of Array.isArray(observations) ? observations : []) {
         const parsed = normalizeThreadName(observed?.name);
         if (!parsed) {
-            rejected.push({ item: String(observed?.name ?? ''), reason: 'unusable-name' });
+            rejected.push({ item: String(observed?.name ?? ''), reason: 'unusable-name', raw: observed, snippet });
             continue;
         }
         // The gate stays exactly where it was and does exactly what it did: a "lead" with nothing
         // unsettled in it is lore, and a panel full of lore is a panel nobody reads. Dial-bearing
         // threads skip it — a clock IS its own open question.
         if (!hasDial(observed) && isExposition(observed)) {
-            rejected.push({ item: parsed.display, reason: 'exposition' });
+            rejected.push({ item: parsed.display, reason: 'exposition', raw: observed, snippet });
             continue;
         }
         if (foldThread(table, { ...observed, turn })) {
             accepted++;
         } else {
-            rejected.push({ item: parsed.display, reason: 'threads-full' });
+            rejected.push({ item: parsed.display, reason: 'threads-full', raw: observed, snippet });
         }
     }
 

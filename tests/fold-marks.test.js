@@ -285,7 +285,7 @@ describe('an invented owner is worse than none', () => {
             pov: 'Solomon Winters',
         });
         expect(accepted).toEqual([]);
-        expect(rejected).toEqual([{ item: 'Gorbaz the Unwritten', reason: 'unknown-owner' }]);
+        expect(rejected).toEqual([expect.objectContaining({ item: 'Gorbaz the Unwritten', reason: 'unknown-owner' })]);
     });
 
     test('an EMPTY owner is never refused — it is the pov, which is what the panel always assumed', () => {

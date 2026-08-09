@@ -80,6 +80,8 @@ let onToggleOff = () => {};
 let onToggleOpen = () => {};
 /** Section headers the player collapsed this session, so a re-render keeps them collapsed. */
 const collapsedSections = new Set();
+/** Whether the diagnostics log is open this session; toggled by the footer's rejects/extract-fails counts. */
+let diagnosticsOpen = false;
 
 /**
  * Build the panel markup, matching the structure SillyTavern's own floating panels use.
@@ -471,6 +473,206 @@ function jumpToMessage(mid) {
     node.scrollIntoView({ behavior: 'smooth', block: 'center' });
     node.classList.add('fold_jump_target');
     setTimeout(() => node.classList.remove('fold_jump_target'), 2000);
+}
+
+/**
+ * The `help:` line a rejection row shows — the song-compiler habit of naming the fix, not just the
+ * fault. This is a display table over fold's OWN reason tokens (never over narrative text), so it
+ * is the §11-sanctioned formatting kind, and unknown reasons fall back to a generic line.
+ * @param {string} reason The rejection reason.
+ * @returns {string} The fix to suggest.
+ */
+function rejectHelp(reason) {
+    return ({
+        'unusable-name': 'name was empty or not a usable token — use a short noun phrase.',
+        'not-an-item': 'that is not an item (contact details never are) — record it as reach, or skip.',
+        'no-change': 'proposed no actual change — report only real changes, never zero deltas.',
+        'rate-limited': 'too many changes this pass — the per-pass budget is full; the model over-reported.',
+        'not-mentioned': 'the window the model read does not name this — only record changes the excerpt actually shows.',
+        'already-recorded': 'the ledger already covers this acquisition — it was shown in the pinned block; report only new changes.',
+        'remove-unknown': 'removing something the ledger does not hold — you cannot remove what was never gained.',
+        'inventory-full': 'too many distinct items — the list is at its cap.',
+        'implausible-delta': 'magnitude implausible for one turn — a change this large is a hallucination.',
+        'clamped-underflow': 'the change would drive a count below zero — clamped instead of recorded.',
+        'vitals-full': 'too many tracked vitals — the table is at its cap.',
+        'implausible-max': 'a vital max moved by more than half in one turn — a hallucination, not a level-up.',
+        'unknown-owner': 'named a person fold has never heard of — use a name from the people list, or leave "who" empty for the player.',
+        'negation': 'a reassurance ("otherwise unhurt") is not a condition.',
+        'flags-full': 'too many conditions on one person — the top three are kept, the rest escalate or displace.',
+        'exposition': 'reads as background, not an open stake — phrase the unresolved part ("still unknown", "not yet") or leave it out.',
+        'implausible-tick': 'a dial advanced by more than 3 in one turn — a tick measures pressure, not bodies.',
+        'threads-full': 'too many open threads — close some, or drop it.',
+        'entities-full': 'too many tracked people — the cast is at its cap.',
+        'clock-reversed': 'a dial ticked the wrong way for its polarity.',
+    })[reason] ?? 'the proposed change failed the corresponding validation gate — see the reason above.';
+}
+
+/** The label, class and tooltip for each extraction lifecycle state (FOLD-SLA.md §2). */
+function syncMeta(state) {
+    return ({
+        'up-to-date': { label: t`synced`, cls: 'up_to_date', title: t`State is current` },
+        acknowledged: { label: t`pending`, cls: 'acknowledged', title: t`Message received — extraction pending` },
+        syncing: { label: t`syncing`, cls: 'syncing', title: t`Updating state…` },
+        behind: { label: t`behind`, cls: 'behind', title: t`A newer message arrived during extraction — the next pass covers it` },
+        failed: { label: t`extraction failed`, cls: 'failed', title: t`Extraction failed` },
+    })[state] ?? { label: state, cls: 'unknown', title: state };
+}
+
+/**
+ * The extraction lifecycle chip: a dot (compact, for the strip) or a dot + label (for the panel),
+ * coloured by state. The failed state is red and its tooltip carries the reason and the fix, so a
+ * failed pass is never silent (FOLD-SLA.md §2.3).
+ *
+ * A non-terminal state that is far older than the extraction window is a lie — a hang or an
+ * interrupted session left `syncing`/`pending` persisted in the chat metadata. A healthy pass is
+ * bounded by `EXTRACT_TIMEOUT_MS`, so anything that old was never going to finish; it renders as
+ * failed ("stalled") rather than pulsing forever.
+ *
+ * @param {object} sync The `state.sync` record.
+ * @param {object} [opts] Options.
+ * @param {boolean} [opts.compact] Dot only, for the collapsed rail.
+ * @returns {HTMLElement} The chip.
+ */
+function renderSyncChip(sync, { compact = false } = {}) {
+    let state = sync?.state ?? 'up-to-date';
+    const nonTerminal = state === 'syncing' || state === 'acknowledged';
+    const stale = nonTerminal && Number.isFinite(sync?.since) && (Date.now() - sync.since) > 150_000;
+    if (stale) {
+        state = 'failed';
+    }
+    const meta = syncMeta(state);
+    const chip = el('span', `fold_sync fold_sync_${meta.cls}${compact ? ' fold_sync_compact' : ''}`);
+    chip.title = state === 'failed'
+        ? stale
+            ? 'Extraction stalled — the last pass never finished (hung or interrupted). It retries on the next message.'
+            : `Extraction failed: ${sync.reason} — ${sync.detail}`
+        : meta.title;
+    chip.appendChild(el('i', 'fold_sync_dot'));
+    if (!compact) {
+        chip.appendChild(el('span', 'fold_sync_label', stale ? t`stalled` : meta.label));
+    }
+    return chip;
+}
+
+/**
+ * One rejection, rendered the way song renders a compile error: the reason, the raw value the model
+ * proposed with a caret run underlining it, the window it was read from, and a `help:` naming the
+ * fix. This is the surface that turns "6 rejected" into "the AI proposed this, here, because of
+ * this, and here is the fix".
+ *
+ * @param {object} entry A `state.log` reject entry.
+ * @returns {HTMLElement} The row.
+ */
+function renderRejectRow(entry) {
+    const row = el('li', 'fold_log_row fold_log_reject');
+    row.appendChild(el('span', 'fold_log_tag', t`rejected`));
+    const report = el('div', 'fold_log_report');
+    const line = el('div', 'fold_log_line');
+    if (entry.item) {
+        line.appendChild(el('span', 'fold_log_item', sentenceCase(entry.item)));
+        line.appendChild(el('span', 'fold_log_sep', '·'));
+    }
+    if (entry.reason) {
+        line.appendChild(el('span', 'fold_log_reason', entry.reason));
+    }
+    if (entry.turn != null) {
+        line.appendChild(el('span', 'fold_log_turn', `t${entry.turn}`));
+    }
+    report.appendChild(line);
+    if (entry.raw) {
+        // The offending token, and the caret underlining it — rustc-style.
+        const pre = el('pre', 'fold_log_raw');
+        pre.textContent = entry.raw;
+        report.appendChild(pre);
+        const caret = el('pre', 'fold_log_caret');
+        caret.textContent = '^'.repeat(Math.max(1, entry.raw.length));
+        report.appendChild(caret);
+    }
+    if (entry.snippet) {
+        report.appendChild(el('div', 'fold_log_snippet', `"${entry.snippet}…"`));
+    }
+    if (entry.reason) {
+        report.appendChild(el('div', 'fold_log_help', `help: ${rejectHelp(entry.reason)}`));
+    }
+    row.appendChild(report);
+    if (Number.isFinite(entry.mid)) {
+        row.classList.add('fold_log_jump');
+        row.title = t`Jump to the message that prompted this`;
+        row.addEventListener('click', () => jumpToMessage(entry.mid));
+    }
+    return row;
+}
+
+/**
+ * The diagnostics log: the specifics behind the rejects tally and the empty extraction passes.
+ *
+ * Each row is one recorded event, newest first: what was refused and why (a rejected change), or
+ * which extraction pass failed and whether the fix is budget or structural (an extract row). A row
+ * with a `mid` is a click that jumps to the message it was anchored on — the same cause-link the
+ * inventory trail uses.
+ *
+ * When nothing specific has been recorded yet — the log only captures events from the moment this
+ * build first ran, so a lifetime tally can be non-zero with an empty log — it falls back to the
+ * counted breakdown and says so, rather than opening an empty box.
+ *
+ * @param {object} params Parameters.
+ * @param {Array<object>} [params.entries] `state.log` entries, newest first.
+ * @param {Array<{reason: string, count: number}>} [params.rejects] The lifetime tally.
+ * @returns {HTMLElement} The log block.
+ */
+function renderDiagnostics({ entries = [], rejects = [] }) {
+    const box = el('div', 'fold_log');
+    const head = el('div', 'fold_log_head');
+    head.appendChild(el('span', null, t`Diagnostics`));
+    box.appendChild(head);
+    const list = el('ul', 'fold_log_list');
+    const specific = entries.slice(0, 30);
+    if (specific.length) {
+        for (const entry of specific) {
+            const row = entry.kind === 'extract'
+                ? (() => {
+                    const r = el('li', 'fold_log_row fold_log_extract');
+                    r.appendChild(el('span', 'fold_log_tag', t`extract`));
+                    const report = el('div', 'fold_log_report');
+                    const line = el('div', 'fold_log_line');
+                    line.appendChild(el('span', 'fold_log_reason', entry.reason));
+                    if (entry.turn != null) {
+                        line.appendChild(el('span', 'fold_log_turn', `t${entry.turn}`));
+                    }
+                    report.appendChild(line);
+                    if (entry.detail) {
+                        report.appendChild(el('div', 'fold_log_help', `help: ${entry.detail}`));
+                    }
+                    r.appendChild(report);
+                    if (Number.isFinite(entry.mid)) {
+                        r.classList.add('fold_log_jump');
+                        r.title = t`Jump to the message that prompted this`;
+                        r.addEventListener('click', () => jumpToMessage(entry.mid));
+                    }
+                    return r;
+                })()
+                : renderRejectRow(entry);
+            list.appendChild(row);
+        }
+    } else if (rejects.length) {
+        const note = el('li', 'fold_log_note');
+        note.appendChild(el('span', null,
+            t`The log records specific refusals from the next extraction on. This chat's earlier rejections were only counted:`));
+        list.appendChild(note);
+        for (const { reason, count } of rejects) {
+            const row = el('li', 'fold_log_row fold_log_reject');
+            row.appendChild(el('span', 'fold_log_tag', t`rejected`));
+            const report = el('div', 'fold_log_report');
+            report.appendChild(el('span', 'fold_log_reason', `${count}× ${reason}`));
+            report.appendChild(el('span', 'fold_log_help', `help: ${rejectHelp(reason)}`));
+            row.appendChild(report);
+            list.appendChild(row);
+        }
+    } else {
+        list.appendChild(el('li', 'fold_log_note', t`Nothing recorded yet.`));
+    }
+    box.appendChild(list);
+    return box;
 }
 
 /**
@@ -876,6 +1078,11 @@ export function render() {
         target.appendChild(head);
     }
 
+    // FOLD-SLA §2.1/2.3: the extraction lifecycle, always visible at the top of the panel. A stale
+    // value must never be presented as current — the chip says acknowledged/syncing while waiting
+    // and failed (red, with the reason) when the pass returned nothing.
+    target.appendChild(renderSyncChip(snapshot.sync));
+
     const deadline = nearestDeadline(scene, stakes.open);
 
     // ── You: the protagonist, their body and their money ──
@@ -1172,16 +1379,62 @@ export function render() {
             foot.appendChild(el('span', 'fold_foot_gap', `${snapshot.sinceBlock} ${t`turns unreported`}`));
         }
         const rejects = snapshot.rejects.reduce((sum, entry) => sum + entry.count, 0);
+        const entries = snapshot.log ?? [];
+        const extractFails = entries.filter(entry => entry.kind === 'extract').length;
+        // The diagnostics log: what was rejected and which passes failed, one click from the tally.
+        // Built before the footer so the counts can toggle it DIRECTLY (class on/off, no re-render)
+        // — a re-render inside a click handler is the kind of thing that silently does nothing if
+        // anything else on the panel throws. Appended whenever a count is clickable, even when the
+        // log is empty, because an empty log is exactly what the user needs told (specifics only
+        // record from the next extraction on).
+        let logNode = null;
+        if (rejects || extractFails) {
+            logNode = renderDiagnostics({ entries, rejects: snapshot.rejects });
+            if (!diagnosticsOpen) {
+                logNode.classList.add('fold_log_closed');
+            }
+        }
+        const toggleLog = () => {
+            if (!logNode) {
+                return;
+            }
+            diagnosticsOpen = !logNode.classList.toggle('fold_log_closed');
+        };
         if (rejects) {
             // The rejection tally, visible. A validation layer nobody can see is one nobody trusts,
-            // and one that gets ripped out the first time the state looks wrong.
-            foot.title = snapshot.rejects.map(entry => `${entry.count}× ${entry.reason}`).join('\n');
-            foot.appendChild(el('span', null, `${rejects} ${t`rejected`}`));
+            // and one that gets ripped out the first time the state looks wrong. Clicking it opens
+            // the log and shows WHAT was refused, not just that something was.
+            const count = el('span', 'fold_foot_count fold_foot_rejects', `${rejects} ${t`rejected`}`);
+            count.title = snapshot.rejects.map(entry => `${entry.count}× ${entry.reason}`).join('\n');
+            count.setAttribute('role', 'button');
+            count.setAttribute('tabindex', '0');
+            count.addEventListener('click', toggleLog);
+            count.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleLog(); }
+            });
+            foot.appendChild(count);
+        }
+        if (extractFails) {
+            // Extraction passes that returned no usable JSON. The log entry for each says whether it
+            // was a budget failure (empty/truncated) or a structural one (unparseable) — the answer
+            // to "is raising the token budget enough?"
+            const count = el('span', 'fold_foot_count fold_foot_extract', `${extractFails} ${t`extract fails`}`);
+            count.title = 'Extraction passes that produced no usable JSON — click to see whether it is the token budget or something structural.';
+            count.setAttribute('role', 'button');
+            count.setAttribute('tabindex', '0');
+            count.addEventListener('click', toggleLog);
+            count.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleLog(); }
+            });
+            foot.appendChild(count);
         }
         // Every line in it is now conditional, so the bar itself has to be. An empty rule under the
         // panel is a footer that says nothing while looking like it meant to.
         if (foot.childElementCount) {
             target.appendChild(foot);
+        }
+        if (logNode) {
+            target.appendChild(logNode);
         }
     }
 
@@ -1300,6 +1553,11 @@ export function renderStrip() {
         segments.push(el('span', 'fold_strip_seg fold_strip_dial',
             `${urgent.filled}/${urgent.size}`));
     }
+
+    // The lifecycle chip is the one segment that is ALWAYS there — the collapsed rail is where the
+    // player glances while the panel is closed, so it is exactly where "is my state current?" has
+    // to be answerable (FOLD-SLA.md §2.1).
+    segments.unshift(renderSyncChip(snapshot.sync, { compact: true }));
 
     rail.replaceChildren(...segments);
     rail.classList.toggle('fold_collapsed_empty', !segments.length);

@@ -106,51 +106,45 @@ export function schema() {
                         name: { type: 'string', description: 'The person\'s name, or a short description if unnamed.' },
                         aka: {
                             type: 'string',
-                            description: 'Every OTHER name, title or epithet the excerpt uses for this same person, comma-separated: "the Hero, the marked one". Empty if they are only ever called one thing. Never repeat the name itself.',
+                            description: 'Every OTHER name or title for this same person, comma-separated. Empty if only ever called one thing. Never repeat the name itself.',
                         },
                         place: {
                             type: 'string',
-                            description: 'The PLACE they are in right now, as a bare place name and nothing else: "the stableyard", "manor bedroom", "the dining hall". No prepositions, no activity, no description. Use the same words the narration uses for that place. Empty only if the excerpt truly does not say where they are.',
+                            description: 'The bare place name where they are now, worded as the narration words it: "the stableyard", "manor bedroom". No prepositions, no activity. Empty only if the excerpt truly does not say.',
                         },
                         detail: {
                             type: 'string',
-                            description: 'What they are doing right now, as a short phrase: "sparring with Marote", "counting the till". NOT where they are — that goes in "place". NOT how to contact them — that goes in "reach".',
+                            description: 'What they are doing right now, as a short phrase: "sparring with Marote". NOT where they are (that is "place").',
                         },
                         reach: {
                             type: 'string',
-                            description: 'How the point-of-view character can contact this person when they are not in the room, as a short phrase: "phone number", "reachable by email", "leaves messages at the Goblin Market". Empty if there is no way to reach them. This is a standing capability, not a possession — never report it as an item.',
+                            description: 'How the point-of-view character can contact them at a distance: "phone number", "reachable by email". A standing capability, never an item.',
                         },
                         feels: {
                             type: 'string',
                             enum: ['hostile', 'wary', 'neutral', 'friendly', 'devoted', ''],
-                            description: 'How this person currently regards the point-of-view character, judged from how they speak and act toward them. Empty if the excerpt gives no sign. Report it every time it is legible, and change it only when the narration gives a reason to.',
+                            description: 'How they currently regard the point-of-view character, from how they act. Empty if no sign. Change only when the narration gives a reason.',
                         },
                         wants: {
                             type: 'string',
-                            description: 'What this person is trying to get, as a short phrase: "supplies for the northern march", "to be freed of the brand", "Solomon gone from the manor". Empty if the excerpt does not reveal an agenda. This is their goal, not the player\'s.',
+                            description: 'What they are trying to get, as a short phrase: "supplies for the northern march". Their goal, not the player\'s. Empty if no agenda is revealed.',
                         },
                         knows: {
                             type: 'string',
-                            description: 'What this person knows about the point-of-view character that matters — a secret, a debt, a suspicion, a promise made to them: "saw the brand", "is owed two hundred crowns", "suspects he is not the real Hero". Empty if nothing.',
+                            description: 'What they know about the point-of-view character that matters: a secret, a debt, a suspicion. Empty if nothing.',
                         },
                         status: {
                             type: 'string',
                             enum: ['present', 'remote', 'unreachable', 'gone'],
-                            description: 'present if physically in the scene, remote if contactable at a distance, unreachable if not, gone ONLY if they have left the story entirely (died, departed for good). Someone who merely walked into another room is still present — say so with "place".',
+                            description: 'present if in the scene, remote if contactable at a distance, unreachable if not, gone ONLY if they left the story for good. Someone who walked into another room is still present.',
                         },
                         threat: {
                             type: 'integer',
-                            // Asked of every person and answered 0 for almost all of them, rather
-                            // than asked only of enemies: "is this person an adversary" is a
-                            // judgement, and a schema that only offers the field to adversaries has
-                            // already made it. `FOLD-REDESIGN.md` §12.3 says no live combat has run
-                            // under this schema at all, so the first real fight is the measurement —
-                            // and a field the model never fills is exactly as informative.
-                            description: `How dangerous this person is to the point-of-view character RIGHT NOW, 1 to ${MAX_THREAT}, while they are actively hostile: 1 a thug, 3 a trained fighter, ${MAX_THREAT} something that could kill everyone here. Use 0 for anyone who is not currently a threat, which is nearly everyone, and 0 again the moment a fight ends.`,
+                            description: `How dangerous RIGHT NOW, 1 to ${MAX_THREAT}, while actively hostile. 0 for anyone who is not currently a threat (nearly everyone), and 0 again the moment a fight ends.`,
                         },
                         facts: {
                             type: 'string',
-                            description: 'Standing truths about this person that do not change with the scene — a rank, a bloodline, a permanent capability: "E-rank hunter", "blind since birth". Empty unless the excerpt establishes one. Never their mood, their location or what they are doing.',
+                            description: 'Standing truths that do not change with the scene — a rank, a bloodline: "E-rank hunter". Never mood, location or activity.',
                         },
                     },
                     required: ['name', 'aka', 'place', 'detail', 'reach', 'feels', 'wants', 'knows', 'status', 'threat', 'facts'],
@@ -176,22 +170,13 @@ export function schema() {
 export function instruction() {
     return [
         'The people the excerpt places somewhere, as objects rather than a list of phrases.',
-        'A person and where they are are one object: the name goes in "name", the bare place name in "place", what they are doing in "detail", and how to contact them in "reach".',
-        // The single most important instruction here. Presence is computed by comparing this place
-        // to the scene's, so a place written in different words than the narration uses is a person
-        // who silently vanishes from the room.
-        'For each person also give "feels" (how they regard the point-of-view character), "wants" (their own agenda) and "knows" (what they know about him that matters). These drive how they behave and are worth more than any description of their clothes.',
-        'One person, one entry. A character called both by a title and by a name — "the Hero" and "Solomon" — is ONE person: use the proper name in "name" and put every other form in "aka".',
-        'Always give "place" for anyone whose position the excerpt establishes, and word it the same way the narration words that place. If someone walked out, give the place they walked TO — or leave "place" empty if it is unknown. Do not mark them "gone" unless they have left the story for good.',
-        // Contact details are not things in a pocket. The live chat filed "Kang\'s phone number" as
-        // inventory in a place the model invented for itself, and the delta validator now refuses
-        // it outright (`state-table.js:104-110`, `reject:not-an-item`). This is where it goes.
-        'Give "reach" whenever the excerpt establishes a way to contact someone — a number exchanged, an address given, a standing arrangement to meet. Contact details are never items.',
-        // The one integer on this record, and it exists so six enemies are six legible things rather
-        // than one stalled clock (`FOLD-RPG-GAP.md` §6).
-        'Give "threat" only while someone is actively dangerous to the point-of-view character, and set it back to 0 the moment they stop being — defeated, fled, calmed down. Everyone else is 0.',
-        'Re-report anything still true, so it stays current.',
-        'Use an empty array when the excerpt establishes nobody.',
+        'One person, one entry: name in "name", the bare place name in "place" (worded exactly as the narration words it — a differently-worded place makes a person vanish from the room), what they are doing in "detail", how to contact them in "reach".',
+        'Give "feels" (how they regard the point-of-view character), "wants" (their own agenda), "knows" (what they know about him that matters). These drive behaviour and are worth more than any description of their clothes.',
+        'A character called by a title and a name — "the Hero" and "Solomon" — is ONE person: proper name in "name", every other form in "aka".',
+        'Give "place" for anyone whose position the excerpt establishes; if they walked out, give the place they walked TO. Do not mark them "gone" unless they left the story for good.',
+        'Give "reach" whenever the excerpt establishes a way to contact someone — a number exchanged, an address. Contact details are never items.',
+        'Give "threat" only while someone is actively dangerous, and set it back to 0 the moment they stop being — defeated, fled, calmed down. Everyone else is 0.',
+        'Report ONLY people the NEW excerpt names or places — never someone merely carried over from the already-recorded block. A person the new text does not name is not reported, whatever the record shows. Use an empty array when the new excerpt establishes nobody.',
     ].join(' ');
 }
 
@@ -217,6 +202,15 @@ export function applyExtraction(fragment, { windowText = '', turn: at = turn(), 
 
     prune(table, at);
     commit(ENTITIES_PATH, table);
+
+    // Route this probe's refusals into the shared rejections sink like every other probe's —
+    // `unknown-owner` etc. were previously returned and never observed, invisible in both the
+    // tally and the diagnostics log. Anchor them to the pass's newest source.
+    observe.noteRejections(people.rejected.map(rejection => ({
+        ...rejection,
+        mid: sources[sources.length - 1]?.mid,
+        turn: at,
+    })));
 
     return { people: people.accepted, rejected: people.rejected };
 }
