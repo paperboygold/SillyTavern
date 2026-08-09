@@ -30,7 +30,7 @@
  * and `/fold-lock pov` settles it permanently.
  */
 
-import { NARRATIVE, recordMarks, setContext } from './state.js';
+import { NARRATIVE, noteSceneElapsed, recordMarks, setContext } from './state.js';
 import { MAX_MARKS, SEVERITIES } from './state-table.js';
 
 /**
@@ -72,6 +72,10 @@ export function schema() {
                 type: 'string',
                 description: 'The time of day, as written: "just after dawn", "3:15 PM". Empty if not stated or implied.',
             },
+            elapsed: {
+                type: 'string',
+                description: 'How much time passed since the last scene, as the narration states it: "a week", "overnight", "three hours", "come morning". Empty if the story does not say time moved. Read by the clock, so say what the narrative says, never invent a duration.',
+            },
             weather: {
                 type: 'string',
                 description: 'Weather or ambient conditions, if established. Empty otherwise.',
@@ -97,7 +101,7 @@ export function schema() {
                 },
             },
         },
-        required: ['pov', 'location', 'time', 'weather', 'conditions'],
+        required: ['pov', 'location', 'time', 'elapsed', 'weather', 'conditions'],
         additionalProperties: false,
     };
 }
@@ -108,6 +112,7 @@ export function instruction() {
         'The scene as it stands at the END of the excerpt, not as it was at the start.',
         'Only what the excerpt establishes. Leave a field empty rather than carrying one forward or guessing.',
         'For "pov", name the character the narration follows — the one whose thoughts and sensations are described from the inside.',
+        'For "elapsed", say how much time the story states has passed since the previous scene — "a week", "overnight", "come morning", "three hours". This is what moves the clock; empty only when the narrative says no time passed. The narrator\'s phrasing in any language is what counts, never an inference.',
         '"conditions" is about that character\'s body only: what hurts, what is exhausted, what is impaired. Not mood, not clothes, not weather.',
         'Report every affliction still true, not only the new ones — this list replaces what was recorded before it.',
     ].join(' ');
@@ -144,6 +149,28 @@ export function applyExtraction(fragment, { windowText = '', sources = [] } = {}
 
     if (context.size) {
         setContext(context, { source: NARRATIVE });
+    }
+
+    // ── The clock moves on the model's own reading ──
+    //
+    // `elapsed` is the model's comprehension answer to "how much time passed since the last
+    // scene?" — reported in the phrase the narrative used, in any language. This is the structure
+    // the clock should have been reading all along: before it, the clock advanced only when the
+    // PLAYER typed a declarative elision ("I spend the night"), and a narrator's "come morning",
+    // "the week settles" or "first light" left it frozen because fold tried to recognise those
+    // phrasings in English. The model reads the prose already; it is asked, not matched. Anchored
+    // to nothing (elapsed is arithmetic, not an event), so a swipe that removes the passage cannot
+    // be retracted by the ledger — the clock is a running position, and the next pass re-derives it.
+    const elapsed = String(fragment?.elapsed ?? '').trim();
+    if (elapsed) {
+        try {
+            const outcome = noteSceneElapsed(elapsed);
+            if (outcome.skipped) {
+                console.debug(`[fold] the clock advanced ${outcome.minutes} minutes on the scene probe's reading`);
+            }
+        } catch (error) {
+            console.error('[fold] failed to advance the clock from the scene probe', error);
+        }
     }
 
     // ── The body goes to the ledger, not to the header ──

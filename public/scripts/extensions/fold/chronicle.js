@@ -408,6 +408,54 @@ export function recordWorldEvent({ summary, keywords = [], delta = null }) {
 }
 
 /**
+ * Append an event recording how an adjudicated attempt went.
+ *
+ * ── Why this exists, and why it carries the outcome as STRUCTURE ──
+ *
+ * `verdict-table.js` `precedentFor` used to read the outcome of past attempts off the summary's
+ * English — regex-ing for "fail|refused|could not|unable|lost|denied" — which is the same
+ * language-dependent guess the scene clock used to make before the scene probe reported `elapsed`.
+ * The verdict is decided in CODE, so it can record its own outcome as data: a `worked`/`failed`
+ * field beside the attempt's keywords, read by the next `precedentFor` without parsing prose. The
+ * summary is kept for the trail and the keywords are kept for the overlap match; only the
+ * guess-from-English is gone.
+ *
+ * Always-live, like a world move: a verdict is a fact about the attempt, not a claim about one
+ * message's content, so swiping the attempt's own message should not retract the fact that it was
+ * adjudicated. The audit `src: 'verdict'` keeps it distinguishable from world moves and hand edits.
+ *
+ * @param {object} params The event.
+ * @param {string} params.summary Summary text.
+ * @param {string[]} [params.keywords] Keywords describing the attempt.
+ * @param {'worked'|'failed'} params.outcome How it went.
+ * @returns {boolean} True if it was recorded.
+ */
+export function recordVerdictEvent({ summary, keywords = [], outcome = null }) {
+    if (outcome !== 'worked' && outcome !== 'failed') {
+        return false;
+    }
+    const now = Date.now();
+    const event = normalizeEvent({ summary, keywords }, {
+        now, src: 'verdict', srcKey: USER_ANCHOR,
+        // The outcome rides the delta the way a thread closure does — a structured fact the fold
+        // can read without touching the summary.
+        delta: { outcome },
+    });
+    if (!event) {
+        return false;
+    }
+    const { dropped, ...stored } = event;
+    if (dropped) {
+        observe.noteCap('keywords-dropped', dropped);
+    }
+    const events = loadEvents();
+    insert_with(events, merge_b, `verdict:${now}:${worldEventSeq++}`, stored);
+    commit(EVENTS_PATH, events);
+    invalidateIndex();
+    return true;
+}
+
+/**
  * Append an event the review pass authored.
  *
  * ── Why a closure is an event at all ──

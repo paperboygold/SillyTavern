@@ -224,6 +224,9 @@ export const KNOWN_RULES = Object.freeze([
     // The prompt refusing to assert a scene the story has left. Counted because CONTEXT_DROP_AFTER
     // is unmeasured, and a threshold nobody can see is one nobody can retune.
     'cap:context-stale', 'cap:clock-fired', 'cap:event-unusable',
+    // The clock advanced on the scene probe's comprehension answer, not on a player-typed elision
+    // or a matched English phrase. Counting it is how the two paths are told apart.
+    'clock:scene-elapsed',
     // Calendar fronts ticked in code, not by a model (FOLD-REDESIGN.md §7.3). The residency window's
     // "twelve months pass" could not fire before Phase W; counting it is how we know it now does.
     'cap:calendar-ticked', 'cap:calendar-anchored',

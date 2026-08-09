@@ -377,6 +377,46 @@ export function parseSpan(text) {
 }
 
 /**
+ * Read the scene probe's `elapsed` answer as minutes.
+ *
+ * The scene probe reads the narrative with comprehension and reports elapsed time in the phrase the
+ * story used. Unlike the PLAYER's own message — which must pass `parseElapsed`'s assertion gate to
+ * prove it is not a memory — the model has already asserted that time moved: it answered the
+ * question "how much time passed?". So the phrase is read as a bare duration, in any language the
+ * model reported it, without an English assertion gate.
+ *
+ * The phrase may name a counted span ("3 hours", "a week"), a small word-counted span ("three
+ * hours", "a couple of days"), a bare unit, or a scene-transition marker that carries its own unit
+ * ("overnight", "come morning", "first light" — a night's passage; "the week settles" — a week).
+ *
+ * @param {string} text The scene probe's `elapsed` answer.
+ * @returns {number|null} Minutes, or null when the answer names no duration.
+ */
+export function parseSceneElapsed(text) {
+    const said = String(text ?? '').toLowerCase().trim();
+    if (!said) {
+        return null;
+    }
+    const wordCount = said.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten|a couple of|a few)\s+(minute|hour|day|week|month|year)s?\b/);
+    if (wordCount) {
+        const number = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, 'a couple of': 2, 'a few': 3 }[wordCount[1]];
+        if (number) {
+            return Math.min(MAX_SKIP, number * UNIT[wordCount[2]]);
+        }
+    }
+    const span = parseSpan(said);
+    if (span !== null) {
+        return span;
+    }
+    // Scene-transition markers that carry their own unit: a transition to a part of a day is the
+    // night that precedes it; "first light" is a new day's opening; "overnight" is the night just
+    // gone. All map to one day's passage.
+    return /(?:come\s+(?:the\s+)?(?:next\s+)?(?:morning|afternoon|evening|night|day)|first\s+light\b|the\s+(?:next|following)\s+(?:morning|afternoon|evening|night|day)|the\s+early\s+morning|overnight)\b/.test(said)
+        ? Math.min(MAX_SKIP, DAY)
+        : null;
+}
+
+/**
  * How much time a phrase says has passed.
  *
  * ── Why the PLAYER's message is the source ──

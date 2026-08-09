@@ -249,12 +249,20 @@ export function precedentFor(events, keywords) {
         if (overlap < 2) {
             continue;
         }
-        // Read off the summary the chronicle already stores. A model wrote it as prose, so this
-        // asks only whether it reads as a reversal — enough for one point of evidence.
-        if (/\b(fail|failed|refus|could not|couldn't|unable|lost|denied|repuls|driven off)\w*/i.test(event?.s ?? '')) {
-            failed++;
-        } else {
+        // ── The outcome is STRUCTURE, not prose ──
+        //
+        // A verdict records its own result as `d.outcome` (`chronicle.recordVerdictEvent`), so a
+        // past attempt's success is read as data, not guessed from the summary's English. The old
+        // path regex-matched "fail|failed|refus|could not|unable|lost|denied" against the summary —
+        // the same language-dependent guess the clock made before the scene probe reported
+        // `elapsed`. An event with no recorded outcome contributes nothing; it cannot be the basis
+        // for a guess. Only `worked` and `failed` count, so the overlap match is all that remains
+        // of the old prose-reading.
+        const outcome = event?.d?.outcome;
+        if (outcome === 'worked') {
             worked++;
+        } else if (outcome === 'failed') {
+            failed++;
         }
     }
 

@@ -33,7 +33,7 @@ import * as clocks from './clocks.js';
 import * as observe from './observe.js';
 import * as review from './review.js';
 import { reviewInstruction, reviewSchema } from './review-table.js';
-import { MIN_INTERVAL, TIME_SKIPPED, looksLikeAttempt, nextInterval, shouldExtract } from './trigger-table.js';
+import { MIN_INTERVAL, looksLikeAttempt, nextInterval, shouldExtract } from './trigger-table.js';
 import * as verdict from './verdict.js';
 import * as world from './world.js';
 import * as plot from './plot.js';
@@ -551,26 +551,6 @@ async function onAssistantMessage() {
         return;
     }
     observe.note(`extract:on-${decision.why.replace(/\s+/g, '-')}`);
-    // ── A narrator-typed elision moves the clock too ──
-    //
-    // `noteElapsed` used to fire only on USER_MESSAGE_RENDERED, which measured the player's own
-    // say-so ("I spend the night") and nothing else. But the narrator writes the same sentences —
-    // "you rest for a week" is one assistant turn and a week — and `sceneMayHaveMoved` was already
-    // parsing them (it returned TIME_SKIPPED, which is exactly how we got here), then throwing the
-    // duration away to arm the world probe. The assistant half of an elision now advances the
-    // clock the same way the player half does, so the calendar front ticks whether the fiction's
-    // time was stated by either side of the exchange.
-    if (decision.why === TIME_SKIPPED) {
-        try {
-            const outcome = state.noteElapsed(lastExchange());
-            if (outcome.skipped) {
-                console.debug(`[fold] the clock advanced ${outcome.minutes} minutes on the narrator's say-so`);
-                panel.render();
-            }
-        } catch (error) {
-            console.error('[fold] failed to advance the clock on a time skip', error);
-        }
-    }
     // Stamped before the call, not after. The pass is async and takes seconds; without this, every
     // reply that lands while it is in flight sees the old stamp, passes the gate, and piles up
     // against the `busy` guard.

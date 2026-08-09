@@ -10,7 +10,7 @@
  */
 
 import { insert_with, lookup, merge_b, merge_bu, table_entries } from './lib/hash.js';
-import { advanceClock, clockAge, clockScalar, isClockStale, parseElapsed, skipClock } from './clock.js';
+import { advanceClock, clockAge, clockScalar, isClockStale, parseElapsed, parseSceneElapsed, skipClock } from './clock.js';
 import { MIN_INTERVAL } from './trigger-table.js';
 import * as chronicle from './chronicle.js';
 import * as entities from './entities.js';
@@ -159,6 +159,42 @@ export function noteElapsed(text) {
     if (minutes === null) {
         return { skipped: false };
     }
+    return advanceClockBy(minutes, 'player');
+}
+
+/**
+ * Advance the clock on the scene probe's report of elapsed time.
+ *
+ * The scene probe reads the narrative with comprehension and reports `elapsed` as the phrase the
+ * story used — "a week", "overnight", "come morning". Unlike the player's own message (which has
+ * to pass the assertion gate in `parseElapsed` to prove it is not a memory), the model has already
+ * asserted that time moved: it is answering the question "how much time passed?". So the phrase is
+ * read as a bare duration (`parseSpan`: "a week", "three hours") and, when it is a scene-transition
+ * marker rather than a unit ("overnight", "come morning", "first light"), through `parseElapsed`'s
+ * transition handling — without the player's assertion gate, because the model is the authority
+ * here, in any language.
+ *
+ * @param {string} text The scene probe's `elapsed` answer.
+ * @returns {{skipped: boolean, minutes?: number}} Whether the clock moved.
+ */
+export function noteSceneElapsed(text) {
+    const minutes = parseSceneElapsed(text);
+    if (minutes === null) {
+        return { skipped: false };
+    }
+    return advanceClockBy(minutes, 'scene');
+}
+
+/**
+ * Advance the persisted clock by a number of minutes and keep its consumers in step.
+ *
+ * The shared half of `noteElapsed` and `noteSceneElapsed`: skip the clock, persist it, tick any
+ * calendar fronts that the elapse runs past, and push the new time into the scene's display field.
+ * @param {number} minutes Minutes to advance.
+ * @param {'player'|'scene'} source Who asserted the passage, for the audit trail.
+ * @returns {{skipped: boolean, minutes: number}} The outcome.
+ */
+function advanceClockBy(minutes, source) {
     const clock = skipClock(loadClock(), minutes);
     if (!clock.accepted) {
         return { skipped: false };
@@ -182,6 +218,9 @@ export function noteElapsed(text) {
     if (context.has('time')) {
         insert_with(context, merge_b, 'time', { v: clock.raw, t: clock.seen ?? 0 });
         commit(CONTEXT_PATH, context);
+    }
+    if (source === 'scene') {
+        observe.note('clock:scene-elapsed');
     }
     return { skipped: true, minutes };
 }

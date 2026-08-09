@@ -275,6 +275,17 @@ export async function judge(attempt, options = {}) {
     setMomentum(verdict.momentum);
     observe.note(`verdict:${verdict.band}`);
 
+    // ── The outcome becomes the next attempt's precedent, as data not prose ──
+    //
+    // `precedentFor` reads past verdicts' outcomes from the chronicle (`d.outcome`). Recording
+    // this one here is what makes the next adjudication able to weigh it — the verdict is decided
+    // in code, so the code records the result it decided, in a language the next code can read.
+    chronicle.recordVerdictEvent({
+        summary: `an attempt adjudicated ${verdict.band}${classified?.against ? ` (against ${classified.against})` : ''}`,
+        keywords: classified?.keywords ?? [],
+        outcome: verdict.band === SETBACK ? 'failed' : 'worked',
+    });
+
     // ── Verdicts write state; they do not vanish into the narrator's block ──
     //
     // §6's third fix. Before this, the only side effect of a verdict was the directive injection.

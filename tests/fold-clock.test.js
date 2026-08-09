@@ -13,6 +13,7 @@ import {
     isClockStale,
     parseClock,
     parseElapsed,
+    parseSceneElapsed,
     skipClock,
     splitLocation,
     timeUntil,
@@ -305,6 +306,30 @@ describe('parseElapsed — the player is the authority on their own time skips',
         // time. Advancing the clock off it would run the story forward for a figure of speech.
         expect(parseElapsed('He will not march a day\'s ride to meet them.')).toBeNull();
         expect(parseElapsed('It was a week\'s journey to the capital.')).toBeNull();
+    });
+});
+
+describe('parseSceneElapsed — the scene probe is the authority, not an English gate', () => {
+    test('reads the durations the scene probe reports', () => {
+        // The scene probe answers "how much time passed?" with the phrase the narrative used. No
+        // assertion gate, because the model has already asserted it — the gate exists only to prove
+        // a PLAYER's free-form message is not a memory.
+        expect(parseSceneElapsed('a week')).toBe(7 * 1440);
+        expect(parseSceneElapsed('3 hours')).toBe(180);
+        expect(parseSceneElapsed('three hours')).toBe(180);
+        expect(parseSceneElapsed('a couple of days')).toBe(2 * 1440);
+        expect(parseSceneElapsed('overnight')).toBe(1440);
+        expect(parseSceneElapsed('come morning')).toBe(1440);
+        expect(parseSceneElapsed('the next morning')).toBe(1440);
+        expect(parseSceneElapsed('first light')).toBe(1440);
+    });
+
+    test('is empty-total and needs no assertion gate', () => {
+        expect(parseSceneElapsed('')).toBeNull();
+        expect(parseSceneElapsed(null)).toBeNull();
+        expect(parseSceneElapsed('yesterday')).toBeNull();
+        // The model reported the passage already; the phrase needs no "spend/continue" to be read.
+        expect(parseSceneElapsed('passage of one week')).toBe(7 * 1440);
     });
 });
 

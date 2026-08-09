@@ -3,9 +3,13 @@ import { describe, expect, test } from '@jest/globals';
 import {
     CLEAR,
     COST,
+    FAILED,
     SETBACK,
+    UNTRIED,
+    WORKED,
     adjudicate,
     matchThread,
+    precedentFor,
     standingRange,
 } from '../public/scripts/extensions/fold/verdict-table.js';
 
@@ -92,5 +96,26 @@ describe('the bands on the fixtures §6 names', () => {
             { momentum: 0, hurt: 0, precedent: 'failed' },
         );
         expect(worked.lo).toBeGreaterThan(failed.lo);
+    });
+
+    test('precedentFor reads recorded outcomes, never the summary\'s English', () => {
+        // The chronicle's summaries are model-written prose; a past attempt's result is decided in
+        // code and recorded as `d.outcome` (chronicle.recordVerdictEvent). The old path regex-matched
+        // "fail|refused|could not" against the summary — the same language-dependent guess the clock
+        // used to make. Only the structured outcome counts now.
+        const events = new Map([
+            ['a', { kw: ['vault', 'goblins'], s: 'The hero vaulted the rank of goblins.', d: { outcome: 'worked' } }],
+            ['b', { kw: ['vault', 'goblins'], s: 'Another goblin rank repulsed the attempt.', d: { outcome: 'failed' } }],
+            // Overlapping keywords but no recorded outcome: no vote, whatever the summary says.
+            ['c', { kw: ['vault', 'goblins'], s: 'The vault was refused outright and utterly lost.' }],
+            ['d', { kw: ['vault', 'goblins'], s: 'The second rank threw them back.', d: { outcome: 'failed' } }],
+        ]);
+        expect(precedentFor(events, ['vault', 'goblins'])).toBe(FAILED);
+        // A summary that LOOKS like a failure but was never adjudicated contributes nothing.
+        expect(precedentFor(new Map([['c', events.get('c')]]), ['vault', 'goblins'])).toBe(UNTRIED);
+        // One clean worked, nothing failed.
+        expect(precedentFor(new Map([['a', events.get('a')]]), ['vault', 'goblins'])).toBe(WORKED);
+        // No keyword overlap at all.
+        expect(precedentFor(events, ['bargain', 'market'])).toBe(UNTRIED);
     });
 });
