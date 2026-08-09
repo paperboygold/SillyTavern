@@ -1230,7 +1230,18 @@ export function mergeThreads(table, left, right) {
     if (!a || !b) {
         return null;
     }
-    const dialled = hasDial(a) !== hasDial(b) ? (hasDial(a) ? left : right) : null;
+    // The keeper is the dial-bearing row when exactly one bears a dial, since a measurable position
+    // is strictly more than none; when both bear dials, the one with MORE FILL is the position the
+    // story has actually reached, and the duplicate's less-advanced reading must not erase it.
+    // "T1 Karr of the Red Hand gathers strength — the east falls to rai" was kept over its own
+    // canonical name purely because the name was longer — and its dial read 1/6 while the canonical
+    // row was at 7/8, so the merge moved the Karr clock BACKWARDS. A longer name is a cosmetic tie
+    // break, never a reason to lose progress; the fill is not.
+    const [dialled] = hasDial(a) !== hasDial(b)
+        ? [hasDial(a) ? left : right]
+        : hasDial(a)
+            ? [normalizeSize(a.size, a.kind) - (a.filled ?? 0) <= normalizeSize(b.size, b.kind) - (b.filled ?? 0) ? left : right]
+            : [null];
     const longer = String(a.name ?? '').length >= String(b.name ?? '').length ? left : right;
     const keepKey = dialled ?? longer;
     const dropKey = keepKey === left ? right : left;

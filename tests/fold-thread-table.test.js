@@ -403,14 +403,44 @@ describe('mergeThreads — the answer to a thread identity question', () => {
         expect(row.kind).toBe(PROGRESS);
     });
 
-    test('when both bear dials the keeper\'s position stands', () => {
+    test('when both bear dials the more advanced position wins', () => {
+        // Two readings of one stake: the fill is the position the story has reached, so a merge
+        // must keep the MORE advanced reading — a duplicate's less-progressed dial must not move
+        // the stake backwards. The keeper's name is a cosmetic tie break, never the reason.
         const table = new Map();
         foldTicks(table, [
             { name: 'the residency window closes', tick: 1, size: 8, kind: DOOM },
             { name: 'residency in Korea', tick: 2, size: 8, kind: DOOM },
         ], { turn: 1 });
         const done = mergeThreads(table, 'the residency window closes', 'residency in korea');
-        expect(table.get(done.key).filled).toBe(done.key === 'the residency window closes' ? 1 : 2);
+        expect(table.get(done.key).filled).toBe(2);
+        expect(table.size).toBe(1);
+    });
+
+    test('a merge keeps the more-advanced Karr dial, not the longer name', () => {
+        // The Royal Succession duplicate: "T1 Karr of the Red Hand gathers strength — the east
+        // falls to rai" is the LONGER name but its dial read 1/6, while the canonical
+        // "Karr of the Red Hand gathers strength" had reached 7/8. Name-length kept the wrong row
+        // and the merge moved the Karr clock backwards; the fill must win. The two rows are built
+        // in SEPARATE passes, because the alias-resolution in one batch would collapse them before
+        // the merge ever sees two rows — exactly how the live duplicate survived until a merge.
+        const table = new Map();
+        foldTicks(table, [{ name: 'Karr of the Red Hand gathers strength', tick: 3, size: 8, kind: DOOM }], { turn: 1 });
+        foldTicks(table, [{ name: 'Karr of the Red Hand gathers strength', tick: 3 }], { turn: 2 });
+        foldTicks(table, [{ name: 'Karr of the Red Hand gathers strength', tick: 1 }], { turn: 3 });
+        // A separate pass with a differently-worded name opens a second row only when no alias
+        // links them yet; force the raw key so the merge has two rows to choose between.
+        table.set('t1 karr of the red hand gathers strength — the east falls to rai', {
+            name: 'T1 Karr of the Red Hand gathers strength — the east falls to rai',
+            first: 1, turn: 2, kind: 'doom', filled: 1, size: 6, status: 'open', seen: 'open', about: 'the east falls to raiders',
+        });
+        const done = mergeThreads(
+            table,
+            'karr of the red hand gathers strength',
+            't1 karr of the red hand gathers strength — the east falls to rai');
+        expect(done).not.toBeNull();
+        expect(table.get(done.key).filled).toBe(7);
+        expect(table.get(done.key).size).toBe(8);
         expect(table.size).toBe(1);
     });
 
