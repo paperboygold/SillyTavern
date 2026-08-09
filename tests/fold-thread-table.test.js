@@ -21,6 +21,7 @@ import {
     nearIdentity,
     normalizeSize,
     normalizeStatus,
+    normalizeThreadName,
     overlayClosures,
     perMinutes,
     renderOpenThreads,
@@ -56,6 +57,21 @@ describe('one table, three shapes', () => {
         const table = new Map();
         foldThreads(table, [{ name: 'the cellar', open: 'nobody has searched it' }], { turn: 1 });
         expect(dialOf(threads(table, 1)[0])).toBeNull();
+    });
+
+    test('a review label echoed into a name resolves to the recorded thread', () => {
+        // The review section lists open threads as "T6 [open] Geldfurt funding", and the model
+        // echoed that label back as a NEW thread name, opening a duplicate of a thread it was told
+        // was already recorded. "T6 Geldfurt funding" must resolve to "Geldfurt funding" so the
+        // proposal merges instead of creating a twin row.
+        const table = new Map();
+        foldThreads(table, [{ name: 'Geldfurt funding', open: 'the true payer is unknown' }], { turn: 1 });
+        foldThreads(table, [{ name: 'T6 Geldfurt funding', open: 'the extent of the network is unknown' }], { turn: 2 });
+        expect(threads(table, 2)).toHaveLength(1);
+        expect(threads(table, 2)[0].name).toBe('Geldfurt funding');
+        expect(normalizeThreadName('T9 second ledger').key).toBe('second ledger');
+        expect(normalizeThreadName('T1 Karr of the Red Hand gathers strength — the east falls to rai').key)
+            .toBe('karr of the red hand gathers strength — the east falls to rai');
     });
 
     test('a progress track keeps the number the story stated', () => {

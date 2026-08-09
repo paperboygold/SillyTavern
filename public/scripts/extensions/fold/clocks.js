@@ -178,6 +178,7 @@ export function instruction() {
         'Name the outcome, not the activity: "the Blight reaches Briarwood", never "dealing with the Blight".',
         `Say whether filling the dial is bad ("${DOOM}") or good ("${PROGRESS}"). Set "kind" and "size" once, when the dial is first established; afterwards send only the tick.`,
         'A thread with no dial is a title plus specifics: "missing-persons cluster" with detail "Arklay County, 15-18 September".',
+        'A thread already listed in the review section is RECORDED — never propose it again as new. The "T6" on a review line is a label, not part of the name; reporting "T6 Geldfurt funding" opens a duplicate of an existing thread.',
         'A thread must have something unresolved, and "open" must say it — the gap, not the goal: "the final command is unknown", "six wolves still to be killed". A flat objective ("kill six wolves") is discarded.',
         'Exposition is not a thread: what a power does, what an object is for, what someone was told to do and then did — background, however new.',
         'Say where each thread came from in "source". Use empty arrays when nothing advanced and nothing new opened.',

@@ -202,7 +202,17 @@ export function normalizeThreadName(raw) {
     if (!display || /^(none|nothing|n\/a|unknown)\b/i.test(display)) {
         return null;
     }
-    return { key: display.toLowerCase(), display };
+    // ── A review label is not a name ──
+    //
+    // The review section lists every open thread as "T6 [open] Geldfurt funding — ...", and the
+    // model has echoed that label back as a new thread name ("T6 Geldfurt funding"), opening a
+    // duplicate of a thread it was literally told was already recorded. Stripping a leading
+    // `T\d+` means such an echo lands on the canonical key instead of creating a twin row. The
+    // label is pure review-bookkeeping, never a name — "T1 Karr..." is the same stake as
+    // "Karr of the Red Hand gathers strength".
+    const stripped = display.replace(/^T\s*\d+(?:\s+[-–—:]\s*|\s+|$)/i, '').trim();
+    const name = stripped || display;
+    return { key: name.toLowerCase(), display: name };
 }
 
 /**
