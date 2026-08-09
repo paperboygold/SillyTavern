@@ -994,17 +994,24 @@ export async function init() {
         recall.clearActivatedWorldInfo();
     });
 
-    // FOLD-SLA §2.3, the "syncing forever" backstop: a non-terminal sync older than the extraction
+    // FOLD-SLA §2.3, the "syncing forever" backstop: an IN-FLIGHT pass older than the extraction
     // window is a hang or an interrupted session, and while extraction is stuck nothing re-renders
     // to apply the stale-guard — so the chip could pulse `syncing` indefinitely. This periodic
     // check corrects the persisted state to `failed` (stalled) so the chip tells the truth, and
     // renders once. A healthy pass completes in well under this window (thinking is disabled for
     // extraction, timeout 60s); anything this old genuinely never finished.
+    //
+    // Deliberately `syncing` ONLY, never `acknowledged`. `acknowledged` is a RESTING state: a
+    // message rendered and extraction is pending, waiting for the interval gate or the next trigger
+    // (index.js onAssistantMessage, `extract:waiting`). It is meant to persist — the interval may
+    // be several turns — and an idle `acknowledged` is not a hang. Measured in the Royal Succession
+    // chat: a chat sat `acknowledged` for hours because `turnsSinceExtract` (1) was under the
+    // interval (2), and this check marked it `failed(stalled)` — a false alarm on a healthy wait.
     setInterval(() => {
         const sync = state.getSync();
-        if ((sync.state === 'syncing' || sync.state === 'acknowledged')
+        if (sync.state === 'syncing'
             && Number.isFinite(sync.since) && Date.now() - sync.since > 150_000) {
-            console.warn('[fold] extraction sync has been non-terminal for >150s; marking it stalled.');
+            console.warn('[fold] an extraction pass has been in flight for >150s; marking it stalled.');
             state.setSync('failed', {
                 mid: sync.mid,
                 reason: 'stalled',

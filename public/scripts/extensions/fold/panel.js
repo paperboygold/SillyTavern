@@ -524,9 +524,18 @@ function syncMeta(state) {
  * failed pass is never silent (FOLD-SLA.md §2.3).
  *
  * A non-terminal state that is far older than the extraction window is a lie — a hang or an
- * interrupted session left `syncing`/`pending` persisted in the chat metadata. A healthy pass is
- * bounded by `EXTRACT_TIMEOUT_MS`, so anything that old was never going to finish; it renders as
- * failed ("stalled") rather than pulsing forever.
+ * interrupted session left `syncing` persisted in the chat metadata. A healthy pass is bounded by
+ * `EXTRACT_TIMEOUT_MS`, so anything that old was never going to finish; it renders as failed
+ * ("stalled") rather than pulsing forever.
+ *
+ * ── `acknowledged` is deliberately NOT stale-flagged ──
+ *
+ * `acknowledged` is a RESTING state — a message rendered and extraction is pending, waiting for
+ * the interval gate or the next trigger (`index.js` onAssistantMessage, `extract:waiting`). It is
+ * meant to persist for however long the cadence says, and an idle `acknowledged` is not a hang.
+ * Measured in the Royal Succession chat: a chat sat `acknowledged` for hours under its interval,
+ * and both the watchdog and this renderer marked it "stalled" — a false alarm on a healthy wait.
+ * Only `syncing` (a pass genuinely in flight) can hang.
  *
  * @param {object} sync The `state.sync` record.
  * @param {object} [opts] Options.
@@ -535,8 +544,7 @@ function syncMeta(state) {
  */
 function renderSyncChip(sync, { compact = false } = {}) {
     let state = sync?.state ?? 'up-to-date';
-    const nonTerminal = state === 'syncing' || state === 'acknowledged';
-    const stale = nonTerminal && Number.isFinite(sync?.since) && (Date.now() - sync.since) > 150_000;
+    const stale = state === 'syncing' && Number.isFinite(sync?.since) && (Date.now() - sync.since) > 150_000;
     if (stale) {
         state = 'failed';
     }

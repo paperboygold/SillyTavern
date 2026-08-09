@@ -139,20 +139,40 @@ const SYSTEM_PROMPT = [
  * `busy` true forever — the pass never finishes, the sync chip pulses `syncing` indefinitely, and
  * every later trigger bails on `busy`. That is what made the chip a liar. This bounds the call so
  * extraction ALWAYS terminates: a hang becomes a failure (red chip, next turn retries) instead of
- * an eternal spinner. The underlying request is not aborted, only given up on — the cost of a
- * provider that never answers is bounded.
+ * an eternal spinner.
+ *
+ * The underlying request is aborted, not just given up on. Before the abort, a timed-out pass left
+ * its request running in the background — a hung provider wedged the connection and the next
+ * generation queued behind it until a page reload (measured in the Royal Succession chat, where a
+ * provider hang left extraction `failed/stalled` and the connection stuck until reload). Aborting
+ * frees the connection the moment the budget is spent, so the next turn retries cleanly.
  */
 export const EXTRACT_TIMEOUT_MS = 60_000;
 
 /**
- * Race a promise against a timeout, rejecting if it does not settle in time.
+ * Race a promise against a timeout, aborting the underlying request when it fires.
+ *
+ * The abort hook is called exactly once, on the timeout, so the caller can release the connection
+ * instead of leaving a zombie request holding it. The timeout is cleared when the promise settles
+ * either way.
+ *
  * @param {Promise<any>} promise The request.
  * @param {number} ms Budget.
+ * @param {Function} [onTimeout] Abort hook, called once when the budget expires.
  * @returns {Promise<any>} The settled value.
  */
-function withTimeout(promise, ms) {
+function withTimeout(promise, ms, onTimeout) {
     return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error(`extraction timed out after ${Math.round(ms / 1000)}s`)), ms);
+        const timer = setTimeout(() => {
+            if (typeof onTimeout === 'function') {
+                try {
+                    onTimeout();
+                } catch (error) {
+                    console.error('[fold] abort hook failed after extraction timeout', error);
+                }
+            }
+            reject(new Error(`extraction timed out after ${Math.round(ms / 1000)}s`));
+        }, ms);
         promise.then(
             (value) => { clearTimeout(timer); resolve(value); },
             (error) => { clearTimeout(timer); reject(error); },
@@ -177,6 +197,12 @@ function withTimeout(promise, ms) {
  * @returns {Promise<any>} Raw result: a string, or already-parsed content.
  */
 async function requestExtraction({ prompt, responseLength, schema, profileId, reasoning = false }) {
+    // Abort the underlying request when the budget expires. A timed-out pass used to leave its
+    // request running in the background — a hung provider wedged the connection and the next
+    // generation queued behind it until a page reload. Aborting frees the connection the moment
+    // the budget is spent.
+    const controller = new AbortController();
+
     if (!profileId) {
         // ── Disable reasoning for extraction ──
         //
@@ -192,6 +218,11 @@ async function requestExtraction({ prompt, responseLength, schema, profileId, re
             oai_settings.show_thoughts = false;
         }
         try {
+            // The chat's own model path. `generateRaw` does not accept an external signal, so the
+            // request cannot be aborted in-flight; the timeout still bounds the pass and `busy` is
+            // cleared in the caller's `finally`, so the next turn retries cleanly. A global
+            // `GENERATION_STOPPED` emit would risk aborting a main generation the user started
+            // while extraction was timing out, so it is deliberately NOT used here.
             return await withTimeout(
                 generateRaw({ prompt, systemPrompt: SYSTEM_PROMPT, responseLength, jsonSchema: schema }),
                 EXTRACT_TIMEOUT_MS);
@@ -217,10 +248,14 @@ async function requestExtraction({ prompt, responseLength, schema, profileId, re
                 // and penalties actively work against structured output.
                 includePreset: false,
                 includeInstruct: false,
+                // Abort the request when `withTimeout` fires — this is what frees the connection so
+                // the next turn retries cleanly instead of queuing behind a hung provider.
+                signal: controller.signal,
             },
             { json_schema: schema },
         ),
-        EXTRACT_TIMEOUT_MS);
+        EXTRACT_TIMEOUT_MS,
+        () => controller.abort());
 
     return result?.content;
 }
