@@ -304,13 +304,27 @@ describe('nearIdentity — a trigger for a question, never a decision', () => {
 });
 
 describe('bounds', () => {
-    test('the table is bounded, and the bound is reported', () => {
+    test('the table is bounded, and the bound is reported when nothing can be evicted', () => {
         const table = new Map();
         for (let i = 0; i < MAX_THREADS; i++) {
             foldThreads(table, [{ name: `thread ${i}`, open: 'unresolved' }], { turn: 1 });
         }
-        const { rejected } = foldThreads(table, [{ name: 'one too many', open: 'unresolved' }], { turn: 1 });
+        // All dial-less threads are equally fresh; the first (also stalest) is evicted to make
+        // room, so a new development is never refused while any stale thread lingers.
+        const accepted = foldThreads(table, [{ name: 'one too many', open: 'unresolved' }], { turn: 1 });
+        expect(accepted.accepted).toBe(1);
+        expect(table.size).toBe(MAX_THREADS);
+        expect(table.has('thread 0')).toBe(false);
+
+        // When every row carries a dial, nothing is expendable — a dial's fill is progress the
+        // story measured, and evicting it would lose real state. The bound is then reported.
+        const dials = new Map();
+        for (let i = 0; i < MAX_THREADS; i++) {
+            foldThreads(dials, [{ name: `dial ${i}`, kind: DOOM, size: 6, open: '' }], { turn: 1 });
+        }
+        const { rejected } = foldThreads(dials, [{ name: 'one more dial', kind: DOOM, size: 6, open: '' }], { turn: 1 });
         expect(rejected[0].reason).toBe('threads-full');
+        expect(dials.size).toBe(MAX_THREADS);
     });
 
     test('the exposition gate still gates dial-less proposals only', () => {

@@ -1051,6 +1051,27 @@ export async function init() {
     eventSource.on(event_types.CHAT_LOADED, refreshPlotGuideInput);
     eventSource.on(event_types.CHAT_CHANGED, refreshPlotGuideInput);
 
+    // ── A reload is a signal to catch up, not to wait ──
+    //
+    // Extraction is trigger-driven: it runs on a new message or the adaptive interval, and neither
+    // fires the moment a page reloads. So a chat that was mid-sync when the user reloaded stays
+    // stuck on whatever the last persisted state was — `acknowledged` (amber "pending") or
+    // `failed` — and reads as "endless pending" even though `busy` is gone and nothing is wrong.
+    // A reload is a fresh chance to look: if there are messages newer than the last successful
+    // extraction mark and the sync is not already terminal, run a pass now so the chip resolves
+    // instead of waiting for the next turn or interval to notice.
+    eventSource.on(event_types.CHAT_LOADED, () => {
+        const sync = state.getSync();
+        if (sync.state === 'syncing' || sync.state === 'acknowledged' || sync.state === 'failed') {
+            const mark = state.extractMark();
+            const newest = (chat ?? []).reduce((last, m, i) => (m?.mes && !m.is_system ? i : last), -1);
+            if (Number.isFinite(mark.mid) && newest > mark.mid) {
+                console.debug(`[fold] chat loaded with messages past the extraction mark (mid ${mark.mid} -> ${newest}); catching up.`);
+                void onAssistantMessage();
+            }
+        }
+    });
+
     // World Info tells us what it is about to inject so recall can avoid paying tokens to repeat
     // it. This is the real activation set for the real scan — never trigger a scan of our own.
     //

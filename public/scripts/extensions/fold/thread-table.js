@@ -469,7 +469,25 @@ export function foldThread(table, {
     }
     const key = canonicalThreadKey(table, parsed.key, aka);
     if (!table.has(key) && table.size >= MAX_THREADS) {
-        return null;
+        // ── The table is full; the stalest expendable thread must make room ──
+        //
+        // `reject:threads-full` measured 8 in the Royal Succession chat because the table never
+        // prunes: every thread stays `open` until the review happens to settle it, so a campaign
+        // with a long tail fills the cap and then refuses every genuinely new development — a
+        // courier's death, a new conspiracy, all rejected because a 28-turn-old tolls petition
+        // still sits open. A thread with a DIAL is preserved (its fill is progress the story
+        // measured); among open dial-less threads the one nobody has touched the longest is the
+        // most likely settled, so it gives up its slot. The eviction is a stored-table delete —
+        // unlike a closure, it is not retractable by a swipe, so it is deliberately the last
+        // resort, only when a new thread would otherwise be refused entirely.
+        const evict = [...table_entries(table)]
+            .filter(([, row]) => row?.status === OPEN_STATUS && !hasDial(row))
+            .sort((a, b) => (a[1]?.turn ?? 0) - (b[1]?.turn ?? 0))[0];
+        if (evict) {
+            table.delete(evict[0]);
+        } else {
+            return null;
+        }
     }
 
     const held = lookup(table, key, {});
