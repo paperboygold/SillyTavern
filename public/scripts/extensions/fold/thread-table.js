@@ -459,6 +459,22 @@ function clamp(value, size, kind = DOOM) {
  * @param {number} [observed.turn] Turn counter.
  * @returns {string|null} The key written, or null if unusable.
  */
+/**
+ * Fold one proposed thread into the table.
+ *
+ * ── Eviction is a return, not a delete ──
+ *
+ * When the table is full, the stalest expendable thread must make room — but that row is not
+ * destroyed, it is RETURNED as `evicted` so the caller can demote it to the cold store. The
+ * selection stays pure (this function does no I/O); the storage layer decides what the returned
+ * row means. See `cold-store.js` ([EVICT]: selection cannot bound a store, so eviction is
+ * demotion, never a relevance-judged delete).
+ *
+ * @param {Map<string, object>} table Thread table, mutated.
+ * @param {object} params Proposed thread fields.
+ * @returns {object|null} `{ key, evicted }` where `evicted` is the row that gave up its slot
+ *   (`null` when the table had room), or null when the thread was unusable.
+ */
 export function foldThread(table, {
     name, tick = 0, size, kind, aka = '', open = '', detail = '', about = '', steps, per = '',
     status = '', seen = OPEN, where = '', source = '', turn = 0, ticked,
@@ -468,6 +484,7 @@ export function foldThread(table, {
         return null;
     }
     const key = canonicalThreadKey(table, parsed.key, aka);
+    let evicted = null;
     if (!table.has(key) && table.size >= MAX_THREADS) {
         // ── The table is full; the stalest expendable thread must make room ──
         //
@@ -477,14 +494,15 @@ export function foldThread(table, {
         // courier's death, a new conspiracy, all rejected because a 28-turn-old tolls petition
         // still sits open. A thread with a DIAL is preserved (its fill is progress the story
         // measured); among open dial-less threads the one nobody has touched the longest is the
-        // most likely settled, so it gives up its slot. The eviction is a stored-table delete —
-        // unlike a closure, it is not retractable by a swipe, so it is deliberately the last
-        // resort, only when a new thread would otherwise be refused entirely.
-        const evict = [...table_entries(table)]
+        // most likely settled, so it gives up its slot. The row is RETURNED, not deleted — the
+        // caller demotes it to the cold store, so a courier's death that lost its slot is still
+        // there to be recalled the moment the story returns to it.
+        const candidate = [...table_entries(table)]
             .filter(([, row]) => row?.status === OPEN_STATUS && !hasDial(row))
             .sort((a, b) => (a[1]?.turn ?? 0) - (b[1]?.turn ?? 0))[0];
-        if (evict) {
-            table.delete(evict[0]);
+        if (candidate) {
+            evicted = { key: candidate[0], row: candidate[1] };
+            table.delete(candidate[0]);
         } else {
             return null;
         }
@@ -532,7 +550,7 @@ export function foldThread(table, {
         source: String(source ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_THREAD_TEXT),
         turn,
     });
-    return key;
+    return { key, evicted };
 }
 
 /**
@@ -613,11 +631,12 @@ export function foldTicks(table, observations, { turn = 0, windowText = '' } = {
         }
 
         const before = lookup(table, canonicalThreadKey(table, parsed.key, observed?.aka), null);
-        const key = foldThread(table, { ...observed, tick, turn });
-        if (!key) {
+        const written = foldThread(table, { ...observed, tick, turn });
+        if (!written) {
             rejected.push({ item: parsed.display, reason: 'threads-full', raw: observed, snippet });
             continue;
         }
+        const key = written.key;
         accepted++;
 
         // Firing is the whole point of a dial, and it happens exactly once — on the tick that
@@ -739,7 +758,7 @@ export function tickCalendar(table, { now, turn = 0 } = {}) {
         if (!written) {
             continue;
         }
-        const after = lookup(table, written, null);
+        const after = lookup(table, written.key, null);
         ticked.push({ key, name: row.name, steps, per, from: row.ticked, to: row.ticked + steps * per });
         if (isFull(after) && !isFull(row)) {
             fired.push({ ...after, key });
@@ -762,10 +781,13 @@ export function tickCalendar(table, { now, turn = 0 } = {}) {
  * @param {object} [options] Options.
  * @param {number} [options.turn] Turn counter.
  * @param {string} [options.windowText] Narrative window, for the diagnostics record.
- * @returns {{accepted: number, rejected: object[]}} What happened.
+ * @returns {{accepted: number, rejected: object[], evicted: Array<{key: string, row: object}>}}
+ *   What happened: accepted count, refusals, and the rows that gave up their slots when the table
+ *   was full — the caller demotes those to the cold store rather than losing them.
  */
 export function foldThreads(table, observations, { turn = 0, windowText = '' } = {}) {
     const rejected = [];
+    const evicted = [];
     let accepted = 0;
     // The window excerpt every rejection records, for the caret-level diagnostics log.
     const snippet = windowSnippet(windowText);
@@ -783,14 +805,18 @@ export function foldThreads(table, observations, { turn = 0, windowText = '' } =
             rejected.push({ item: parsed.display, reason: 'exposition', raw: observed, snippet });
             continue;
         }
-        if (foldThread(table, { ...observed, turn })) {
+        const outcome = foldThread(table, { ...observed, turn });
+        if (outcome) {
             accepted++;
+            if (outcome.evicted) {
+                evicted.push(outcome.evicted);
+            }
         } else {
             rejected.push({ item: parsed.display, reason: 'threads-full', raw: observed, snippet });
         }
     }
 
-    return { accepted, rejected };
+    return { accepted, rejected, evicted };
 }
 
 /**

@@ -152,6 +152,15 @@ export const KNOWN_RULES = Object.freeze([
     // leads and dials together, and the old name is kept below because live chats already carry
     // counts under it and a renamed rule with no history reads as a rule that never fired.
     'reject:threads-full',
+    // The demotion side of the same cap: a thread that gave up its slot was ARCHIVED to the cold
+    // store, not deleted — `threads-archived` counts the demotions, `reject:threads-full` now only
+    // the one case that still refuses (the table full of dial-bearing open threads). See
+    // `cold-store.js` ([EVICT]: eviction is demotion, never a relevance-judged delete).
+    'cap:threads-archived',
+    // The same demotion for the cast: a person nobody has mentioned for two stale windows moves to
+    // the cold store instead of ceasing to exist, so they can be recalled the moment the story
+    // returns to them. `cast-archived` counts those demotions.
+    'cap:cast-archived',
     // Prose the card wrote into a context field that shadows a structured table, refused by the
     // exposition gate during migration. Phase C raises it live; migration raises it once.
     'reject:block-shadow',

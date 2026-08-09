@@ -38,6 +38,7 @@ import {
 // this file already depends on both halves.
 import { markPhrases } from './state-table.js';
 import { identityPairs } from './thread-table.js';
+import * as cold from './cold-store.js';
 import * as observe from './observe.js';
 import { commit, loadTable, loadValue } from './store.js';
 
@@ -200,7 +201,17 @@ export function applyExtraction(fragment, { windowText = '', turn: at = turn(), 
         (fragment?.people ?? []).map(entry => ({ ...entry, kind: PERSON })),
         { windowText, turn: at, mid });
 
-    prune(table, at);
+    // ── Stale entities demote, they do not vanish ──
+    //
+    // `prune` returns the rows it shed; each is archived to the cold store whole, so a person or
+    // lead the story has outrun is preserved for recall rather than destroyed (cold-store.js,
+    // [EVICT]: selection cannot bound a store, so eviction is demotion).
+    const shed = prune(table, at);
+    for (const dropped of shed) {
+        const kind = splitEntityKey(dropped.key).kind === PERSON ? 'person' : 'thread';
+        cold.demote({ kind, key: dropped.key, row: dropped.row, at });
+        observe.noteCap(kind === 'person' ? 'cast-archived' : 'threads-archived');
+    }
     commit(ENTITIES_PATH, table);
 
     // Route this probe's refusals into the shared rejections sink like every other probe's —
@@ -243,12 +254,12 @@ export function questions() {
  * @param {number} at Current turn.
  */
 function prune(table, at) {
-    let dropped = 0;
+    const dropped = [];
     let legacy = 0;
     for (const [key, value] of table_entries(table)) {
         if (at - (value?.turn ?? 0) > ENTITY_STALE * 2) {
+            dropped.push({ key, row: value });
             table.delete(key);
-            dropped++;
             continue;
         }
         // ── One-time heal for leads written before the exposition gate existed ──
@@ -263,6 +274,7 @@ function prune(table, at) {
         // on read would re-judge records that already passed the gate, so a genuine lead whose
         // `open` the model happened to omit would vanish on every repaint with no way back.
         if (splitEntityKey(key).kind === LEAD && !value?.open) {
+            dropped.push({ key, row: value });
             table.delete(key);
             legacy++;
         }
@@ -271,9 +283,13 @@ function prune(table, at) {
         observe.noteCap('leads-ungated', legacy);
     }
     // ENTITY_STALE decides who the panel forgets. Counted, so the number can be judged.
-    if (dropped) {
-        observe.noteCap('entities-pruned', dropped);
+    if (dropped.length) {
+        observe.noteCap('entities-pruned', dropped.length);
     }
+    // The rows that lost their slots are RETURNED, not lost: the caller demotes them to the cold
+    // store, so a person the story left behind is still there to be recalled the moment they return
+    // (cold-store.js, [EVICT]).
+    return dropped;
 }
 
 /**

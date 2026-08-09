@@ -151,7 +151,7 @@ export function routeBlockFields(context, table, { turn = 0 } = {}) {
                 if (written) {
                     // Clamped to its own size on the way in, so a block that restates `4/4` twice
                     // does not overfill. `normalizeSize` is the same rounding the probe uses.
-                    const row = table.get(written);
+                    const row = table.get(written.key);
                     row.filled = Math.min(row.filled ?? 0, normalizeSize(row.size, row.kind));
                     routed++;
                 } else {

@@ -315,6 +315,11 @@ describe('bounds', () => {
         expect(accepted.accepted).toBe(1);
         expect(table.size).toBe(MAX_THREADS);
         expect(table.has('thread 0')).toBe(false);
+        // The evicted row is RETURNED, not lost: the caller demotes it to the cold store, so the
+        // thread that gave up its slot is still there to be recalled (cold-store.js, [EVICT]).
+        expect(accepted.evicted).toHaveLength(1);
+        expect(accepted.evicted[0].key).toBe('thread 0');
+        expect(accepted.evicted[0].row.name).toBe('thread 0');
 
         // When every row carries a dial, nothing is expendable — a dial's fill is progress the
         // story measured, and evicting it would lose real state. The bound is then reported.

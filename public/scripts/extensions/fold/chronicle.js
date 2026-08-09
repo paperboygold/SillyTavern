@@ -27,6 +27,7 @@ import {
     renderEvents,
 } from './chronicle-table.js';
 import * as observe from './observe.js';
+import * as cold from './cold-store.js';
 import { commit, loadTable, registerPruner } from './store.js';
 
 const EVENTS_PATH = 'chronicle.events';
@@ -299,6 +300,13 @@ export function applyExtraction(fragment, { sources = [], now = Date.now(), wind
     // DUPLICATE_WINDOW decides what it declines to remember; neither left any evidence that it had
     // acted, so neither number could be judged. See observe.js.
     if (evicted?.length) {
+        // ── Evicted events demote, they do not vanish ──
+        //
+        // An event past MAX_EVENTS is archived to the cold store with its summary and keywords
+        // intact, so recall can still find it by subject ([EVICT]: selection cannot bound a store).
+        // `events-evicted` now means "demoted", and the cold store's own ceiling is the only place
+        // an event can truly be dropped.
+        demoteEvents(evicted, outcome.events);
         observe.noteCap('events-evicted', evicted.length);
     }
     if (outcome.duplicates.length) {
@@ -653,8 +661,44 @@ registerPruner((overBy) => {
         max: Math.max(0, events.size - target),
     });
     if (!evicted.length) return;
+    // ── The registered pruner demotes too ──
+    //
+    // This is the budget path, not the MAX_EVENTS path, but the discipline is the same: an event
+    // shed to fit the metadata blob is archived to the cold store, not destroyed ([EVICT]).
+    demoteEvents(evicted, events);
     observe.noteCap('events-evicted', evicted.length);
     commit(EVENTS_PATH, pruned);
     invalidateIndex();
     console.debug(`[fold] chronicle pruned ${evicted.length} event(s) to fit the metadata budget`);
 });
+
+/**
+ * Archive a list of evicted events to the cold store, whole.
+ *
+ * `evicted` is a list of table keys (`chronicle-table.js` `pruneEvents`); each key is looked up in
+ * the pre-prune map so the row is archived exactly as it was stored, then the cold store keeps it
+ * with its summary and keywords intact. The key used for cold storage is the event's own key, so a
+ * later pass that re-proposes the same beat can dedupe against it.
+ *
+ * @param {string[]} evicted Event keys that left the hot ledger.
+ * @param {Map<string, object>} before The ledger BEFORE pruning, to read the rows from.
+ */
+function demoteEvents(evicted, before) {
+    for (const key of evicted) {
+        const event = before.get(key);
+        if (!event) {
+            continue;
+        }
+        cold.demote({
+            kind: 'event',
+            key,
+            row: {
+                s: event.s,
+                kw: Array.isArray(event.kw) ? event.kw : [],
+                t: event.t,
+                src: event.src,
+            },
+            at: event.t ?? 0,
+        });
+    }
+}

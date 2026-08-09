@@ -49,6 +49,7 @@ import {
 } from './thread-table.js';
 import { lookup } from './lib/hash.js';
 import * as chronicle from './chronicle.js';
+import * as cold from './cold-store.js';
 import * as observe from './observe.js';
 import { commit, loadTable } from './store.js';
 
@@ -210,6 +211,18 @@ export function applyExtraction(fragment, { turn = 0, windowText = '', sources =
     const ticks = foldTicks(table, proposed ?? [], { turn, windowText });
     const opened = foldThreads(table, fragment?.leads ?? [], { turn, windowText });
     commit(THREADS_PATH, table);
+
+    // ── A full table sheds to the cold store, not to oblivion ──
+    //
+    // `foldThreads` RETURNS the rows that gave up their slots instead of deleting them. Demoting
+    // them here keeps the hot table bounded while preserving the thread whole — a courier's death
+    // that lost its slot at turn 34 is still recallable the moment the story returns to it
+    // (cold-store.js, [EVICT]). The `threads-full` rejection now only means "the table was full and
+    // even the stalest expendable row was dial-bearing", which is the one case that still refuses.
+    for (const evicted of opened.evicted) {
+        cold.demote({ kind: 'thread', key: evicted.key, row: evicted.row, at: turn });
+        observe.noteCap('threads-archived');
+    }
 
     const rejected = [...ticks.rejected, ...opened.rejected];
     // Anchor refusals to the newest message the pass read, for the log's cause-link.
@@ -401,6 +414,12 @@ export function set(name, { filled, size, kind, about, seen, status, turn = 0 } 
     });
     if (!written) {
         return false;
+    }
+    // A hand-set dial can evict the stalest expendable thread the same way an extraction pass can;
+    // the returned row is demoted to the cold store rather than lost (cold-store.js, [EVICT]).
+    if (written.evicted) {
+        cold.demote({ kind: 'thread', key: written.evicted.key, row: written.evicted.row, at: turn });
+        observe.noteCap('threads-archived');
     }
     commit(THREADS_PATH, table);
     return true;
