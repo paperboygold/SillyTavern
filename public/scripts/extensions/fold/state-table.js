@@ -139,7 +139,7 @@ export const CATEGORIES = new Set([ASSETS, ABILITIES, MONEY]);
 const CATEGORY_WORDS = new Map([
     [ASSETS, /^(assets?|property|holdings?|possessions?|estates?)\b/],
     [ABILITIES, /^(abilit(?:y|ies)|skills?|powers?|talents?|traits?|spells?)\b/],
-    [MONEY, /^(money|currency|currencies|funds?|coins?|cash|wealth)\b/],
+    [MONEY, /^(money|currency|currencies|funds?|coins?|cash|wealth|treasur(?:y|ies)|coffers?|vaults?|.*\bfunds?)\b/],
 ]);
 
 /** Separator between place and item in an inventory key. Not typeable, so it cannot collide. */
@@ -1269,7 +1269,9 @@ export function validateInventory({ inv, deltas, windowText, budget = MAX_CHANGE
         }
         // An absolute quantity from a restated block. Bounds-checked like everything else, but it
         // is not a magnitude of change, so the delta cap below does not apply to it.
-        const restated = Number.isFinite(raw?.set);
+        // `set: 0` is not a total — nothing is held at zero, and strict mode forces the field into
+        // every row, so a 0/null `set` on an ordinary delta must read as "not a restatement".
+        const restated = Number.isFinite(raw?.set) && (raw?.set ?? 0) > 0;
         // A quantity baked into the name ("3x potion") wins only when no explicit delta was given.
         const dq = Number.isFinite(raw?.dq) && raw.dq !== 0 ? Math.trunc(raw.dq) : (parsed.qty ?? 0);
 
@@ -1626,6 +1628,9 @@ export function deriveState(events, { seeds = [] } = {}) {
             // A restated TOTAL overwrites; a delta accumulates. Both land in the same table and
             // the same audit trail, recorded as the change they actually represented — so a
             // restatement that corrects a runaway count shows up as the correction it is.
+            // `set: 0` remains a REMOVAL here: the fold runs over stored events and block
+            // restatements, where a literal "set 0" means "nothing left", and `validateInventory`
+            // already refused a model-authored `set: 0` at write time.
             const restated = Number.isFinite(change?.set);
             const dq = restated ? setQty(inv, key, change.set) : Number(change?.dq ?? 0);
             if (!restated && !dq) continue;

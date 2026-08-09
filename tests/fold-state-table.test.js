@@ -133,6 +133,48 @@ describe('item places', () => {
         expect(block).toContain('Carrying: wallet');
         expect(block).toContain('Stored (apartment): shotgun');
     });
+
+    test('a treasury is money, whatever the model calls it', () => {
+        // The Royal Succession vault scene: "the coin is where it should be — 12,400 marks in
+        // silver and gold, counted in the ledgers." The model reached for `at: "treasury"` — a
+        // natural word — and without this it became a PLACE named "treasury", so the balance was
+        // never money and the pinned Money: line never appeared. A treasury, coffers and a vault
+        // are stores of money, not rooms to visit.
+        expect(normalizePlace('treasury')).toBe(MONEY);
+        expect(normalizePlace('the treasury')).toBe(MONEY);
+        expect(normalizePlace('coffers')).toBe(MONEY);
+        expect(normalizePlace('vault')).toBe(MONEY);
+        expect(normalizePlace('discretionary fund')).toBe(MONEY);
+    });
+
+    test('a stated balance establishes through set, not dq', () => {
+        // The extraction schema exposes `set` so a first-stated treasury ("12,400 marks") lands as
+        // an establishment. Fold it and the money row appears at the stated total — and "treasury"
+        // normalizes to money, never to a place called "treasury".
+        const { inv } = deriveState([
+            ev(1, { inv: [{ item: 'marks', dq: 0, set: 12400, at: 'treasury' }] }),
+        ]);
+        expect(inv.get(itemKey('marks', MONEY))).toEqual({ qty: 12400 });
+        // The single money row is keyed under the money place — there is no second row at a place
+        // literally called "treasury".
+        const entries = [...inv.entries()];
+        expect(entries).toHaveLength(1);
+        expect(splitItemKey(entries[0][0]).place).toBe(MONEY);
+    });
+
+    test('a model-authored set: 0 under strict mode is not a restatement', () => {
+        // Strict structured output forces `set` into every row, so the write path must read a
+        // 0/null `set` on an ordinary delta as "not a restatement" — otherwise every item the
+        // model touches resets to zero. (The fold path still treats a stored `set: 0` as a
+        // removal; that is the difference between a proposal and a record.)
+        const result = validateInventory({
+            inv: new Map(),
+            windowText: 'she picked up a rope',
+            deltas: [{ item: 'rope', dq: 1, set: 0 }],
+        });
+        expect(result.accepted).toEqual([{ item: 'rope', dq: 1 }]);
+        expect(result.rejected).toEqual([]);
+    });
 });
 
 describe('normalizeKey', () => {

@@ -620,12 +620,16 @@ export function deltaSchema() {
                     properties: {
                         item: { type: 'string', description: 'Item name, singular, lowercase.' },
                         dq: { type: 'integer', description: 'Change in quantity: positive gained, negative lost.' },
+                        set: {
+                            type: 'integer',
+                            description: 'The absolute total now held, instead of a change — "the treasury holds 12,400 marks" is set 12400, never dq. Use set only when the story states a current balance or count outright.',
+                        },
                         at: {
                             type: 'string',
-                            description: 'Where it is: "carried" (on the character, incl. worn or drawn), a place name ("apartment", "car boot"), "assets" (owned property not carried), "abilities" (a capability), or "money" (the currency name, dq = amount). Contact details — a phone number, address, email — are never items.',
+                            description: 'Where it is: "carried" (on the character, incl. worn or drawn), a place name ("apartment", "car boot"), "assets" (owned property not carried), "abilities" (a capability), or "money" (the currency name, set or dq = amount). Contact details — a phone number, address, email — are never items.',
                         },
                     },
-                    required: ['item', 'dq', 'at'],
+                    required: ['item', 'dq', 'set', 'at'],
                     additionalProperties: false,
                 },
             },
@@ -697,6 +701,7 @@ export function deltaInstruction() {
         // So money leads the list, and the treasury cases that are NOT a pocketed balance are named
         // outright: a fund granted, a debt incurred, a revenue change — those are money moving too.
         'Money is "at": "money" — name the currency (won, credits, gold, silver), amount in dq, exact as the story says. Grants, purchases, taxes, tolls, debts and funds are money changing hands: a discretionary fund granted is a money gain for the recipient and a loss for the giver, not an inventory item.',
+        'A balance the story states outright — "the treasury holds 12,400 marks" — is "set" to that total, never a dq change. Use set only for a stated current balance; use dq for movement.',
         'dcur is the change from the current value, never the new total; max only when newly established.',
         'Contact details (phone number, address, email) are NOT items — never record them as gained.',
         'Set "at": "carried" when on the character, otherwise the place; moving between places is a loss in one and a gain in the other.',

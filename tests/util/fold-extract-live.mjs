@@ -47,7 +47,7 @@ const API_KEY = readKey();
 
 // ── the chat: header + messages, exactly as fold's buildWindow sees them ──
 const lines = fs.readFileSync(path, 'utf8').split('\n').filter(l => l.trim());
-const header = JSON.parse(lines[0]);
+// Line 0 is the chat header (metadata); message lines follow.
 const messages = lines.slice(1).map((l, mid) => ({ mid, raw: JSON.parse(l) }));
 const chat = messages.map(({ mid, raw }) => ({ mid, message: raw }));
 const window = splitWindow(chat.map(({ mid, message }) => ({
@@ -82,9 +82,10 @@ const schema = {
                                     properties: {
                                         item: { type: 'string', description: 'Item name, singular, lowercase.' },
                                         dq: { type: 'integer', description: 'Change in quantity: positive gained, negative lost.' },
+                                        set: { type: 'integer', description: 'The absolute total now held, instead of a change — "the treasury holds 12,400 marks" is set 12400, never dq.' },
                                         at: { type: 'string', description: 'Where it is: "carried", a place, "assets", "abilities", or "money".' },
                                     },
-                                    required: ['item', 'dq', 'at'],
+                                    required: ['item', 'dq', 'set', 'at'],
                                     additionalProperties: false,
                                 },
                             },
@@ -134,7 +135,7 @@ const schema = {
 
 const instructions = [
     '- events: Record only events with lasting consequence: decisions, revelations, changes in relationship or location, promises, injuries, acquisitions. Ignore small talk and scenery. Return an empty array if nothing of consequence happened.',
-    'For each event, record what it CHANGED — changes, not totals. Record only what the excerpt NAMES and actually changes. Contact details are NOT items. Set "at": "carried" when on the character, otherwise the place. Money is "at": "money" — name the currency, amount in dq. Every condition belongs to somebody: "who" is the person\'s name; empty only for the point-of-view character. Record the affliction, never the reassurance.',
+    'For each event, record what it CHANGED — changes, not totals. Record only what the excerpt NAMES and actually changes. Money is "at": "money" — name the currency (won, credits, gold, silver), amount in dq, exact as the story says. Grants, purchases, taxes, tolls, debts and funds are money changing hands: a discretionary fund granted is a money gain for the recipient and a loss for the giver, not an inventory item. A balance the story states outright — "the treasury holds 12,400 marks" — is "set" to that total, never a dq change. Contact details are NOT items. Set "at": "carried" when on the character, otherwise the place. Every condition belongs to somebody: "who" is the person\'s name; empty only for the point-of-view character. Record the affliction, never the reassurance.',
     'Respond with JSON only.',
 ].join('\n');
 
@@ -169,7 +170,7 @@ const body = {
     ...(process.env.FOLD_TEST_THINKING ? { thinking: { type: process.env.FOLD_TEST_THINKING } } : {}),
 };
 
-console.log(`=== calling DeepSeek (api.deepseek.com/chat/completions) ===`);
+console.log('=== calling DeepSeek (api.deepseek.com/chat/completions) ===');
 console.log(`model: deepseek-chat · max_tokens: 8192 · prompt chars: ${prompt.length} · schema chars: ${JSON.stringify(schema).length}`);
 console.log(`window: ${window.sources.length} fresh message(s), ${window.context} context\n`);
 
