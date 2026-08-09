@@ -107,6 +107,18 @@ export const PREFIX = { thread: 'T', place: 'P', mark: 'M', adversary: 'A', lock
 export const MAX_QUESTIONS = 8;
 
 /**
+ * How many turns a thread may go unposed before the review must ask about it anyway.
+ *
+ * The safety valve on `[TLB]`'s touched-only posing (see `reviewableWindow`). A thread the window
+ * never mentions is usually a thread that will answer "still open" — but a thread that stops being
+ * named is exactly the thread most likely to have been settled off-screen, and it must not be able
+ * to sit unasked forever. Every REVIEW_EVERY turns, the untouched threads get one look. Set from
+ * the cadence that matters: a couple of scenes' worth of turns, so the valve never floods a pass
+ * (untouched threads are posed once per valve, not every pass) and never lets a thread rot either.
+ */
+export const REVIEW_EVERY = 8;
+
+/**
  * How many mark lines one review block may carry.
  *
  * `MAX_FLAGS = 32` bounds the marks TABLE (`state-table.js`) and would allow a block with
@@ -569,6 +581,45 @@ export function isTouched(thread, windowText) {
     // a thread is referred to by its subject, not by its title.
     return String(thread?.name ?? '').toLowerCase().split(/[^\p{L}\p{N}'-]+/u)
         .some(token => token.length > 4 && haystack.includes(token));
+}
+
+/**
+ * The threads the review should pose this pass.
+ *
+ * ── [TLB]: the hot set must be proportional to the window ──
+ *
+ * STATE-ARCHIVE.md [TLB] measured what a fixed hot set costs: at constant slots, misses grow ~3x
+ * per doubling of context, so the resident set has to scale with the window or it spends everything
+ * re-reading what it already knows. The review's hot set used to be "every open thread, every
+ * pass" — measured in the Royal Succession chat at ~24 lines per pass, 1473 lines total, with 78%
+ * of them answered "still open" or not at all. The window can only settle threads it touches, so
+ * posing a thread the window never mentions is paying tokens to hear "still open".
+ *
+ * The rule: pose a thread when the window touches it (it might change this pass) OR when it has not
+ * been posed for REVIEW_EVERY turns (the safety valve — a thread nothing touches still deserves a
+ * regular look, because a thread that stopped being named is exactly the thread most likely to have
+ * been settled off-screen).
+ *
+ * @param {object[]} reviewable The open threads (already status/full-filtered).
+ * @param {string} windowText The new half of the window.
+ * @param {number} turn Current turn.
+ * @param {number} [every] How many turns a thread may go unposed before it must be asked again.
+ * @returns {object[]} The threads to pose, touched-first.
+ */
+export function reviewableWindow(reviewable, windowText, turn = 0, every = REVIEW_EVERY) {
+    const list = Array.isArray(reviewable) ? reviewable : [];
+    const touched = [];
+    const stale = [];
+    for (const thread of list) {
+        if (isTouched(thread, windowText)) {
+            touched.push(thread);
+        } else if ((turn - (thread?.turn ?? 0)) >= every) {
+            stale.push(thread);
+        }
+    }
+    // Touched first (the ones the window may settle), then the stale safety valve, so a pass with
+    // a hot window poses only what it can actually act on.
+    return [...touched, ...stale];
 }
 
 /** Statuses a thread may be left in by a closure. Re-exported so `review.js` need not reach past. */

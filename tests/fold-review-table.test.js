@@ -14,6 +14,7 @@ import {
     planReview,
     reviewBlock,
     reviewSchema,
+    reviewableWindow,
 } from '../public/scripts/extensions/fold/review-table.js';
 import {
     CLOSED,
@@ -635,12 +636,53 @@ describe('an answer fold cannot place is refused, never repaired by guessing', (
     });
 });
 
-describe('the §12 fallback, built and not yet armed', () => {
+describe('the §12 fallback, armed', () => {
     test('isTouched finds a thread the new window is actually about', () => {
         expect(isTouched({ name: 'A weapon that is not a goblin’s knife' }, 'he set the shortsword aside; the weapon question is settled')).toBe(true);
         expect(isTouched({ name: 'Hunter residency: twenty D-rank raids' }, 'the residency window is what worries him')).toBe(true);
         expect(isTouched({ name: 'Teaching Jin-Woo IT' }, 'the ahjumma hands over two wrapped candies')).toBe(false);
         expect(isTouched({ name: 'anything' }, '')).toBe(false);
+    });
+
+    test('reviewableWindow poses only touched threads within the valve window ([TLB])', () => {
+        const threads = [
+            { key: 'a', name: 'the courier killer', turn: 3 },
+            { key: 'b', name: 'Karr of the Red Hand', turn: 40 },
+            { key: 'c', name: 'the tolls petition', turn: 5 },
+        ];
+        // The window mentions the courier; at turn 41, the two threads last updated before the
+        // valve window (turn 41 - REVIEW_EVERY = 33) are also posed. Karr was updated at 40, so it
+        // is neither touched nor stale — it waits for a pass that mentions it.
+        const posed = reviewableWindow(threads, 'The courier was pulled from the river.', 41);
+        const names = posed.map(t => t.name);
+        expect(names).toContain('the courier killer');
+        expect(names).toContain('the tolls petition');
+        expect(names).not.toContain('Karr of the Red Hand');
+    });
+
+    test('reviewableWindow poses touched threads even when recently updated', () => {
+        const threads = [
+            { key: 'a', name: 'the courier killer', turn: 41 },
+        ];
+        const posed = reviewableWindow(threads, 'The courier was pulled from the river.', 41);
+        expect(posed.map(t => t.name)).toEqual(['the courier killer']);
+    });
+
+    test('reviewableWindow with no window poses only the stale safety valve', () => {
+        const threads = [
+            { key: 'a', name: 'the courier killer', turn: 3 },
+            { key: 'b', name: 'Karr of the Red Hand', turn: 40 },
+        ];
+        // No window means nothing is touched; only the thread that has gone unlooked-at longest
+        // (turn 3, well past REVIEW_EVERY before turn 41) gets its regular look.
+        const posed = reviewableWindow(threads, '', 41);
+        expect(posed.map(t => t.name)).toEqual(['the courier killer']);
+    });
+
+    test('a thread updated within the valve window and untouched is not posed', () => {
+        const threads = [{ key: 'b', name: 'Karr of the Red Hand', turn: 40 }];
+        const posed = reviewableWindow(threads, 'The week settles into a rhythm.', 41);
+        expect(posed).toHaveLength(0);
     });
 });
 

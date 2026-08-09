@@ -188,7 +188,9 @@ async function classify(attempt, { window = 6, profileId = '', responseLength = 
     // never in the evidence. `precedentFor` was the only tracked fact that reached the verdict. The
     // pinned ledger closes that: "an E-rank with a wounded calf vaults a rank of charging goblins"
     // is visibly opposed-and-reckless when the block carries the calf wound and the rank.
-    const ledger = state.ledgerBlock();
+    // The attempt text is the window: the ledger poses the threads the attempt touches, so the
+    // judge sees what is actually at stake in this attempt, not every open thread ([TLB]).
+    const ledger = state.ledgerBlock({ windowText: attempt });
 
     const prompt = [
         'Transcript:', '---', recent, '---', '',

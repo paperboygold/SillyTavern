@@ -45,7 +45,7 @@ import {
     validateStatus,
     validateVitals,
 } from './state-table.js';
-import { reviewBlock } from './review-table.js';
+import { reviewBlock, reviewableWindow } from './review-table.js';
 import * as review from './review.js';
 import { commit, loadTable } from './store.js';
 import * as log from './log.js';
@@ -966,13 +966,15 @@ export function ledgerBlock({ windowText = '' } = {}) {
     const staleElsewhere = castRows.elsewhere
         .filter(person => !isMentioned(person.name, windowText) && (person.stale ?? 0) >= PLACE_STALE_AFTER);
     const unplaced = [...castRows.unplaced, ...misplaced, ...staleElsewhere];
+    // ── [TLB]: the review's hot set scales with the window ──
+    //
+    // Every open thread used to be posed every pass — measured at ~24 lines/pass, 1473 lines over
+    // the Royal Succession chat, 78% answered "still open" or not at all. The window can only settle
+    // threads it touches, so `reviewableWindow` poses the touched ones (they might change) and the
+    // untouched ones only on the REVIEW_EVERY safety valve ([TLB]: a fixed hot set doesn't scale;
+    // STATE-ARCHIVE.md measured misses growing ~3x per context doubling at constant slots).
     const { text: asked, index } = reviewBlock({
-        // Every open thread, dialled or not, LOCAL OR NOT, stale or not — `clocks.reviewable`
-        // rather than `clocks.sections`, and its docblock has the hand-check that forced the
-        // distinction. A dial can become moot as easily as a lead can be settled, and `tick === 0`
-        // being refused as `no-change` (`thread-table.js` foldTicks) is exactly why a dial that
-        // stopped mattering had no exit before this.
-        threads: clocks.reviewable(turn),
+        threads: reviewableWindow(clocks.reviewable(turn), windowText, turn),
         unplaced,
         contests: contests().map(contest => ({
             field: contest.field, locked: contest.lockedValue, value: contest.narrativeValue, count: contest.count,
