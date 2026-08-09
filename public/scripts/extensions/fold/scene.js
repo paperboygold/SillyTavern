@@ -160,7 +160,10 @@ export function applyExtraction(fragment, { windowText = '', sources = [] } = {}
     // "the week settles" or "first light" left it frozen because fold tried to recognise those
     // phrasings in English. The model reads the prose already; it is asked, not matched. Anchored
     // to nothing (elapsed is arithmetic, not an event), so a swipe that removes the passage cannot
-    // be retracted by the ledger — the clock is a running position, and the next pass re-derives it.
+    // be retracted by the ledger. That is deliberate: time that passed stays passed, and the clock
+    // is a running position that only moves forward — a swipe rewrites the future, not the past.
+    // Double-counting is prevented structurally by the window gate in `extract.js`: a pass runs
+    // only on messages past the high-water mark, so the same passage is never read twice.
     const elapsed = String(fragment?.elapsed ?? '').trim();
     if (elapsed) {
         try {

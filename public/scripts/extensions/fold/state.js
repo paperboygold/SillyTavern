@@ -169,10 +169,9 @@ export function noteElapsed(text) {
  * story used — "a week", "overnight", "come morning". Unlike the player's own message (which has
  * to pass the assertion gate in `parseElapsed` to prove it is not a memory), the model has already
  * asserted that time moved: it is answering the question "how much time passed?". So the phrase is
- * read as a bare duration (`parseSpan`: "a week", "three hours") and, when it is a scene-transition
- * marker rather than a unit ("overnight", "come morning", "first light"), through `parseElapsed`'s
- * transition handling — without the player's assertion gate, because the model is the authority
- * here, in any language.
+ * read as a bare duration and, when it is a scene-transition marker rather than a unit ("overnight",
+ * "come morning", "first light"), as the day its marker implies — `parseSceneElapsed` handles both,
+ * without the player's assertion gate, because the model is the authority here, in any language.
  *
  * @param {string} text The scene probe's `elapsed` answer.
  * @returns {{skipped: boolean, minutes?: number}} Whether the clock moved.
