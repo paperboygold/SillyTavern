@@ -264,6 +264,34 @@ describe('parseElapsed — the player is the authority on their own time skips',
         expect(parseElapsed(null)).toBeNull();
         expect(parseElapsed('I frown a bit.')).toBeNull();
     });
+
+    test('a narrator\'s scene transition moves the clock too', () => {
+        // The Royal Succession chat: the narrator wrote "The week settles into a rhythm of early
+        // mornings", "Come morning I rise early", "First light comes grey and cold", "the study is
+        // cool in the early morning" — and the clock never advanced, because the old gate only
+        // recognised a player's declarative "spend/continue/wait". A forward scene-break marker is
+        // as unambiguous a claim as "spend": "come morning" and "first light" are a night's
+        // passage, "the week settles" is the week it names.
+        expect(parseElapsed('Come morning I rise early, and go to walk the grounds.')).toBe(1440);
+        expect(parseElapsed('The next morning, assuming nobody kills me in the night, I rise.')).toBe(1440);
+        expect(parseElapsed('First light comes grey and cold through the tower window.')).toBe(1440);
+        expect(parseElapsed('The study is cool in the early morning, the fire laid but not yet lit.')).toBe(1440);
+        expect(parseElapsed('The week settles into a rhythm of early mornings and quiet evenings.')).toBe(7 * 1440);
+        expect(parseElapsed('A day passes by in the muster camp.')).toBe(1440);
+        expect(parseElapsed('The month settles into a routine.')).toBe(30 * 1440);
+    });
+
+    test('"overnight" is the night that passed, not a backward reference', () => {
+        // "the wind having died overnight" is the night just gone — a transition to the morning
+        // that followed it. The old backward-gate rejected "overnight" like "last night", freezing
+        // the clock on the new day's opening.
+        expect(parseElapsed('First light comes grey and cold through the tower window, the wind having died overnight.')).toBe(1440);
+    });
+
+    test('backwards phrasings are still history', () => {
+        expect(parseElapsed('It was last night that the courier died.')).toBeNull();
+        expect(parseElapsed('I remember the week we spent in the capital yesterday.')).toBeNull();
+    });
 });
 
 describe('skipClock', () => {

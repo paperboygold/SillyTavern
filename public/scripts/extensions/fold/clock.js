@@ -312,6 +312,19 @@ const SPANS = [
     [/\b(?:several|a few|some) (?:days|weeks)\b/, null],
     [/\b(\d{1,4})\s*(minutes?|hours?|days?|weeks?|months?|years?)\b/, null],
     [/\b(?:a|one|another) (day|week|month|year)\b/, null],
+    // Scene-transition markers that carry their own unit. "Come morning" is one night's passage
+    // (the sleep before it); "the week settles" is the week it says. Both are the narrator's way
+    // of saying time moved, and both are as concrete as any span. Given explicit minutes rather
+    // than the vague unit-fallback, because a transition to morning is exactly one night and the
+    // fallback would guess three days.
+    [/\bcome\s+(?:the\s+)?(?:next\s+)?(?:morning|afternoon|evening|night|day)\b/, null],
+    [/\bthe\s+(?:next|following)\s+(?:morning|afternoon|evening|night|day)\b/, null],
+    // "First light comes" and "the early morning" open a new day the same way "come morning" does —
+    // a scene that had been in the dark or the previous evening has moved to a fresh morning.
+    [/\bfirst\s+light\s+comes?\b/, null],
+    [/\bthe\s+early\s+morning\b/, null],
+    [/\bthe\s+(week|month|year)\s+settles\b/, null],
+    [/\ba\s+(day|week|month|year)\s+(?:settles|passes|passed|goes|went)\s+by\b/, null],
 ];
 
 /** Minutes per unit, so an explicit span in any unit is one multiplication. */
@@ -382,11 +395,22 @@ export function parseSpan(text) {
  */
 export function parseElapsed(text) {
     const source = String(text ?? '').toLowerCase();
-    if (!source || /\b(?:ago|earlier|last night|yesterday)\b/.test(source)) {
+    // Backward-looking phrasing is history, not a skip: "an hour ago", "yesterday", "last night".
+    // "Overnight" is NOT in that class — "the wind having died overnight" is the night that just
+    // passed, and rejecting it froze the clock on the morning that followed it (the Royal
+    // Succession chat's "First light comes grey and cold... the wind having died overnight").
+    if (!source || /\b(?:ago|earlier|yesterday|last night)\b/.test(source)) {
         return null;
     }
     // A skip has to be asserted, not merely mentioned: "for the next", "spend", "continue".
-    if (!/\b(?:for the next|for another|over the next|spend|spends|spent|continue|continues|keeps? (?:at|working)|work(?:s|ed)? (?:on|through)|wait(?:s|ed)?|rest(?:s|ed)?|sleep(?:s|t)?)\b/.test(source)) {
+    // The narrator's phrasings count too — "come morning", "the week settles", "a day passes" —
+    // because a narrator writes time passage as scene movement, not as a player's declaration of
+    // intent. Measured on the Royal Succession chat: "The week settles into a rhythm of early
+    // mornings" and "Come morning I rise early" both moved the story forward a day and a week, and
+    // the clock never advanced for either because the gate recognised only a narrow set of verbs.
+    // A forward scene-break marker is as unambiguous a claim as "spend", and no more likely to be
+    // history: "come morning", "the next/following day", "a week settles/passes/goes by".
+    if (!/\b(?:for the next|for another|over the next|spend|spends|spent|continue|continues|keeps? (?:at|working)|work(?:s|ed)? (?:on|through)|wait(?:s|ed)?|rest(?:s|ed)?|sleep(?:s|t)?|come\s+(?:the\s+)?(?:next\s+)?(?:morning|afternoon|evening|night|day)|the\s+(?:next|following)\s+(?:morning|afternoon|evening|night|day)|first\s+light\s+comes?|the\s+early\s+morning|a\s+(?:day|week|month|year)\s+(?:settles|passes|passed|goes|went)\s+by|the\s+(?:week|month|year)\s+settles)\b/.test(source)) {
         return null;
     }
 
@@ -394,6 +418,25 @@ export function parseElapsed(text) {
         const match = source.match(pattern);
         if (!match) continue;
         if (minutes !== null) return minutes;
+
+        // ── Scene-transition markers carry their own unit ──
+        //
+        // "come morning" and "the next morning" are a night's passage; "the week settles" and
+        // "a day passes by" are the unit they name. These are NOT "several days" (vague, 3x the
+        // unit) and NOT a counted "N days" — they name one transition, and the unit word sits in
+        // the phrase. Map it to a single unit so the clock moves by what the story said.
+        const transition = match[0].match(/\b(?:morning|afternoon|evening|night|day|week|month|year)s?\b/);
+        if (/^first\s+light/.test(match[0]) || /^the\s+early\s+morning$/.test(match[0])
+            || (transition && /^(morning|afternoon|evening|night|day)$/.test(transition[0]))) {
+            // A transition to a part of a day is one night/day's passage. DAY for a day-name;
+            // for a named part of day the passage is the night that precedes it — bounded by
+            // MAX_SKIP like everything else, so a long story that strings transitions still
+            // accumulates correctly turn by turn.
+            return Math.min(MAX_SKIP, DAY);
+        }
+        if (transition && UNIT[transition[0]]) {
+            return Math.min(MAX_SKIP, UNIT[transition[0]]);
+        }
 
         const unit = Object.keys(UNIT).find(u => new RegExp(`\\b${u}s?\\b`).test(match[0]));
         if (!unit) {
