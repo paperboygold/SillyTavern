@@ -45,7 +45,7 @@ import {
     splitLocation,
     timeUntil,
 } from './clock.js';
-import { ABILITIES, ASSETS, CARRIED, CATEGORIES, MONEY } from './state-table.js';
+import { ABILITIES, ASSETS, CARRIED, CATEGORIES, MONEY, vitalLabel } from './state-table.js';
 
 const PANEL_ID = 'foldTracker';
 
@@ -893,7 +893,7 @@ export function render() {
     for (const vital of snapshot.vitals) {
         const row = el('div', 'fold_vital');
         const vhead = el('div', 'fold_vital_head');
-        vhead.appendChild(el('span', 'fold_vital_name', sentenceCase(vital.name)));
+        vhead.appendChild(el('span', 'fold_vital_name', vitalLabel(vital.name)));
         vhead.appendChild(el('span', 'fold_meta', `${Math.round(vital.cur)}/${Math.round(vital.max)}`));
         row.appendChild(vhead);
 

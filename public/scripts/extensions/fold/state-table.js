@@ -1091,6 +1091,30 @@ export const merge_vital = (nu, old) => {
 };
 
 /**
+ * How a vital name should read on the panel and in the injected block.
+ *
+ * Vital names are stored lowercased for key stability (`normalizeKey`), so display casing is
+ * applied here — the same division of labour the item names have (`stripDecoration` +
+ * `sentenceCase`). Two shapes:
+ *
+ *   · A classic RPG initialism reads better all-caps. "hp" becomes "HP", not "Hp" — a vital bar
+ *     labelled "Hp 0/70" reads as a typo.
+ *   · Everything else is sentence-cased ("stamina" → "Stamina").
+ *
+ * This is a display table, not a judgement list: it never decides what the narrative means, it
+ * only formats a key fold already chose, and any name outside the set falls back to sentence-case.
+ * That is the boundary §11 draws (enumerated *judgements* are forbidden; formatting is not).
+ */
+const VITAL_INITIALISMS = new Set(['hp', 'mp', 'sp', 'pp', 'ap', 'tp']);
+export function vitalLabel(name) {
+    const key = String(name ?? '').toLowerCase();
+    if (!key) {
+        return '';
+    }
+    return VITAL_INITIALISMS.has(key) ? key.toUpperCase() : key[0].toUpperCase() + key.slice(1);
+}
+
+/**
  * Does the narrative window actually talk about this thing?
  *
  * The strongest and cheapest rejection rule: a model cannot invent a state change for something
@@ -1622,10 +1646,23 @@ export function deriveState(events, { seeds = [] } = {}) {
         for (const change of delta.vit ?? []) {
             const name = String(change?.name ?? '');
             if (!name) continue;
-            insert_with(vitals, merge_vital, name, {
+            // ── The same seeding rule as `bumpQty`, for the same reason ──
+            //
+            // `insert_with` stores the incoming value verbatim when the key is absent and only
+            // calls the merge on collision, so handing it a raw `{dcur, max}` delta would store
+            // that shape for the vital's FIRST sighting — no `cur` field at all. Every read then
+            // shows the fallback (`0` in the panel, `NaN` in the injection) and the accumulation
+            // base is wrong for the next delta. The live failure mode: a first HP report that
+            // carries the damage with it (`{name:"hp", dcur:-26, max:70}`) folded to a row with no
+            // `cur`, the panel showed "Hp 0/70" and the model read "hp NaN/70". Seeding the key
+            // first makes the merge run on the first write too, so the stored shape is always
+            // `{max, cur}` and that report folds to `cur: 44`.
+            const proposed = {
                 dcur: Number(change?.dcur ?? 0),
                 max: Number.isFinite(change?.max) ? change.max : undefined,
-            });
+            };
+            insert_with(vitals, merge_vital, name,
+                vitals.has(name) ? proposed : merge_vital(proposed, undefined));
         }
 
         for (const change of delta.st ?? []) {
@@ -1802,7 +1839,7 @@ export function renderState({ inv, vitals, marks, pov = '' }) {
     const lines = [];
 
     const vitalParts = table_entries(vitals)
-        .map(([name, v]) => `${name} ${Math.round(v.cur)}/${Math.round(v.max)}`);
+        .map(([name, v]) => `${vitalLabel(name)} ${Math.round(v.cur)}/${Math.round(v.max)}`);
     if (vitalParts.length) {
         lines.push(`Vitals: ${vitalParts.join(' · ')}`);
     }
@@ -1892,7 +1929,7 @@ export function renderLedger({ inv, vitals, marks, pov = '' }) {
     }
 
     const vitalParts = table_entries(vitals)
-        .map(([name, v]) => `${name} ${Math.round(v.cur)}/${Math.round(v.max)}`);
+        .map(([name, v]) => `${vitalLabel(name)} ${Math.round(v.cur)}/${Math.round(v.max)}`);
     if (vitalParts.length) {
         lines.push(`Vitals: ${vitalParts.join(' · ')}`);
     }

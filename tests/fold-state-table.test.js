@@ -27,6 +27,7 @@ import {
     validateInventory,
     validateStatus,
     validateVitals,
+    vitalLabel,
 } from '../public/scripts/extensions/fold/state-table.js';
 
 /**
@@ -349,6 +350,38 @@ describe('deriveState — state is a fold over the ledger', () => {
         expect(healed.vitals.get('health')).toEqual({ cur: 50, max: 50 });
     });
 
+    test('a first vital report that carries damage folds to cur, not a raw delta', () => {
+        // Regression: the model's first and only HP report was `{name:"hp", dcur:-26, max:70}` —
+        // damage and max in one event. `insert_with` stores the incoming value verbatim when the
+        // key is absent, so before the seeding fix the stored row was the raw `{dcur:-26, max:70}`
+        // with no `cur` — the panel showed "Hp 0/70" (the `?? 0` fallback) and the injection
+        // "hp NaN/70" (`Math.round(undefined)`).
+        const { vitals } = deriveState([
+            ev(1, { vit: [{ name: 'hp', dcur: -26, max: 70 }] }),
+        ]);
+        expect(vitals.get('hp')).toEqual({ max: 70, cur: 44 });
+
+        // A later delta accumulates from the folded base, not from a re-anchor at max.
+        const later = deriveState([
+            ev(1, { vit: [{ name: 'hp', dcur: -26, max: 70 }] }),
+            ev(2, { vit: [{ name: 'hp', dcur: 10 }] }),
+        ]);
+        expect(later.vitals.get('hp')).toEqual({ max: 70, cur: 54 });
+
+        // The stored shape is always {max, cur}, so a reader never sees NaN.
+        const { cur, max } = later.vitals.get('hp');
+        expect(Number.isFinite(cur)).toBe(true);
+        expect(Number.isFinite(max)).toBe(true);
+    });
+
+    test('vitalLabel uppercases initialisms and sentence-cases the rest', () => {
+        expect(vitalLabel('hp')).toBe('HP');
+        expect(vitalLabel('mp')).toBe('MP');
+        expect(vitalLabel('stamina')).toBe('Stamina');
+        expect(vitalLabel('health')).toBe('Health');
+        expect(vitalLabel('')).toBe('');
+    });
+
     test('status flags clear, because status is the Map face and not the Set face', () => {
         const { marks: status } = deriveState([
             ev(1, { st: [{ flag: 'poisoned', on: true }] }),
@@ -417,7 +450,7 @@ describe('renderState — and the staleness that no longer hides anything', () =
             vitals: new Map([['health', { cur: 34, max: 50 }]]),
             marks: new Map([[markKey('', 'poisoned'), { on: true }], [markKey('', 'blessed'), { on: false }]]),
         });
-        expect(block).toContain('Vitals: health 34/50');
+        expect(block).toContain('Vitals: Health 34/50');
         expect(block).toContain('Status: poisoned');
         expect(block).not.toContain('blessed');
         expect(block).toContain('Carrying: rope, coin x42');

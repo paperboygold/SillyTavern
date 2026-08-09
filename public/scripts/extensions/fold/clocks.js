@@ -155,7 +155,7 @@ export function schema() {
                         },
                         open: {
                             type: 'string',
-                            description: 'What is still unknown or still undone — the part that acting would settle, stated in words that are not already in "detail": "the final command is unknown", "the orders have not been read", "nobody has searched the cellar". Leave empty if nothing is unresolved; an entry with nothing here will be discarded.',
+                            description: 'What is still unknown or still undone — the gap, not the goal. Phrase the unsettled part explicitly, in words not already in "detail": "the final command is unknown", "the orders have not been read", "nobody has searched the cellar", "six wolves still to be killed". A flat objective such as "kill six wolves" will be discarded; leave empty if nothing is unresolved.',
                         },
                         status: {
                             type: 'string',
@@ -181,11 +181,11 @@ export function schema() {
 export function instruction() {
     return [
         'What is at stake, as dials that move and threads that do not.',
-        'A dial is a named outcome with a number of steps. Report one only when the excerpt actually moved it; a danger merely mentioned has not advanced.',
+        'A dial is a named outcome with a number of steps. Report one only when the excerpt actually moved it; a danger merely mentioned has not advanced. A tick measures pressure, not bodies: downing a whole pack in one scene is still a tick of 1, 2, or at most 3 — never one per kill.',
         'Name the outcome, not the activity: "the Blight reaches Briarwood", never "dealing with the Blight".',
         `Say whether filling the dial is bad for the characters ("${DOOM}") or good ("${PROGRESS}"). A deadline running out is ${DOOM}; twenty raids toward a visa is ${PROGRESS}. Set "kind" and "size" once, when the dial is first established; afterwards send only the tick.`,
         'A thread with no dial is a title plus its specifics, not a sentence: "missing-persons cluster" with detail "Arklay County, 15-18 September".',
-        'A thread must have something unresolved in it. Before reporting one, say in "open" what is still unknown or still undone; if you cannot name anything, it is background and does not belong here.',
+        'A thread must have something unresolved in it, and "open" must SAY what that is — the gap, not the goal. Accepted: "the final command is unknown", "the orders have not been read", "nobody has searched the cellar", "six wolves still to be killed". Discarded: a flat objective such as "kill six wolves" or a bare fact such as "the First Steps quest" — name what is still undone about it, or it is background.',
         'Exposition is not a thread. What a power does, what a mark means, what an object is for, what someone was told to do and then did — all background, however new to the scene.',
         'Say where each thread came from in "source" — a dispatch entry, a broadcast, something a person said — with its time if one was given. A thread with no provenance is half a thread.',
         'Use empty arrays when nothing advanced and nothing new opened.',

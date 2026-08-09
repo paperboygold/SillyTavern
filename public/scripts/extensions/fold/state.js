@@ -592,9 +592,9 @@ export function deltaSchema() {
                 items: {
                     type: 'object',
                     properties: {
-                        name: { type: 'string', description: 'Vital name, lowercase.' },
-                        dcur: { type: 'number', description: 'Change in the current value.' },
-                        max: { type: 'number', description: 'Maximum value, only when newly established.' },
+                        name: { type: 'string', description: 'Vital name, lowercase: "hp", "mana", "stamina".' },
+                        dcur: { type: 'number', description: 'Change in the current value — the drop or gain this turn, never the new total: "HP drops from 62 to 44" is dcur -18.' },
+                        max: { type: 'number', description: 'Maximum value, the ceiling. Only when newly established: report it once, and afterwards send only dcur.' },
                     },
                     required: ['name', 'dcur', 'max'],
                     additionalProperties: false,
@@ -660,6 +660,8 @@ export function deltaInstruction() {
         'dq is how many were gained or lost by that event, not how many are held afterwards.',
         'Picking up two coins is dq 2, even if the character now has fifty.',
         'Record nothing for things merely mentioned, described or looked at.',
+        'Record a change only for something the excerpt NAMES and actually changes. An item held over from before, a vital that was not touched this turn, a condition that neither started nor ended — nothing to record, however true it remains.',
+        'For a vital, dcur is the change from the current value the ledger shows: if the excerpt says HP goes from 62 to 44, dcur is -18 and max is sent only if it was not already established.',
         // Two instructions, one job: stop billing the same beat twice. The first is what the window
         // split (`extract-table.js`) and `reject:already-recorded` (`state-table.js`) enforce in
         // code; saying it in words is what lets the model spend its budget on the new thing instead
