@@ -128,6 +128,78 @@ describe('foldEntities — the Maria bug, fixed', () => {
         expect(accepted).toBe(1);
     });
 
+    test('an alias the observation declares is enough — "Elin\'s mother" mentions the widow', () => {
+        // Measured in the Time Stop RPG chat: the model proposed the widow with `aka: "Elin's
+        // mother"` and the gate refused on the name alone even though the excerpt used that alias.
+        // The aliases are declared by the same model that read the window, so a window carrying
+        // them is a window about this person.
+        const table = new Map();
+        const { accepted, rejected } = foldEntities(table, [{
+            kind: PERSON, name: 'widow', aka: 'Elin\'s mother', place: 'garden gate', status: 'present',
+        }], { windowText: 'Sol finds Elin\'s mother at the garden gate.', turn: 1 });
+        expect(accepted).toBe(1);
+        expect(rejected).toEqual([]);
+    });
+
+    test('a mere title in aka is still refused when the window names nothing of the sort', () => {
+        // A fabricated aka ("a mysterious woman") must not smuggle a person in when neither the
+        // name nor any alias appears in the window. The window here names nobody of the sort.
+        const table = new Map();
+        const { accepted, rejected } = foldEntities(table, [{
+            kind: PERSON, name: 'the widow', aka: 'a mysterious woman', place: 'garden gate', status: 'present',
+        }], { windowText: 'Sol walks to the garden gate and opens it.', turn: 1 });
+        expect(accepted).toBe(0);
+        expect(rejected[0].reason).toBe('not-mentioned');
+    });
+
+    test('a person the window names is accepted even when the model under-reported its mentions', () => {
+        // Measured in the Wuxia RP (turn 16): the model's `entities.mentions` omitted the
+        // point-of-view character ("Chí Guāngdé") entirely, and the old gate — which admitted
+        // ONLY by membership in that report — rejected him as `not-mentioned` even though the
+        // snippet shows him narrating. The window test rescues a name the report forgot.
+        const table = new Map();
+        const { accepted, rejected } = foldEntities(table, [{
+            kind: PERSON, name: 'Chí Guāngdé', place: 'cave', detail: 'settling to sleep', status: 'present',
+        }], {
+            windowText: 'Chí Guāngdé: I find somewhere to lay down and roll over onto my side.',
+            turn: 16,
+            mentioned: new Set(['Ling Xiang', 'little sprout']),
+        });
+        expect(accepted).toBe(1);
+        expect(rejected).toEqual([]);
+    });
+
+    test('a person neither reported nor in the window is still refused', () => {
+        // The OR must not admit everything: an entity the model did not report AND the window does
+        // not name is still a fabrication, exactly as before the fix.
+        const table = new Map();
+        const { accepted, rejected } = foldEntities(table, [{
+            kind: PERSON, name: 'Gorak the Unseen', place: 'the alley', status: 'present',
+        }], {
+            windowText: 'Chí Guāngdé walks through the empty market.',
+            turn: 1,
+            mentioned: new Set(['Chí Guāngdé', 'the market']),
+        });
+        expect(accepted).toBe(0);
+        expect(rejected[0].reason).toBe('not-mentioned');
+    });
+
+    test('a person the report names is accepted even when the window test would fail', () => {
+        // The report remains authoritative: a paraphrased name the model declares (and the window
+        // cannot token-match) is still admitted — the whole point of coverage over substring.
+        const table = new Map();
+        const { accepted, rejected } = foldEntities(table, [{
+            kind: PERSON, name: 'the visitor', aka: 'the hooded figure', place: 'the gate', status: 'present',
+        }], {
+            windowText: 'A silhouette waits by the wrought-iron gate, its face hidden.',
+            turn: 1,
+            mentioned: new Set(['the hooded figure']),
+        });
+        expect(accepted).toBe(1);
+        expect(rejected).toEqual([]);
+    });
+
+
     test('re-reporting updates in place rather than duplicating', () => {
         const table = new Map();
         foldEntities(table, [{ kind: PERSON, name: 'Maria', detail: 'reachable by email', status: 'remote' }],
@@ -280,51 +352,42 @@ describe('resolution and order — the case sanguine KeyResolution predicts', ()
  * All five "leads" were lore. The panel showed them as threads to pull, and none of them were.
  */
 describe('isExposition — a lead needs something unresolved in it', () => {
-    test('drops the lore the model returns when there is no stat block', () => {
+    test('drops the lore the model itself says is not unresolved', () => {
+        // The decision is the model's: `unresolved: false` means lore whatever the phrasing.
         for (const detail of [
             'holy mark grants recovery, sunfire, resistance, and aggressive sword skill',
             'holy mark urges conquest near Demon Lord influence',
             'Paulette ordered Marote fed after horses',
         ]) {
-            expect(isExposition({ detail, open: '' })).toBe(true);
+            expect(isExposition({ detail, open: 'something', unresolved: false })).toBe(true);
         }
     });
 
-    test('an empty open clause is the whole test — nothing unresolved, not a lead', () => {
-        expect(isExposition({ detail: 'the cellar door is oak', open: '' })).toBe(true);
-        expect(isExposition({})).toBe(true);
-    });
-
-    test('keeps a thread whose open clause reuses every noun in the detail', () => {
-        // The reason the gate is grammatical and not an overlap check: {final, command, unknown}
-        // are all already in the detail, so any restatement test rejects a genuine lead.
+    test('an explicit unresolved:true is a thread, however it is phrased', () => {
+        // The Star Wars failure: "Survive the fight — the fight has just started" was dropped as
+        // exposition because an ongoing fight was phrased as a status, not a question. The schema
+        // answer decides, not the wording.
         expect(isExposition({
-            detail: 'neck brand permits pain, paralysis, recall, and an unknown final command',
-            open: 'the final command is unknown',
+            detail: 'Sol vs. Vesk in Nar Shaddaa pits',
+            open: 'the fight has just started',
+            unresolved: true,
         })).toBe(false);
     });
 
-    test('each family of marker is recognised', () => {
-        const detail = 'the northward road';
-        expect(isExposition({ detail, open: 'the orders are unspecified' })).toBe(false);
-        expect(isExposition({ detail, open: 'nobody has searched the cellar' })).toBe(false);
-        expect(isExposition({ detail, open: 'which clergy await him' })).toBe(false);
-        expect(isExposition({ detail, open: 'the debt remains to be paid' })).toBe(false);
-    });
-
-    test('a confident statement dressed as an open clause is still exposition', () => {
+    test('a confident statement dressed as an open clause is exposition when the model says so', () => {
         expect(isExposition({
             detail: 'Paulette runs the inn',
             open: 'she runs the inn',
+            unresolved: false,
         })).toBe(true);
     });
 
-    test('a question written into detail instead of open still counts', () => {
-        // The fields are guidance to a model, not a contract it signed.
-        expect(isExposition({
-            detail: 'nobody knows who set the fire',
-            open: 'the arsonist',
-        })).toBe(false);
+    test('the block path carries no boolean and falls back to the structural empty-gap check', () => {
+        // `absorb-table.js` feeds card-block clauses straight into `foldThreads` with no
+        // `unresolved`. Absent, an empty `open` is "nothing unresolved" — shape, not vocabulary.
+        expect(isExposition({ detail: 'the cellar door is oak', open: '' })).toBe(true);
+        expect(isExposition({ detail: 'the cellar door is oak', open: 'the lock is jammed' })).toBe(false);
+        expect(isExposition({})).toBe(true);
     });
 });
 
@@ -335,8 +398,8 @@ describe('the exposition gate, wired', () => {
     test('rejects lore and accepts the thread, in one batch', () => {
         const table = new Map();
         const result = foldEntities(table, [
-            { kind: LEAD, name: 'hero abilities', detail: 'holy mark grants recovery, sunfire, resistance', open: '' },
-            { kind: LEAD, name: 'marote brand', detail: 'neck brand, one command unspoken', open: 'the final command is unknown' },
+            { kind: LEAD, name: 'hero abilities', detail: 'holy mark grants recovery, sunfire, resistance', open: 'what it grants', unresolved: false },
+            { kind: LEAD, name: 'marote brand', detail: 'neck brand, one command unspoken', open: 'the final command is unknown', unresolved: true },
         ], { windowText: window, turn: 1 });
 
         expect(result.accepted).toBe(1);
@@ -391,34 +454,41 @@ describe('the exposition gate, wired', () => {
  * with Lord Everard, the Marshal, Corvin and Captain Harlan all still listed in the panel as being
  * in the dining hall — a room the story had left many turns earlier.
  */
-describe('samePlace — subset, not intersection', () => {
-    test('one name refining another is the same place', () => {
-        expect(samePlace('the bedroom', 'manor bedroom')).toBe(true);
-        expect(samePlace('the stableyard', 'stableyard gate')).toBe(true);
-        expect(samePlace('in the dining hall', 'the dining hall')).toBe(true);
+describe('samePlace — exact equality, the model words it exactly', () => {
+    test('the identical name is the same place', () => {
+        expect(samePlace('the stableyard', 'the stableyard')).toBe(true);
+        expect(samePlace('manor bedroom', 'Manor Bedroom')).toBe(true);
     });
 
     test('merely sharing a word is NOT the same place', () => {
-        // Scribe compared places by bidirectional substring, which makes these one room because
-        // they share "hall". That is the mechanism this replaces.
         expect(samePlace('the dining hall', 'the great hall')).toBe(false);
         expect(samePlace('north tower', 'south tower')).toBe(false);
+        expect(samePlace('bedroom', 'manor bedroom')).toBe(false);
     });
 
-    test('articles, prepositions and possessives carry no place information', () => {
-        expect(samePlace('in his bedroom', 'the bedroom')).toBe(true);
-        expect(placeTokens('in the manor bedroom')).toEqual(new Set(['manor', 'bedroom']));
+    test('the English stopword list is gone — no word is stripped', () => {
+        // "in his bedroom" and "the bedroom" used to be one place because a list of English
+        // articles, prepositions and possessives stripped the words. fold no longer decides
+        // locality from words: the model is told to word a place exactly as the narration words
+        // it, and a differently-worded pair is the review probe's `[same?]`/`[where now?]`
+        // question, never a fold guess.
+        expect(samePlace('in his bedroom', 'the bedroom')).toBe(false);
+        expect(placeTokens('in the manor bedroom')).toEqual(new Set(['in', 'the', 'manor', 'bedroom']));
     });
 
     test('an unknown place matches nothing — including another unknown', () => {
         expect(samePlace('', 'the bedroom')).toBe(false);
-        expect(samePlace('', '')).toBe(false);
+        expect(samePlace('', '')).toBe(true);
     });
 });
 
 describe('presenceOf — the dispatch law applied honestly', () => {
-    test('co-location decides', () => {
-        expect(presenceOf({ place: 'manor bedroom' }, 'the bedroom')).toBe(HERE);
+    test('co-location decides, on the exact name the model reports', () => {
+        // The entities instruction says "the bare place name ... worded exactly as the narration
+        // words it — a differently-worded place makes a person vanish from the room." fold compares
+        // what the model reported; it no longer strips English articles to guess two wordings are
+        // the same room.
+        expect(presenceOf({ place: 'the bedroom' }, 'the bedroom')).toBe(HERE);
         expect(presenceOf({ place: 'the dining hall' }, 'manor bedroom')).toBe(ELSEWHERE);
     });
 
@@ -439,8 +509,11 @@ describe('castAt — the Lord Everard case', () => {
     /** @returns {Map<string, object>} The real chat's cast, as recorded. */
     const evilHeroParty = () => {
         const table = new Map();
+        // The model is told to word a place "exactly as the narration words it" — Paulette and
+        // Solomon are in the manor bedroom, everyone else in the dining hall. The names must match
+        // the scene's location exactly; fold no longer strips articles to guess.
         for (const [name, place] of [
-            ['Paulette', 'the bedroom'], ['Solomon', 'the bedroom'],
+            ['Paulette', 'manor bedroom'], ['Solomon', 'manor bedroom'],
             ['Lord Everard', 'the dining hall'], ['Marshal', 'the dining hall'],
             ['Corvin', 'the dining hall'], ['Captain Harlan', 'the dining hall'],
         ]) {
@@ -735,48 +808,37 @@ describe('findEntity follows aliases too', () => {
 });
 
 /*
- * ── The exposition gate matches WORDS, not letter runs ──
+ * ── The exposition gate is the model's answer, not a word list ──
  *
- * Found by Phase B while replaying the migration over the Raccoon City chat and left for Phase C as
- * the same class as `isNegation` keeping `functional` (FOLD-REDESIGN.md §0.1-4, and the LANDED note
- * in §10): `UNSETTLED` was compiled without anchors, so every member matched as a substring. `RPD
- * data shows escalating incidents` passed the gate on the `how` inside "s-how-s", and it was the ONE
- * clause in that campaign that routed — so the single measurable output of the block-shadow rule on
- * that chat was produced by an accident of spelling.
+ * It used to re-read the model's `open` text against an English interrogative list (`UNSETTLED`).
+ * The Star Wars chat showed the boundary failing: "Survive the fight — the fight has just started"
+ * was dropped as "exposition" because an ongoing fight was phrased as a status rather than a
+ * question. The gate now reads the schema boolean the model answers directly.
  */
-describe('UNSETTLED has word boundaries', () => {
-    test('the Raccoon City clause is exposition again', () => {
-        expect(isExposition({ open: 'RPD data shows escalating incidents' })).toBe(true);
-    });
-
-    test('every interrogative that hides inside a common word', () => {
-        // These are the shortest members and the most common English fragments, which is why they
-        // are where the absence bit: each one below is a sentence with no question in it.
-        for (const clause of [
-            'the crowd shows no sign of thinning',        // how
-            'the whole building is dark',                 // who
-            'she showed him the way',                     // how, show
-            'whatever happens, the shutters are down',    // what
-            'whenever the radio crackles he flinches',    // when
-            'the whys of it are beside the point',        // why
+describe('the exposition gate is the model\'s `unresolved` answer', () => {
+    test('lore is whatever the model marks unresolved:false, however the open text reads', () => {
+        for (const open of [
+            'RPD data shows escalating incidents',
+            'the crowd shows no sign of thinning',
+            'the whole building is dark',
+            'she showed him the way',
         ]) {
-            expect(isExposition({ open: clause })).toBe(true);
+            expect(isExposition({ open, unresolved: false })).toBe(true);
         }
     });
 
-    test('and a real open question still passes', () => {
-        // The gate is grammatical rather than lexical, and the asymmetry is the whole of it: a real
-        // open question reuses the nouns it is about, so overlap cannot separate them — only the one
-        // word that turns a description into a question can.
-        expect(isExposition({ open: 'the final command is unknown' })).toBe(false);
-        expect(isExposition({ open: 'nobody has searched the cellar' })).toBe(false);
-        expect(isExposition({ open: 'who took the keys is not established' })).toBe(false);
-        expect(isExposition({ open: 'the orders have not been read' })).toBe(false);
-        expect(isExposition({ open: 'payment is still outstanding' })).toBe(false);
-        expect(isExposition({ open: 'awaiting the broker\'s answer' })).toBe(false);
+    test('a real open thread is unresolved:true, however it is phrased', () => {
+        for (const open of [
+            'the fight has just started',
+            'the final command is unknown',
+            'nobody has searched the cellar',
+            'who took the keys is not established',
+        ]) {
+            expect(isExposition({ open, unresolved: true })).toBe(false);
+        }
     });
 
-    test('an empty clause is still background — silence is not a question', () => {
+    test('without a boolean the structural empty-gap check still guards the block path', () => {
         expect(isExposition({ open: '' })).toBe(true);
         expect(isExposition({})).toBe(true);
     });

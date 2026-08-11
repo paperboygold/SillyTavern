@@ -7,10 +7,8 @@ import {
     isEmptyValue,
     parseStateBlock,
     itemHead,
-    resolveAlias,
     sameItem,
     sameItemHead,
-    splitClauses,
     splitConditions,
     splitItems,
     stripStateBlock,
@@ -83,16 +81,20 @@ describe('parseStateBlock', () => {
 });
 
 describe('isEmptyValue', () => {
-    test('recognises the many ways a narrator says nothing', () => {
-        for (const value of ['none', 'None.', 'nothing', 'n/a', 'uninjured', '-', '',
-            'as established by {{user}}', 'unchanged from before', 'no change']) {
-            expect(isEmptyValue(value)).toBe(true);
-        }
+    test('recognises only structural emptiness', () => {
+        // The English word list ("none", "nothing", "n/a", "uninjured", "unchanged", ...) is gone:
+        // those words are prose in the card's language, and the model reads the block text. The
+        // only refusal left is a genuinely empty string.
+        expect(isEmptyValue('')).toBe(true);
+        expect(isEmptyValue('   ')).toBe(true);
+        expect(isEmptyValue('.')).toBe(true);
     });
 
     test('does not swallow real content', () => {
+        expect(isEmptyValue('none')).toBe(false);
         expect(isEmptyValue('house keys, wallet')).toBe(false);
         expect(isEmptyValue('bleeding from the forearm')).toBe(false);
+        expect(isEmptyValue('uninjured')).toBe(false);
     });
 });
 
@@ -112,9 +114,8 @@ describe('splitItems', () => {
         expect(splitItems('rope; flint; tinderbox')).toEqual(['rope', 'flint', 'tinderbox']);
     });
 
-    test('yields nothing for an empty value', () => {
-        expect(splitItems('none')).toEqual([]);
-        expect(splitItems('as established by {{user}}')).toEqual([]);
+    test('an empty value yields nothing', () => {
+        expect(splitItems('')).toEqual([]);
     });
 });
 
@@ -138,16 +139,15 @@ describe('splitConditions', () => {
         expect(splitConditions('left arm bruised and sore')).toEqual(['left arm bruised and sore']);
     });
 
-    test('yields nothing for uninjured', () => {
-        expect(splitConditions('uninjured')).toEqual([]);
-    });
-
-    test('drops a clause that is nothing but reassurance', () => {
-        // Narrators habitually qualify: "mild hangover, otherwise uninjured". Keeping both halves
-        // put "otherwise uninjured" in the panel as though it were an affliction.
-        expect(splitConditions('mild hangover, otherwise uninjured')).toEqual(['mild hangover']);
-        expect(splitConditions('no injuries')).toEqual([]);
-        expect(splitConditions('nothing serious')).toEqual([]);
+    test('"uninjured" is a condition now — the reassurance list is gone', () => {
+        // The old `isNegation` word list dropped "uninjured", "fine", "otherwise uninjured" and
+        // "no injuries" as nothing-but-reassurance. Those are English words in the card's
+        // language; whether a clause asserts the absence of harm is a reading the model answers
+        // (`on: false` in the scene probe), not a list fold applies to block prose.
+        expect(splitConditions('uninjured')).toEqual(['uninjured']);
+        expect(splitConditions('mild hangover, otherwise uninjured')).toEqual(['mild hangover', 'otherwise uninjured']);
+        expect(splitConditions('no injuries')).toEqual(['no injuries']);
+        expect(splitConditions('nothing serious')).toEqual(['nothing serious']);
     });
 
     test('a concessive clause is ONE condition, kept whole — the §0.1-4 fix', () => {
@@ -182,10 +182,13 @@ describe('restateInventory — a block reports TOTALS, not changes', () => {
             .toEqual([{ item: 'rope', set: 1, at: 'carried' }]);
     });
 
-    test('a rewording lands on the item already held', () => {
+    test('a rewording is a NEW row — identity is exact, not English morphology', () => {
+        // The old `resolveAlias` folded "m-65 military jacket" onto held "m-65 jacket" with a
+        // stopword list. Whether two spellings name one thing is the model's reading: it reuses
+        // the exact State-block name when restating, and the review probe answers `[same?]`.
         const held = new Map([['m-65 jacket', { qty: 1, at: 'carried' }]]);
         expect(restateInventory({ held, listed: ['m-65 military jacket'] }))
-            .toEqual([{ item: 'm-65 jacket', set: 1, at: 'carried' }]);
+            .toEqual([{ item: 'm-65 military jacket', set: 1, at: 'carried' }]);
     });
 
     test('things that merely share a word stay separate', () => {
@@ -195,10 +198,13 @@ describe('restateInventory — a block reports TOTALS, not changes', () => {
     });
 });
 
-describe('sameItem', () => {
-    test('containment means one thing', () => {
-        expect(sameItem('m-65 jacket', 'm-65 military jacket')).toBe(true);
-        expect(sameItem('potion', 'healing potion')).toBe(true);
+describe('sameItem — exact-key identity, the English morphology is gone', () => {
+    test('only the same string is the same thing', () => {
+        // The old containment rule merged "m-65 military jacket" onto "m-65 jacket". fold no
+        // longer decides identity from English stopwords; the model reports names and the review
+        // probe answers `[same?]` for a pair fold cannot resolve.
+        expect(sameItem('m-65 jacket', 'm-65 military jacket')).toBe(false);
+        expect(sameItem('potion', 'healing potion')).toBe(false);
     });
 
     test('overlap alone does not', () => {
@@ -211,7 +217,7 @@ describe('classifyBlock', () => {
     test('routes fields to inventory, conditions and context', () => {
         const { items, conditions, context } = classifyBlock(parseStateBlock(REPLY));
         expect(items).toEqual(['house keys', 'wallet', 'bus pass']);
-        expect(conditions).toEqual([]);
+        expect(conditions).toEqual(['uninjured']);
         expect(context.get('location')).toBe('Ennerdale Street');
         expect(context.get('time')).toBe('7:22 AM');
     });
@@ -220,7 +226,7 @@ describe('classifyBlock', () => {
         const fields = parseStateBlock('x\n[Health: bleeding from the forearm, exhausted | Inventory: none]');
         const { items, conditions } = classifyBlock(fields);
         expect(conditions).toEqual(['bleeding from the forearm', 'exhausted']);
-        expect(items).toEqual([]);
+        expect(items).toEqual(['none']);
     });
 
     test('keeps the health field verbatim as well as split', () => {
@@ -229,11 +235,11 @@ describe('classifyBlock', () => {
         const { context, conditions } = classifyBlock(
             parseStateBlock('x\n[Health: mild hangover, otherwise uninjured | Location: apartment]'));
         expect(context.get('health')).toBe('mild hangover, otherwise uninjured');
-        expect(conditions).toEqual(['mild hangover']);
+        expect(conditions).toEqual(['mild hangover', 'otherwise uninjured']);
     });
 
     test('does not carry empty fields into context', () => {
-        const fields = parseStateBlock('x\n[Leads: none | Location: RPD lobby]');
+        const fields = parseStateBlock('x\n[Leads:  | Location: RPD lobby]');
         const { context } = classifyBlock(fields);
         expect(context.has('leads')).toBe(false);
         expect(context.get('location')).toBe('RPD lobby');
@@ -279,52 +285,6 @@ describe('the restatement leak — the x7 flat cap', () => {
         applyRestatement(held, ['grey flat cap', 'grey flat cap']);
         expect(held.get('grey flat cap')).toEqual({ qty: 2 });
     });
-
-    test('resolveAlias leaves an unknown name alone', () => {
-        expect(resolveAlias(new Map(), 'crowbar')).toBe('crowbar');
-    });
-});
-
-describe('splitClauses — recovering the list a comma-joined field lost', () => {
-    const LEADS = 'Locally saved RPD records confirm a September 15-18 missing-persons cluster in '
-        + 'Arklay County, Adele Ricci of the closed corner clinic is missing, Umbrella contractor '
-        + 'access remains suspended pending review, RPD has publicly cited a systems issue and '
-        + 'increased call volume, county sheriff has issued an Arklay trail warning, Spencer '
-        + 'Memorial is difficult to reach, with limited lines and restricted emergency-department '
-        + 'visitors';
-
-    test('finds each lead the run actually contains', () => {
-        expect(splitClauses(LEADS)).toHaveLength(6);
-    });
-
-    test('keeps a continuation attached to the clause it belongs to', () => {
-        // "with limited lines and restricted visitors" has no finite verb, so it is not a lead —
-        // it is the tail of the sentence before it.
-        expect(splitClauses(LEADS)[5])
-            .toBe('Spencer Memorial is difficult to reach, with limited lines and restricted emergency-department visitors');
-    });
-
-    test('each statement stands on its own', () => {
-        expect(splitClauses(LEADS)[1]).toBe('Adele Ricci of the closed corner clinic is missing');
-        expect(splitClauses(LEADS)[2]).toBe('Umbrella contractor access remains suspended pending review');
-    });
-
-    test('a genuine list is left as a list', () => {
-        // No finite verb anywhere, so every comma is a delimiter. Without this check the clause
-        // rule would glue two contacts into one.
-        expect(splitClauses('Ramen shop owner, older man in raincoat'))
-            .toEqual(['Ramen shop owner', 'older man in raincoat']);
-    });
-
-    test('a single statement stays single', () => {
-        expect(splitClauses('Spencer Memorial has stopped answering routine calls'))
-            .toEqual(['Spencer Memorial has stopped answering routine calls']);
-    });
-
-    test('is total over empty input', () => {
-        expect(splitClauses('')).toEqual([]);
-        expect(splitClauses(null)).toEqual([]);
-    });
 });
 
 describe('a restated total lands where the item already is', () => {
@@ -346,22 +306,23 @@ describe('a restated total lands where the item already is', () => {
             .toEqual([{ item: 'crowbar', set: 1, at: 'carried' }]);
     });
 
-    test('a rewording inherits the place of the item it resolves onto', () => {
+    test('a rewording is a NEW row — identity is exact, not English morphology', () => {
         const held = new Map([['m-65 jacket', { qty: 1, at: 'apartment' }]]);
         expect(restateInventory({ held, listed: ['m-65 military jacket'] }))
-            .toEqual([{ item: 'm-65 jacket', set: 1, at: 'apartment' }]);
+            .toEqual([{ item: 'm-65 military jacket', set: 1, at: 'carried' }]);
     });
 });
 
-describe('a hyphen split one garment into two', () => {
-    test('a hyphenated compound matches its own parts', () => {
-        // `all-black dress clothes` and `black dress clothes` sat in the panel as two items,
-        // because `all-black` is one token and `black` is not inside it.
-        expect(sameItem('all-black dress clothes', 'black dress clothes')).toBe(true);
+describe('sameItem — a hyphenated compound is not its parts', () => {
+    test('a hyphenated compound is not matched to its parts by fold', () => {
+        // The old rule split `all-black` into both the compound and its parts so containment could
+        // merge `all-black dress clothes` onto `black dress clothes`. fold no longer decides
+        // identity from English morphology; the model reports names and the review answers `[same?]`.
+        expect(sameItem('all-black dress clothes', 'black dress clothes')).toBe(false);
     });
 
-    test('a model number survives — it is not shredded into letters and digits', () => {
-        expect(sameItem('m-65 jacket', 'm-65 military jacket')).toBe(true);
+    test('a model number is not folded onto a reworded name', () => {
+        expect(sameItem('m-65 jacket', 'm-65 military jacket')).toBe(false);
     });
 
     test('and things that merely share a word still stay apart', () => {
@@ -370,54 +331,31 @@ describe('a hyphen split one garment into two', () => {
     });
 });
 
-describe('itemHead — what a noun phrase is actually about', () => {
-    test('the last significant token, parentheticals ignored', () => {
-        expect(itemHead('healing potion')).toBe('potion');
-        expect(itemHead('goblin knife (worn)')).toBe('knife');
-        expect(itemHead('m-65 military jacket')).toBe('jacket');
-    });
-
-    test('a prepositional phrase modifies the head, it is not the head', () => {
-        // The live ledger holds `rusty hunter's knife with sheath`. Heading it on `sheath` made the
-        // mention gate refuse a window that says "reaching weakly for the knife in its belt".
-        expect(itemHead('rusty hunter\'s knife with sheath')).toBe('knife');
-        expect(itemHead('trauma kit with extra coagulant')).toBe('kit');
-        expect(itemHead('reinforced bracers and greaves')).toBe('bracers');
-    });
-
-    test('names too short to have a significant token still have a head', () => {
-        // Falling back to '' would give every short name a head that matches everything.
-        expect(itemHead('hp')).toBe('hp');
-        expect(itemHead('axe')).toBe('axe');
+describe('itemHead — identity is exact, so there is no head to derive', () => {
+    test('the name is returned unchanged', () => {
+        expect(itemHead('healing potion')).toBe('healing potion');
+        expect(itemHead('goblin knife (worn)')).toBe('goblin knife (worn)');
+        expect(itemHead('m-65 military jacket')).toBe('m-65 military jacket');
+        expect(itemHead('rusty hunter\'s knife with sheath')).toBe('rusty hunter\'s knife with sheath');
         expect(itemHead('')).toBe('');
     });
 });
 
-describe('sameItemHead — the strict merge, and the pair that forced it', () => {
+describe('sameItemHead — exact-key identity, the pair that forced the old rule', () => {
     test('a phone is not a phone number', () => {
-        // The measured defect: a block listing `phone` was absorbed into the ledger's
-        // `solomon's phone number`, because {phone} ⊆ {solomon, phone, number}.
-        expect(sameItem('phone', 'solomon\'s phone number')).toBe(true);
+        // The measured defect was `phone` being absorbed into `solomon's phone number`. Under
+        // exact-key identity both of these hold trivially — and so does "one coat described
+        // twice", which the old morphology merged by English head-token.
+        expect(sameItem('phone', 'solomon\'s phone number')).toBe(false);
         expect(sameItemHead('phone', 'solomon\'s phone number')).toBe(false);
         expect(sameItemHead('phone', 'phone number')).toBe(false);
+        expect(sameItemHead('m-65 jacket', 'm-65 military jacket')).toBe(false);
+        expect(sameItemHead('rusty hunter\'s knife', 'rusty hunter\'s knife with sheath')).toBe(false);
     });
 
-    test('one coat described twice still merges', () => {
-        // The case the containment rule was built for. Narrowing must not cost it.
-        expect(sameItemHead('m-65 jacket', 'm-65 military jacket')).toBe(true);
-        expect(sameItemHead('all-black dress clothes', 'black dress clothes')).toBe(true);
-        expect(sameItemHead('potion', 'healing potion')).toBe(true);
-        expect(sameItemHead('rusty hunter\'s knife', 'rusty hunter\'s knife with sheath')).toBe(true);
-    });
-
-    test('contradicting qualifiers keep two things apart', () => {
-        expect(sameItemHead('silver coin', 'gold coin')).toBe(false);
+    test('only the same string is the same thing', () => {
+        expect(sameItemHead('silver coin', 'silver coin')).toBe(true);
         expect(sameItemHead('kang\'s phone number', 'jin-woo\'s phone number')).toBe(false);
-        expect(sameItemHead('mana-shackle bracers', 'reinforced bracers and greaves')).toBe(false);
-        expect(sameItemHead('sword of dawn', 'sword of night')).toBe(false);
-    });
-
-    test('different heads are different things, however much else they share', () => {
         expect(sameItemHead('iron sword', 'iron shield')).toBe(false);
         expect(sameItemHead('wrapped candy', 'wrapped candies')).toBe(false);
     });

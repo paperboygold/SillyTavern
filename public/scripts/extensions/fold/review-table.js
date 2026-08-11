@@ -32,7 +32,7 @@
  * at the pure layer — code decides when to ask, the fixture supplies what the model would say.
  */
 
-import { CONTEST_AT, MONEY, parseAmount } from './state-table.js';
+import { CONTEST_AT, MONEY } from './state-table.js';
 import { CLOSED, DOOM, HIDDEN, MOOT, OPEN_STATUS, PROGRESS, normalizeThreadName } from './thread-table.js';
 
 /**
@@ -162,7 +162,15 @@ export function reviewBlock({
     polarity = [], owed = null, budget = MAX_QUESTIONS,
 } = {}) {
     const index = new Map();
-    const lines = [];
+    // Two sections, rendered apart, because the model kept filing them together. Everything under
+    // `dispositions` is a T/M/A line answered in the fragment's `lines` array with a `still` value;
+    // everything under `questions` is a P/L/Q answered in the `answers` array with an `answer`.
+    // Before the split they shared one header and one flat list, and the model read a `[where now?]`
+    // place question as a line to dispose of — every `P` answer landed in `lines`, where
+    // `planReview` refuses it as `review-wrong-shape` (measured: 19 rejects, all P1-P10, in the Time
+    // Stop RPG chat). Two sections make the schema's two arrays visible in the block the model reads.
+    const dispositions = [];
+    const questions = [];
 
     const sorted = list => [...list].sort((a, b) => String(a?.key ?? a?.field ?? '').localeCompare(String(b?.key ?? b?.field ?? '')));
 
@@ -181,7 +189,7 @@ export function reviewBlock({
             : thread.seen === HIDDEN ? 'closing in'
                 : `${thread.dial.filled}/${thread.dial.size}`;
         const said = [thread.detail, thread.open, thread.about].filter(Boolean).join(' — ');
-        lines.push(`  ${id} [${face}] ${thread.name}${said ? ` — ${said}` : ''}`);
+        dispositions.push(`  ${id} [${face}] ${thread.name}${said ? ` — ${said}` : ''}`);
     });
 
     sorted(unplaced).forEach((person, at) => {
@@ -190,7 +198,7 @@ export function reviewBlock({
         // Not "is this person still here?" — that is the question `castAt` was answering by guessing
         // (`entity-table.js`, the three-valued note). The review asks where they ARE, which is the
         // dispatch law's third action: when the evidence cannot decide, ask rather than default.
-        lines.push(`  ${id} [where now?] ${person.name}${person.place ? ` — last placed: ${person.place}` : ''}`);
+        questions.push(`  ${id} [where now?] ${person.name}${person.place ? ` — last placed: ${person.place}` : ''}`);
     });
 
     // ── Marks close the way threads close ──
@@ -219,7 +227,7 @@ export function reviewBlock({
     marks.slice(0, MAX_MARK_LINES).forEach((mark, at) => {
         const id = `${PREFIX.mark}${at + 1}`;
         index.set(id, { id, kind: 'mark', key: mark.key, phrase: mark.phrase, who: mark.who, name: mark.name });
-        lines.push(`  ${id} [mark: ${mark.name}] ${mark.phrase}${mark.severity ? ` (${mark.severity})` : ''}`);
+        dispositions.push(`  ${id} [mark: ${mark.name}] ${mark.phrase}${mark.severity ? ` (${mark.severity})` : ''}`);
     });
 
     // One line per active adversary, and the disposition vocabulary already says what a fight ending
@@ -229,7 +237,7 @@ export function reviewBlock({
     threats.forEach((row, at) => {
         const id = `${PREFIX.adversary}${at + 1}`;
         index.set(id, { id, kind: 'adversary', key: row.key, name: row.name });
-        lines.push(`  ${id} [threat ${row.threat}] ${row.name} — still fighting?`);
+        dispositions.push(`  ${id} [threat ${row.threat}] ${row.name} — still fighting?`);
     });
 
     // `kind` is spread LAST, deliberately. It was written first and the migration's own pairs carry
@@ -251,14 +259,27 @@ export function reviewBlock({
     asked.slice(0, Math.max(0, budget)).forEach((question, at) => {
         const id = `${question.kind === 'lock' ? PREFIX.lock : PREFIX.ask}${at + 1}`;
         index.set(id, { id, ...question });
-        lines.push(`  ${id} ${questionText(question)}`);
+        questions.push(`  ${id} ${questionText(question)}`);
     });
 
-    if (!lines.length) {
+    const all = [...dispositions, ...questions];
+    if (!all.length) {
         return { text: '', index };
     }
     return {
-        text: ['Tracked now — say which of these are settled, and answer the questions:', ...lines].join('\n'),
+        // The section headers name the array each list feeds, so the model files a line where the
+        // schema can read it. The header is the mechanism; a line under "Say which of these are
+        // settled" is a disposition (fragment `lines`), a line under "Answer:" is a question
+        // (fragment `answers`).
+        text: [
+            'Tracked now:',
+            ...(dispositions.length
+                ? ['Say which of these are settled — put your reading in the "lines" answers:', ...dispositions]
+                : []),
+            ...(questions.length
+                ? ['Answer these — put your reading in the "answers" list:', ...questions]
+                : []),
+        ].join('\n'),
         index,
     };
 }
@@ -331,10 +352,20 @@ export function reviewSchema() {
                     type: 'object',
                     properties: {
                         id: { type: 'string', description: 'The id exactly as listed, e.g. "Q1".' },
-                        answer: { type: 'string', description: 'The answer in the form the question asks: a place name, "same" or "different", "doom" or "progress", or an amount.' },
-                        note: { type: 'string', description: 'Five words at most saying why. Empty if nothing to add.' },
+                        // Each question kind fills the field that names its answer shape; the others
+                        // are empty. `answer` is a closed protocol vocabulary (the same words the
+                        // question itself offers), never free prose — a language-independent answer.
+                        answer: {
+                            type: 'string',
+                            enum: [SAME, DIFFERENT, PROGRESS, DOOM, ''],
+                            description: `For an identity question: ${SAME} or ${DIFFERENT}. For a polarity question: ${PROGRESS} or ${DOOM}. Empty for other kinds.`,
+                        },
+                        place: { type: 'string', description: 'For a "where now?" question: the place name, as the excerpt words it. Empty for other kinds or when the excerpt does not say.' },
+                        amount: { type: 'integer', description: 'For a "paid?" question: the amount paid, in the currency the question names. 0 for other kinds.' },
+                        nothing: { type: 'boolean', description: 'For a "paid?" question: true when nothing was paid (a gift, a find, loot). False for other kinds.' },
+                        note: { type: 'string', description: 'Five words at most saying why, quoting the excerpt where you can. Empty if nothing to add.' },
                     },
-                    required: ['id', 'answer', 'note'],
+                    required: ['id', 'answer', 'place', 'amount', 'nothing', 'note'],
                     additionalProperties: false,
                 },
             },
@@ -347,13 +378,16 @@ export function reviewSchema() {
 /** @returns {string} Prompt guidance for the probe. */
 export function reviewInstruction() {
     return [
-        'Read the lines under "Tracked now" and say, for each you can judge, whether it is still open.',
+        'Read the tracked lines and say, for each you can judge, whether it is still open.',
+        'The block has two sections, and they are answered in two different lists.',
+        'Under "Say which of these are settled" — the T, M and A lines — give each in the "lines" list with a "still" value: whether it is open, advanced, settled or moot.',
+        'Under "Answer these" — the P, L and Q questions — give each in the "answers" list. Each question kind fills its own field: an identity question answers "same" or "different" in "answer"; a polarity question answers "progress" or "doom" in "answer"; a "where now?" question puts the place in "place"; a "paid?" question puts the amount in "amount" or sets "nothing" true when nothing was paid. The other fields stay empty.',
         'Judge from what the excerpt says. A thread the excerpt does not touch is still open — say nothing about it rather than guessing.',
         `A thread is ${SETTLED} when the thing it was waiting on has happened, whether or not anyone announced it.`,
         `It is ${MOOT} when it stopped being about anything — the danger is gone, the errand no longer matters.`,
         `An M line is an injury: ${SETTLED} once healed or treated, ${ADVANCED} while mending, ${OPEN} otherwise. Nobody announces a bruise has faded — judge from time and treatment.`,
         `An A line is somebody dangerous: ${SETTLED} once beaten, ${MOOT} once the fight stopped being a fight, ${OPEN} while it continues.`,
-        'Then answer the numbered questions — they were asked because something is ambiguous in the record, not in the fiction.',
+        'The questions were asked because something is ambiguous in the record, not in the fiction.',
         'Never answer a question the excerpt and your reading cannot settle. An omitted answer is asked again; a wrong one is acted on.',
     ].join(' ');
 }
@@ -440,36 +474,39 @@ export function planReview(fragment, index) {
             plan.rejected.push({ item: String(raw?.id ?? ''), reason: 'review-unknown-id' });
             continue;
         }
-        const answer = String(raw?.answer ?? '').trim();
         const note = String(raw?.note ?? '').trim().slice(0, 80);
-        if (!answer) {
-            plan.kept++;
-            continue;
-        }
         switch (question.kind) {
             case 'place': {
-                // "unknown" is a real answer and the right one when the story has not said. It must
-                // not become a place name, or the cast row acquires a location called "unknown"
-                // and the presence predicate starts comparing rooms to it.
-                if (/^(unknown|unclear|unstated|nowhere|n\/a|none)\b/i.test(answer)) {
+                // An empty place is "the excerpt does not say" — asked again next pass, never turned
+                // into a location named after a refusal word. The model writes the place name, not a
+                // judgement about it; the schema's free-text field is a name, not an interpretation.
+                const place = String(raw?.place ?? '').trim();
+                if (!place) {
                     plan.kept++;
                     break;
                 }
-                plan.places.push({ key: question.key, name: question.name, place: answer.slice(0, 64), note });
+                plan.places.push({ key: question.key, name: question.name, place: place.slice(0, 64), note });
                 break;
             }
             case 'lock': {
                 // The lock still wins; this only refreshes what the narrative is said to claim, so
                 // the panel can offer a one-click accept with the model's reading rather than with
                 // whichever blocked write happened to be last. See `FOLD-REDESIGN.md` §5.
-                plan.locks.push({ field: question.field, value: answer.slice(0, 120), note });
+                const value = String(raw?.place ?? '').trim();
+                if (!value) {
+                    plan.kept++;
+                    break;
+                }
+                plan.locks.push({ field: question.field, value: value.slice(0, 120), note });
                 break;
             }
             case 'identity': {
-                const said = answer.toLowerCase();
-                if (said.startsWith(SAME) || said.startsWith('yes')) {
+                // The schema's `answer` is the closed protocol vocabulary — SAME or DIFFERENT — so
+                // no English synonym needs to be recognised here. A model that answers anything else
+                // leaves the pair outstanding, which is the safe failure.
+                if (String(raw?.answer ?? '').trim().toLowerCase() === SAME) {
                     plan.merges.push({ of: question.of, a: question.a, b: question.b, note });
-                } else if (said.startsWith(DIFFERENT) || said.startsWith('no')) {
+                } else if (String(raw?.answer ?? '').trim().toLowerCase() === DIFFERENT) {
                     // Remembered, not discarded. A pair the reader has separated must never be
                     // asked about again — the detector is loose by design, so a `different` that is
                     // forgotten is a question that returns every pass forever and trains the reader
@@ -481,10 +518,11 @@ export function planReview(fragment, index) {
                 break;
             }
             case 'polarity': {
-                const said = answer.toLowerCase();
-                if (said.startsWith(PROGRESS) || said.startsWith('good')) {
+                // Same closed vocabulary: PROGRESS or DOOM, answered directly. No "good"/"bad".
+                const said = String(raw?.answer ?? '').trim().toLowerCase();
+                if (said === PROGRESS) {
                     plan.polarity.push({ key: question.thread, kind: PROGRESS, note });
-                } else if (said.startsWith(DOOM) || said.startsWith('bad')) {
+                } else if (said === DOOM) {
                     plan.polarity.push({ key: question.thread, kind: DOOM, note });
                 } else {
                     plan.kept++;
@@ -492,14 +530,14 @@ export function planReview(fragment, index) {
                 break;
             }
             case 'money': {
-                if (/^(nothing|none|no|free|nil|0)\b/i.test(answer)) {
-                    // A real answer: the items were a gift, a find, or loot. It clears the question
-                    // rather than leaving it to be asked again next pass.
+                // A real answer either way: "nothing" clears the question, an amount debits it. The
+                // model states the amount as a number or sets `nothing`; no amount word-list.
+                if (raw?.nothing === true) {
                     plan.money = { amount: 0, currency: question.currency, note };
                     break;
                 }
-                const amount = parseAmount(answer);
-                if (amount === null) {
+                const amount = Number(raw?.amount);
+                if (!Number.isInteger(amount) || amount <= 0) {
                     plan.rejected.push({ item: question.id, reason: 'review-unreadable-amount' });
                     break;
                 }
@@ -595,23 +633,31 @@ export function isTouched(thread, windowText) {
  * of them answered "still open" or not at all. The window can only settle threads it touches, so
  * posing a thread the window never mentions is paying tokens to hear "still open".
  *
- * The rule: pose a thread when the window touches it (it might change this pass) OR when it has not
- * been posed for REVIEW_EVERY turns (the safety valve — a thread nothing touches still deserves a
- * regular look, because a thread that stopped being named is exactly the thread most likely to have
- * been settled off-screen).
+ * "Touched" is the model's own coverage report — the `mentions` the thread probe answered for the
+ * PREVIOUS pass (`coverage.js`). The window only shifts a little between passes, and the model
+ * already read it; admission by that report is coverage, never a substring test of the prose
+ * ([ROUTER]). `windowText` is accepted only for the block path and tests that carry no report.
+ *
+ * The rule: pose a thread when the coverage report names it (it might change this pass) OR when it
+ * has not been posed for REVIEW_EVERY turns (the safety valve — a thread nothing touches still
+ * deserves a regular look, because a thread that stopped being named is exactly the thread most
+ * likely to have been settled off-screen).
  *
  * @param {object[]} reviewable The open threads (already status/full-filtered).
- * @param {string} windowText The new half of the window.
+ * @param {Set<string>|string} coveredOrText The model's reported names, or the window text when no
+ *   report exists.
  * @param {number} turn Current turn.
  * @param {number} [every] How many turns a thread may go unposed before it must be asked again.
  * @returns {object[]} The threads to pose, touched-first.
  */
-export function reviewableWindow(reviewable, windowText, turn = 0, every = REVIEW_EVERY) {
+export function reviewableWindow(reviewable, coveredOrText, turn = 0, every = REVIEW_EVERY) {
     const list = Array.isArray(reviewable) ? reviewable : [];
+    const isSet = coveredOrText instanceof Set;
     const touched = [];
     const stale = [];
     for (const thread of list) {
-        if (isTouched(thread, windowText)) {
+        const key = normalizeThreadName(thread?.name)?.key ?? String(thread?.name ?? '').toLowerCase().trim();
+        if (isSet ? coveredOrText.has(key) : isTouched(thread, coveredOrText)) {
             touched.push(thread);
         } else if ((turn - (thread?.turn ?? 0)) >= every) {
             stale.push(thread);

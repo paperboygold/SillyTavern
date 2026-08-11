@@ -42,7 +42,6 @@ import {
     markKey,
     foldContest,
     itemKey,
-    parseAmount,
     validateInventory,
 } from '../public/scripts/extensions/fold/state-table.js';
 
@@ -453,7 +452,7 @@ describe('the directed money question — §5 fix 1', () => {
     test('a canned "₩120,000" lands the debit, and the balance moves', () => {
         const { index } = reviewBlock({ owed: { items: ['darkwood staff', 'shortsword'], balance: 330000, currency: 'won' } });
         const id = [...index.keys()][0];
-        const plan = planReview({ lines: [], answers: [{ id, answer: '₩120,000', note: 'handed over the 120k' }] }, index);
+        const plan = planReview({ lines: [], answers: [{ id, amount: 120000, note: 'handed over the 120k' }] }, index);
         expect(plan.money).toEqual(expect.objectContaining({ amount: 120000, currency: 'won', at: MONEY }));
 
         // The answer becomes an ORDINARY validated delta — no special path into state. The window
@@ -476,24 +475,16 @@ describe('the directed money question — §5 fix 1', () => {
     test('"nothing" is a real answer and clears the question rather than leaving it to repeat', () => {
         const { index } = reviewBlock({ owed: { items: ['wrapped candy'], balance: 330000, currency: 'won' } });
         const id = [...index.keys()][0];
-        const plan = planReview({ lines: [], answers: [{ id, answer: 'nothing — the ahjumma gave them to him', note: '' }] }, index);
+        const plan = planReview({ lines: [], answers: [{ id, nothing: true, note: 'the ahjumma gave them to him' }] }, index);
         expect(plan.money).toEqual(expect.objectContaining({ amount: 0 }));
     });
 
     test('an unreadable amount is refused rather than guessed at', () => {
         const { index } = reviewBlock({ owed: { items: ['staff'], balance: 1, currency: 'won' } });
         const id = [...index.keys()][0];
-        const plan = planReview({ lines: [], answers: [{ id, answer: 'quite a lot, honestly', note: '' }] }, index);
+        const plan = planReview({ lines: [], answers: [{ id, amount: 0, note: '' }] }, index);
         expect(plan.money).toBeNull();
         expect(plan.rejected[0].reason).toBe('review-unreadable-amount');
-    });
-
-    test('amounts are read with their scale words, not their currency symbols', () => {
-        expect(parseAmount('₩120,000')).toBe(120000);
-        expect(parseAmount('120k won')).toBe(120000);
-        expect(parseAmount('eighty-five thousand')).toBeNull();
-        expect(parseAmount('85 thousand')).toBe(85000);
-        expect(parseAmount('nothing at all')).toBeNull();
     });
 });
 
@@ -562,7 +553,7 @@ describe('contested locks — the turn-10 lock and its seven blocked writes', ()
         expect(text).toContain(`"location" is pinned to "${LOCKED}"`);
         expect(text).toContain(SAID);
         const id = [...index.keys()][0];
-        const plan = planReview({ lines: [], answers: [{ id, answer: 'the Nowon gate site', note: 'news crawl says sealed' }] }, index);
+        const plan = planReview({ lines: [], answers: [{ id, place: 'the Nowon gate site', note: 'news crawl says sealed' }] }, index);
         // The answer refreshes what the narrative is said to claim. It does NOT change the field:
         // "The lock still wins until the user acts" (§5).
         expect(plan.locks).toEqual([{ field: 'location', value: 'the Nowon gate site', note: 'news crawl says sealed' }]);
@@ -577,16 +568,17 @@ describe('unplaced people — the question that replaces the guess', () => {
         });
         expect(text).toContain('[where now?] Kim');
         const id = [...index.keys()][0];
-        const plan = planReview({ lines: [], answers: [{ id, answer: 'the Nowon gate site', note: 'dispersed after the raid' }] }, index);
+        const plan = planReview({ lines: [], answers: [{ id, place: 'the Nowon gate site', note: 'dispersed after the raid' }] }, index);
         expect(plan.places).toEqual([{ key: entityKey(PERSON, 'kim'), name: 'Kim', place: 'the Nowon gate site', note: 'dispersed after the raid' }]);
     });
 
-    test('"unknown" is a real answer and never becomes a place name', () => {
+    test('an empty place means the excerpt did not say, and never becomes a place name', () => {
         // A cast row with `place: "unknown"` would put the presence predicate to work comparing
-        // rooms to the word "unknown", which is worse than the UNPLACED it replaced.
+        // rooms to the word "unknown", which is worse than the UNPLACED it replaced. The model
+        // leaves the field empty rather than writing a refusal word; the question is asked again.
         const { index } = reviewBlock({ unplaced: [{ key: entityKey(PERSON, 'kim'), name: 'Kim' }] });
         const id = [...index.keys()][0];
-        const plan = planReview({ lines: [], answers: [{ id, answer: 'unknown', note: '' }] }, index);
+        const plan = planReview({ lines: [], answers: [{ id, place: '', note: '' }] }, index);
         expect(plan.places).toEqual([]);
         expect(plan.kept).toBe(1);
     });
@@ -603,14 +595,17 @@ describe('polarity questions, carried out of the migration', () => {
         });
         expect(text).toContain('is filling this bad for the characters');
         const id = [...index.keys()][0];
-        const plan = planReview({ lines: [], answers: [{ id, answer: 'progress', note: 'he wins residency' }] }, index);
+        const plan = planReview({ lines: [], answers: [{ id, answer: PROGRESS, note: 'he wins residency' }] }, index);
         expect(plan.polarity).toEqual([{ key: 'residency in korea', kind: PROGRESS, note: 'he wins residency' }]);
     });
 
-    test('"good" and "bad" are accepted as the words a reader would use', () => {
+    test('the answer is the closed vocabulary, not a synonym', () => {
         const { index } = reviewBlock({ polarity: [{ thread: 'x', name: 'X', about: '' }] });
         const id = [...index.keys()][0];
-        expect(planReview({ lines: [], answers: [{ id, answer: 'bad', note: '' }] }, index).polarity[0].kind).toBe(DOOM);
+        // The schema's enum is DOOM — the model answers the protocol word, and fold does not
+        // recognise "bad" or "good" as if they were it.
+        expect(planReview({ lines: [], answers: [{ id, answer: DOOM, note: '' }] }, index).polarity[0].kind).toBe(DOOM);
+        expect(planReview({ lines: [], answers: [{ id, answer: 'bad', note: '' }] }, index).polarity).toEqual([]);
     });
 });
 
@@ -633,6 +628,44 @@ describe('an answer fold cannot place is refused, never repaired by guessing', (
         expect(plan.closures).toEqual([]);
         expect(plan.merges).toEqual([]);
         expect(plan.rejected).toEqual([]);
+    });
+});
+
+describe('the review block renders dispositions and questions apart, so a place answer is filed correctly', () => {
+    test('T/M/A lines and P/L/Q questions live under different headers', () => {
+        const { text, index } = reviewBlock({
+            threads: [{ key: 't', name: 'the menace from the mountains' }],
+            unplaced: [{ key: 'person\u0000widow', name: 'the widow', place: 'garden gate' }],
+            marks: [{ key: 'k', name: 'Sol', phrase: 'bruised arm' }],
+        });
+        // The section headers name the fragment array each list feeds.
+        expect(text).toContain('Say which of these are settled — put your reading in the "lines" answers:');
+        expect(text).toContain('Answer these — put your reading in the "answers" list:');
+        // Dispositions are T/M; the place question is under the questions header.
+        expect(text.indexOf('[open] the menace from the mountains')).toBeLessThan(text.indexOf('[where now?] the widow'));
+        expect(index.get([...index.keys()].find(k => index.get(k).kind === 'place')).id).toMatch(/^P\d+$/);
+    });
+
+    test('a place answer filed in "answers" places the person (the Time Stop RPG P-reject case)', () => {
+        // Measured: 19 rejects, all P1-P10, because the model filed [where now?] answers in `lines`.
+        // Filed where the header says — the `answers` list — a place question is applied, not refused.
+        const { text, index } = reviewBlock({
+            unplaced: [{ key: 'person\u0000widow', name: 'the widow', place: 'garden gate' }],
+        });
+        expect(text).toContain('[where now?] the widow');
+        const id = [...index.keys()][0];
+        const plan = planReview({ lines: [], answers: [{ id, place: 'the inn', note: 'went to buy a room' }] }, index);
+        expect(plan.rejected).toEqual([]);
+        expect(plan.places).toEqual([{ key: 'person\u0000widow', name: 'the widow', place: 'the inn', note: 'went to buy a room' }]);
+    });
+
+    test('a place question misfiled in "lines" is still refused, not reinterpreted', () => {
+        // The section split is the fix; the gate stays as the honest refusal when the model misfiles
+        // anyway — never repaired by guessing which array it meant.
+        const { index } = reviewBlock({ unplaced: [{ key: 'k', name: 'Kim' }] });
+        const id = [...index.keys()][0];
+        const plan = planReview({ lines: [{ id, still: 'settled', note: '' }], answers: [] }, index);
+        expect(plan.rejected).toEqual([{ item: id, reason: 'review-wrong-shape' }]);
     });
 });
 

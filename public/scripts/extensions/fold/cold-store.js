@@ -25,7 +25,6 @@
 import { registerPruner } from './store.js';
 import { loadTable, commit, foldByteSize } from './store.js';
 import { table_entries } from './lib/hash.js';
-import { isMentioned } from './state-table.js';
 
 /** Where the cold rows live. */
 export const COLD_PATH = 'state.cold';
@@ -127,28 +126,28 @@ export function ofKind(kind) {
 }
 
 /**
- * The cold rows whose subject the window mentions.
+ * The cold rows whose subject the model reports the window mentioned.
  *
  * ── Why coverage, never confidence ([ROUTER]) ──
  *
  * The served router's failure was substituting a CONFIDENCE proxy for the oracle: entropy looked
  * like it should work and was wrong on 84% of the tokens it routed, because low entropy meant a
  * small peaked support, not a correct one. The missing quantity is COVERAGE — does the ledger hold
- * evidence bearing on this input? For fold, coverage is a mention test: the window literally
- * contains the thread's name or a discriminating content token. A mention is a fact, not an
- * estimate; a similarity score would be a confidence proxy and would inherit the router's failure.
+ * evidence bearing on this input? For fold, coverage is a mention test.
  *
- * The mention test is the cast's own (`state-table.js` `isMentioned`), imported rather than copied —
- * two copies of a judgement diverge, and this is the same judgement the presence questions already
- * make. Each subject — name, aka, about, keywords — is tested as a name, so a possessive
- * ("the courier's death") is recalled by a window that says "the courier".
+ * The mention test is the model's own report: the entity/thread probe answered `mentions` for this
+ * pass — the names the excerpt actually used, in any language. A cold row is recalled when its
+ * name, aka, about or keywords intersect that report. This is the same admission the live probes
+ * use; it never token-matches the window itself, which failed on paraphrase and on any language
+ * fold did not spell out.
  *
- * @param {string} windowText The narrative window.
+ * @param {Set<string>} coveredNames The model's reported mentions for the window.
  * @param {Array<{key: string, row: object}>} rows Cold rows to test.
- * @returns {Array<{key: string, row: object}>} The rows whose subject is in the window.
+ * @returns {Array<{key: string, row: object}>} The rows whose subject is in the report.
  */
-export function covered(windowText, rows) {
+export function covered(coveredNames, rows) {
     const out = [];
+    const names = coveredNames instanceof Set ? coveredNames : new Set();
     for (const item of Array.isArray(rows) ? rows : []) {
         const row = item?.row ?? null;
         if (!row) continue;
@@ -158,7 +157,7 @@ export function covered(windowText, rows) {
             row.about,
             ...(Array.isArray(row.kw) ? row.kw : []),
         ].filter(Boolean);
-        if (subjects.some(subject => isMentioned(subject, windowText))) {
+        if (subjects.some(subject => names.has(String(subject ?? '').toLowerCase().trim()))) {
             out.push(item);
         }
     }

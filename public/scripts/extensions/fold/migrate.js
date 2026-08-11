@@ -52,15 +52,14 @@ import {
     resolveEntity,
     splitEntityKey,
 } from './entity-table.js';
-import { splitClauses, splitConditions } from './block-parse.js';
+import { splitConditions } from './block-parse.js';
 import {
     BLOCK,
     HEALTH_LABELS,
     NARRATIVE,
     MODERATE,
-    CONTACT_PLACE,
+    itemKey,
     normalizeItemName,
-    normalizePlace,
 } from './state-table.js';
 import {
     DOOM,
@@ -127,24 +126,13 @@ const CLAIMED = new Set([
 ]);
 
 /**
- * Ways a person's own name can precede the thing that reaches them.
+ * Contact details are never items.
  *
- * Deliberately one pattern and not a vocabulary. "Kang's phone number" names its owner in the
- * possessive, which is how both live rows are written, and a row that does not name an owner is
- * counted rather than assigned to somebody by inference — this table has no business deciding
- * whose number a number is.
+ * The delta schema says so outright, and the entity probe reports a way to reach someone as the
+ * structured `reach` field on the person (`entities.js`). The v1 rows that were filed under the
+ * `contacts` place are legacy data, and the read-heal that keeps them out of derived inventory is
+ * keyed on the exact keys this migration records — fold's OWN output, never an English word list.
  */
-const OWNED = /^(.+?)['’]s\s+(.+)$/;
-
-/**
- * Contact prose already sitting in a cast row's `detail`.
- *
- * The narrowest thing that works: the entity probe's own example wording is "reachable by email"
- * (`entity-table.js:662`), so that is what is matched, anchored, and nothing else. A looser rule
- * would be a word list doing a judgement's job, which FOLD-REDESIGN.md §11 rules out with a
- * standing measurement behind it.
- */
-const REACHABLE = /^\s*(?:reachable|contactable|reach(?:able)? (?:them|him|her))\b[^,;]*/i;
 
 /**
  * Migrate a fold blob in place.
@@ -158,7 +146,7 @@ export function migrate(fold) {
     const state = blob.state && typeof blob.state === 'object' ? blob.state : (blob.state = {});
     const counts = {
         cast: 0, threadsFromLeads: 0, threadsFromClocks: 0, threadsFromContext: 0,
-        reach: 0, unowned: 0, blockShadow: 0, full: 0, marks: 0, facts: 0,
+        reach: 0, blockShadow: 0, full: 0, marks: 0, facts: 0,
     };
     const flags = { identity: [], polarity: [] };
 
@@ -189,7 +177,8 @@ export function migrate(fold) {
     }
 
     migrateEntities(state, cast, castTable, table, counts);
-    migrateContacts(Object.values(blob?.chronicle?.events ?? {}), cast, castTable, counts);
+    const reachKeys = new Set();
+    migrateContacts(Object.values(blob?.chronicle?.events ?? {}), reachKeys, counts);
     migrateClocks(state, table, counts, flags);
     migrateContext(state, table, counts, dropped);
     migrateBody(state, cast, castTable, counts);
@@ -214,6 +203,9 @@ export function migrate(fold) {
         at: Date.now(),
         from,
         counts: { ...counts },
+        // The exact item keys of legacy contact rows, recorded so `deriveState`'s read-heal can
+        // skip them. Keyed on this migration's OWN output — never an English place word.
+        reachKeys: [...reachKeys],
         // What the exposition gate refused, verbatim. §9 says block-shadow fields are never carried
         // into v2 context; it does not say they are unrecoverable, and a migration that destroys
         // the only record of five story facts (Raccoon City, where extraction never ran) would be
@@ -227,7 +219,6 @@ export function migrate(fold) {
     note(state, 'cap:migrate-cast', counts.cast);
     note(state, 'cap:migrate-threads', counts.threadsFromLeads + counts.threadsFromClocks + counts.threadsFromContext);
     note(state, 'cap:migrate-reach', counts.reach);
-    note(state, 'cap:migrate-unowned', counts.unowned);
     note(state, 'cap:migrate-flagged', flags.identity.length + flags.polarity.length);
     note(state, 'reject:block-shadow', counts.blockShadow);
     note(state, 'cap:threads-full', counts.full);
@@ -325,14 +316,10 @@ function migrateEntities(state, cast, castTable, table, counts) {
             continue;
         }
         const row2 = { ...row };
-        // `detail` splits: the contact clause becomes `reach`, the rest stays prose. Only ever the
-        // anchored clause — see REACHABLE.
-        const contact = String(row2.detail ?? '').match(REACHABLE);
-        if (contact && !row2.reach) {
-            row2.reach = contact[0].trim().replace(/^[^\s]+\s*/, '').slice(0, MAX_THREAD_TEXT) || contact[0].trim();
-            row2.detail = String(row2.detail).slice(contact[0].length).replace(/^[\s,;]+/, '');
-            counts.reach++;
-        }
+        // `reach` is the entity probe's structural answer now, not something a migration guesses
+        // from English contact verbs in `detail`. The v1 row's detail is preserved verbatim; the
+        // probe re-reads the same narrative on the next extraction pass and reports reach in any
+        // language.
         cast[key] = row2;
         castTable.set(key, row2);
         counts.cast++;
@@ -340,46 +327,39 @@ function migrateEntities(state, cast, castTable, table, counts) {
 }
 
 /**
- * Inventory rows filed under a `contacts` place become `reach` on the person they reach.
+ * Contact rows become `reach`, recorded by exact key.
+ *
+ * The delta schema says contact details are never items and the entity probe reports `reach`
+ * structurally. A v1 row under the `contacts` place is legacy data whose meaning only the model
+ * can re-state — so this migration does not guess ownership from English possessives or reach
+ * from English verbs. It records the EXACT item keys of the legacy contact rows it found, and the
+ * read-heal in `deriveState` skips those exact keys — keyed on the migration's own output, never
+ * a word list.
  *
  * The chronicle is NOT rewritten. State is a fold over live events (`state-table.js`
- * `deriveState`), so an event is the record of what happened and stays that; what changes is where
- * the standing fact it established is kept. `state-table.js:104-110` already names the place and
- * refuses new ones (`reject:not-an-item`, Phase A); this is the other half, for the four rows the
- * live Solo Leveling ledger already holds.
+ * `deriveState`), so an event is the record of what happened and stays that.
  *
  * @param {object[]} events The chronicle's events.
- * @param {object} cast The v2 cast table, mutated.
- * @param {Map<string, object>} castTable The same, as a Map.
+ * @param {Set<string>} reachKeys Exact normalized item names of contact rows, mutated.
  * @param {object} counts Counters, mutated.
  */
-function migrateContacts(events, cast, castTable, counts) {
-    const seen = new Set();
+function migrateContacts(events, reachKeys, counts) {
     for (const event of events) {
         for (const change of event?.d?.inv ?? []) {
-            if (!CONTACT_PLACE.test(normalizePlace(change?.at))) {
+            if (change?.at !== 'contacts') {
                 continue;
             }
             const name = normalizeItemName(change?.item)?.name;
-            if (!name || seen.has(name)) {
+            if (!name) {
                 continue;
             }
-            seen.add(name);
-
-            const owned = name.match(OWNED);
-            const owner = owned ? resolveEntity(castTable, PERSON, owned[1]) : null;
-            if (!owner) {
-                // Nobody to attach it to. Counted rather than guessed: a phone number belongs to
-                // whoever the fiction says it belongs to, and this file does not read fiction.
-                counts.unowned++;
-                continue;
+            // Keyed on the same item key `deriveState` folds, so a row that ALSO sits in a pocket
+            // (carried) is untouched — only the contact row itself is healed.
+            const key = itemKey(name, change?.at);
+            if (!reachKeys.has(key)) {
+                reachKeys.add(key);
+                counts.reach++;
             }
-            const thing = owned[2].trim().slice(0, MAX_THREAD_TEXT);
-            const row = { ...owner.entity };
-            row.reach = [row.reach, thing].filter(Boolean).join(', ').slice(0, MAX_THREAD_TEXT);
-            cast[owner.key] = row;
-            castTable.set(owner.key, row);
-            counts.reach++;
         }
     }
 }
@@ -466,7 +446,10 @@ function migrateContext(state, table, counts, dropped) {
             continue;
         }
         const value = String(field?.v ?? '');
-        const clauses = splitClauses(value).filter(Boolean);
+        // Punctuation split only — the old `splitClauses` used the `FINITE_VERB` English verb list
+        // to decide which comma fragment was its own lead. Whether a clause is a separate lead is a
+        // reading the threads probe answers structurally from the same block text.
+        const clauses = value.split(/\s*[;,]\s+/).map(part => part.trim()).filter(Boolean);
         if (!clauses.length) {
             continue;
         }
@@ -749,4 +732,4 @@ function note(state, rule, times) {
 
 // Exported so the replay harness and the tests assert against the rules the app applies rather
 // than against copies of them.
-export { THREAD_LABELS, CLAIMED, BODY_LABEL, REACHABLE, OWNED };
+export { THREAD_LABELS, CLAIMED, BODY_LABEL };

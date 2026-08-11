@@ -49,21 +49,6 @@ export const MAX_EVENTS = 300;
 export const DUPLICATE_WINDOW = 8;
 
 /**
- * Words carrying no retrieval signal. Kept deliberately small — an aggressive stoplist throws
- * away proper nouns and verbs that are exactly what a narrative query keys on.
- */
-const STOPWORDS = new Set([
-    'the', 'a', 'an', 'and', 'or', 'but', 'if', 'then', 'than', 'that', 'this', 'these', 'those',
-    'is', 'are', 'was', 'were', 'be', 'been', 'being', 'am', 'do', 'does', 'did', 'have', 'has',
-    'had', 'of', 'in', 'on', 'at', 'to', 'for', 'with', 'from', 'by', 'as', 'it', 'its', 'you',
-    'your', 'i', 'me', 'my', 'we', 'our', 'they', 'them', 'their', 'he', 'him', 'his', 'she',
-    'her', 'hers', 'not', 'no', 'so', 'up', 'out', 'about', 'into', 'over', 'after', 'before',
-    'what', 'when', 'where', 'who', 'why', 'how', 'all', 'any', 'both', 'each', 'more', 'most',
-    'some', 'such', 'only', 'own', 'same', 'too', 'very', 'can', 'will', 'just', 'would', 'could',
-    'should', 'there', 'here', 'now', 'again', 'once',
-]);
-
-/**
  * @typedef {object} ChronicleEvent
  * @property {string} s Summary text.
  * @property {string[]} kw Normalized keywords.
@@ -74,14 +59,23 @@ const STOPWORDS = new Set([
 
 /**
  * Split text into retrieval tokens.
+ *
+ * ── No stoplist ──
+ *
+ * A stopword list was an English word-list applied to prose — the class this codebase forbids. It
+ * was also unnecessary: the events carry MODEL-CHOSEN keywords (`kw`, any language), and the query
+ * tokenizer only produces candidate terms to look up in the index. A function word like "the" or
+ * "went" never matches an event keyword, so it contributes nothing to any score. The only filter
+ * that survives is structural — token length — which means the same thing in every language.
+ *
  * @param {string} text Input text.
- * @returns {string[]} Lowercased tokens, stopwords and 2-char noise removed.
+ * @returns {string[]} Lowercased tokens of more than two characters.
  */
 export function tokenize(text) {
     return String(text ?? '')
         .toLowerCase()
         .split(/[^a-z0-9']+/)
-        .filter(token => token.length > 2 && !STOPWORDS.has(token));
+        .filter(token => token.length > 2);
 }
 
 /**

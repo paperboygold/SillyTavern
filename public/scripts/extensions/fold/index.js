@@ -14,11 +14,14 @@ import {
     event_types,
     extension_prompt_roles,
     extension_prompt_types,
+    name1,
     saveSettingsDebounced,
     setExtensionPrompt,
     substituteParams,
 } from '../../../script.js';
 import { extension_settings, renderExtensionTemplateAsync } from '../../extensions.js';
+import { power_user } from '../../power-user.js';
+import { user_avatar } from '../../personas.js';
 import { ConnectionManagerRequestService } from '../shared.js';
 import { callGenericPopup, POPUP_RESULT, POPUP_TYPE } from '../../popup.js';
 import { self_test } from './lib/hash.js';
@@ -37,6 +40,7 @@ import { MIN_INTERVAL, looksLikeAttempt, nextInterval, shouldExtract } from './t
 import * as verdict from './verdict.js';
 import * as world from './world.js';
 import * as plot from './plot.js';
+import * as trace from './trace.js';
 import * as panel from './panel.js';
 import { initPanel } from './panel.js';
 import { absorbStateBlock } from './absorb.js';
@@ -309,6 +313,39 @@ export function isAdjudicationEnabled() {
 }
 
 /**
+ * The player's identity, from the persona SillyTavern is actually running.
+ *
+ * Fold had no notion of whose story this is beyond the `pov` field the scene probe infers from
+ * prose — and that field can be empty (before the first extraction) or drift (a scene narrated from
+ * another character's shoulder). The persona is the ground truth for who the reader is, so the state
+ * block states it outright instead of leaving the model to guess from the cast.
+ *
+ * `name1` is the persona's display name; the description is the active persona's own text, falling
+ * back to the global one when the per-persona descriptor is missing. Empty on both halves is
+ * deliberately a blank line rather than a fabricated identity.
+ *
+ * @returns {{name: string, description: string}} The persona's name and description.
+ */
+function personaFields() {
+    const name = String(name1 ?? '').trim();
+    const descriptor = power_user?.persona_descriptions?.[user_avatar];
+    const description = String(descriptor?.description ?? power_user?.persona_description ?? '').trim();
+    return { name, description };
+}
+
+/**
+ * The player's identity, as a single line for the state block.
+ * @returns {string} "Name — description", or '' when the persona has no name.
+ */
+function playerIdentity() {
+    const { name, description } = personaFields();
+    if (!name) {
+        return '';
+    }
+    return description ? `${name} — ${description}` : name;
+}
+
+/**
  * Adjudicate the player's last message, if it was an attempt at something contested.
  *
  * Runs inside the interceptor, so the verdict is decided BEFORE the narrator is asked to write and
@@ -405,7 +442,7 @@ export async function interceptGeneration(messages, contextSize, abort, type) {
 
     if (isStateEnabled()) {
         try {
-            setExtensionPrompt(STATE_INJECT_KEY, state.render(), extension_prompt_types.IN_CHAT, settings.state.depth, false, extension_prompt_roles.SYSTEM);
+            setExtensionPrompt(STATE_INJECT_KEY, state.render({ player: playerIdentity() }), extension_prompt_types.IN_CHAT, settings.state.depth, false, extension_prompt_roles.SYSTEM);
         } catch (error) {
             console.error('[fold] state injection failed', error);
         }
@@ -517,7 +554,7 @@ function lastExchange() {
         .join('\n');
 }
 
-async function onAssistantMessage() {
+async function onAssistantMessage({ force = false } = {}) {
     // ── The caller had the same defect the pass did ──
     //
     // `runExtraction` was instrumented so every decline left a trace, and it worked: a chat's
@@ -538,14 +575,24 @@ async function onAssistantMessage() {
     // is two lines in the same room. Scheduling by turn count treated those identically, so a scene
     // that moved stayed wrong on the panel for up to `interval` turns — measured on a live chat,
     // the location read "the hobgoblin's chamber" three turns after the party had left it.
-    const decision = shouldExtract({
-        since: state.turnsSinceExtract(),
-        // The adaptive interval, not the configured one: the setting is the starting point and the
-        // ceiling, while the actual cadence is set by whether the last look found anything.
-        interval: state.extractInterval(),
-        text: lastExchange(),
-        block: state.turnsSinceBlock() === 0,
-    });
+    //
+    // `force` bypasses the cadence gate entirely. It is used by the reload catch-up when there are
+    // messages past the extraction mark: the gate throttles RE-CHECKING the same content, and
+    // unread content is not the same content. Measured in the Time Stop RPG chat, eleven messages
+    // sat past the mark while the gate declined `extract:waiting` because `turnsSinceExtract` (1)
+    // was under the interval (2) — an idle chat never advances the turn counter, so the ceiling
+    // was never reached and the reload catch-up (which routes through this same gate) resolved
+    // nothing. New content past the mark is the strongest reason to look, stronger than cadence.
+    const decision = force
+        ? { run: true, why: 'unread' }
+        : shouldExtract({
+            since: state.turnsSinceExtract(),
+            // The adaptive interval, not the configured one: the setting is the starting point and the
+            // ceiling, while the actual cadence is set by whether the last look found anything.
+            interval: state.extractInterval(),
+            text: lastExchange(),
+            block: state.turnsSinceBlock() === 0,
+        });
     if (!decision.run) {
         observe.note('extract:waiting');
         return;
@@ -823,6 +870,9 @@ export async function init() {
     syncSteerBodyClass();
     initSteerUi();
     registerFoldSlashCommands();
+    // The panel wants the latest traced pass even across a reload. Fire-and-forget: it hydrates
+    // the in-memory cache the panel reads synchronously.
+    trace.hydrate();
     initPanel({
         // Closing the panel is a decision, so make the setting follow rather than having it
         // reappear on the next redraw.
@@ -880,10 +930,15 @@ export async function init() {
     // A third probe, for the scene itself. Everything fold knew about where and when the story was
     // happening came from parsing a status block, so a card that does not write one produced an
     // empty panel however much the narration established. The prose always had it.
+    //
+    // The player's name is threaded into the instruction: the probe is asked who the narration
+    // follows, and it can only misanchor `pov` when it has no anchor to begin with. Naming the
+    // persona tells it "when the prose follows the player, say THIS name" — the same name the state
+    // block now states as `Player:` — so the two can never disagree about the protagonist.
     registerProbe({
         schemaKey: 'scene',
         schema: () => scene.schema(),
-        instruction: () => scene.instruction(),
+        instruction: () => scene.instruction({ player: personaFields().name }),
         // Takes the pass context now: the probe's `conditions` answer becomes marks on the pov's
         // row, and a mark is an event, so it needs the window (for the gate) and the newest live
         // source (for the anchor that makes a swipe retract it) — `scene.js` applyExtraction.
@@ -963,24 +1018,16 @@ export async function init() {
         },
     });
 
-    // The player's own elision moves the clock. Measured: three of twenty-nine player turns skip
-    // time explicitly and nothing acted on any of them.
+    // ── The player's own elision is read by the model, not a regex ──
+    //
+    // The player's message ("I spend the next several hours") used to be parsed synchronously with
+    // an English phrase table, which could only read English. The scene probe reads the same window
+    // on the next extraction pass and answers `elapsed_days`/`elapsed_minutes` structurally, in any
+    // language — so the player path is gone and the probe owns all clock movement.
     eventSource.on(event_types.USER_MESSAGE_RENDERED, (messageId) => {
         // FOLD-SLA §2.1: the player's input is acknowledged immediately — the panel shows
         // `acknowledged` (amber) from the moment the message renders until extraction catches up.
         state.setSync('acknowledged', { mid: Number(messageId) });
-        if (!isStateEnabled()) {
-            return;
-        }
-        try {
-            const outcome = state.noteElapsed(chat?.[Number(messageId)]?.mes ?? '');
-            if (outcome.skipped) {
-                console.debug(`[fold] the clock advanced ${outcome.minutes} minutes on the player's own say-so`);
-                panel.render();
-            }
-        } catch (error) {
-            console.error('[fold] failed to advance the clock', error);
-        }
     });
 
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, (messageId) => {
@@ -994,19 +1041,21 @@ export async function init() {
         recall.clearActivatedWorldInfo();
     });
 
-    // FOLD-SLA §2.3, the "syncing forever" backstop: an IN-FLIGHT pass older than the extraction
-    // window is a hang or an interrupted session, and while extraction is stuck nothing re-renders
-    // to apply the stale-guard — so the chip could pulse `syncing` indefinitely. This periodic
-    // check corrects the persisted state to `failed` (stalled) so the chip tells the truth, and
-    // renders once. A healthy pass completes in well under this window (thinking is disabled for
-    // extraction, timeout 60s); anything this old genuinely never finished.
+    // ── `acknowledged` (pending) stuck on an idle chat is a READ gap, not a hang ──
     //
-    // Deliberately `syncing` ONLY, never `acknowledged`. `acknowledged` is a RESTING state: a
-    // message rendered and extraction is pending, waiting for the interval gate or the next trigger
-    // (index.js onAssistantMessage, `extract:waiting`). It is meant to persist — the interval may
-    // be several turns — and an idle `acknowledged` is not a hang. Measured in the Royal Succession
-    // chat: a chat sat `acknowledged` for hours because `turnsSinceExtract` (1) was under the
-    // interval (2), and this check marked it `failed(stalled)` — a false alarm on a healthy wait.
+    // The `syncing` branch below deliberately leaves `acknowledged` alone — a message rendered and
+    // extraction is waiting for cadence, which is a resting state. But it is only a resting state
+    // when the wait is bounded by something. The cadence is measured in ASSISTANT TURNS, and an idle
+    // chat produces none: `turnsSinceExtract` (1) sits under the interval (2) forever, the gate
+    // keeps declining `extract:waiting`, and the chip reads "pending" indefinitely. Measured in the
+    // Time Stop RPG chat: eleven messages sat past the extraction mark while a user watched a
+    // pending chip for five minutes. Unread content past the mark is the strongest reason to look,
+    // stronger than cadence, so this periodic check forces the pass the gate is blocking.
+    //
+    // Only `acknowledged`, never `failed`. `failed` means the last pass returned empty/unparseable
+    // and its retry is tied to the next message by design; forcing it every tick would hammer the
+    // API against a window the model cannot parse. `acknowledged` is the state with work queued but
+    // no trigger firing, which is exactly the gap this closes.
     setInterval(() => {
         const sync = state.getSync();
         if (sync.state === 'syncing'
@@ -1022,6 +1071,15 @@ export async function init() {
             // next message then retries the window the hang left unread.
             state.setExtractInterval(MIN_INTERVAL);
             panel.render();
+            return;
+        }
+        if (sync.state === 'acknowledged') {
+            const mark = state.extractMark();
+            const newest = (chat ?? []).reduce((last, m, i) => (m?.mes && !m.is_system ? i : last), -1);
+            if (Number.isFinite(mark.mid) && newest > mark.mid) {
+                console.debug(`[fold] pending extraction has messages past the mark (mid ${mark.mid} -> ${newest}); forcing a catch-up pass.`);
+                void onAssistantMessage({ force: true });
+            }
         }
     }, 20_000);
 
@@ -1054,7 +1112,13 @@ export async function init() {
             const newest = (chat ?? []).reduce((last, m, i) => (m?.mes && !m.is_system ? i : last), -1);
             if (Number.isFinite(mark.mid) && newest > mark.mid) {
                 console.debug(`[fold] chat loaded with messages past the extraction mark (mid ${mark.mid} -> ${newest}); catching up.`);
-                void onAssistantMessage();
+                // Force: the caller has already established there is unread content past the mark,
+                // which is the strongest reason to look. Routing through the cadence gate here is
+                // what kept an idle chat on `pending` forever — `turnsSinceExtract` under the
+                // interval means the gate declines, and an idle chat never produces the turns to
+                // reach it. The mark gap is the trigger; the gate is a throttle for re-checks, not
+                // for reads.
+                void onAssistantMessage({ force: true });
             }
         }
     });

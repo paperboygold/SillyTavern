@@ -263,6 +263,8 @@ describe('three consequence slots, and what the fourth wound does', () => {
             windowText: 'the cleaver takes Lee across the arm and breaks it',
             cast: cast(['Lee']),
             pov: 'Solomon Winters',
+            // Coverage by the model's report, the way production passes it.
+            mentioned: new Set(['broken arm']),
         });
         expect(outcome.capped).toBe(1);
         expect(outcome.rejected).toEqual([]);
@@ -322,6 +324,7 @@ describe('an invented owner is worse than none', () => {
             windowText: 'Kang takes a cut across the brow',
             cast: table2,
             pov: 'Solomon',
+            mentioned: new Set(['cut brow']),
         });
         expect(accepted[0].who).toBe('Kang Min-seo');
     });

@@ -10,7 +10,7 @@
  */
 
 import { insert_with, lookup, merge_b, merge_bu, table_entries } from './lib/hash.js';
-import { advanceClock, advanceSceneClock, clockAge, clockScalar, isClockStale, parseElapsed, skipClock } from './clock.js';
+import { advanceClock, advanceSceneClock, clockAge, clockScalar, isClockStale } from './clock.js';
 import { MIN_INTERVAL } from './trigger-table.js';
 import * as chronicle from './chronicle.js';
 import * as entities from './entities.js';
@@ -26,7 +26,6 @@ import {
     creditsWithoutDebit,
     deriveState,
     foldContest,
-    isMentioned,
     ownerKey,
     povMarks,
     splitMarkKey,
@@ -47,7 +46,8 @@ import {
 } from './state-table.js';
 import { reviewBlock, reviewableWindow } from './review-table.js';
 import * as review from './review.js';
-import { commit, loadTable } from './store.js';
+import { coveredCast, coveredThreads } from './coverage.js';
+import { commit, loadTable, loadValue } from './store.js';
 import * as log from './log.js';
 import { renderWorldEvents, revealContract } from './world-table.js';
 
@@ -145,47 +145,31 @@ export function noteTurn() {
 }
 
 /**
- * Advance the clock by however much time the player's own message says has passed.
- *
- * The player is the authority on their own elision. "I continue working for the next several hours"
- * is a statement of fact about the fiction, and until now nothing in fold acted on it — the clock
- * sat where the last status block left it while the narrative moved through an afternoon.
- *
- * @param {string} text The player's message.
- * @returns {{skipped: boolean, minutes?: number}} What happened.
- */
-export function noteElapsed(text) {
-    const minutes = parseElapsed(text);
-    if (minutes === null) {
-        return { skipped: false };
-    }
-    return advanceClockBy(minutes);
-}
-
-/**
  * Advance the clock on the scene probe's report of elapsed time and current time.
  *
- * The scene probe reads the narrative with comprehension and reports `elapsed` (the phrase the
- * story used — "a week", "overnight", "come morning") AND `time` (the clock as it now reads). These
- * are one update, not two: `advanceSceneClock` moves the DAY by the elapsed and sets the FACE from
- * the time (or the marker's implied phase). Before this, `time` was folded in absolutely by
- * `setContext` and `elapsed` was added on top by a minute count — a pass reporting "come morning"
- * and "19:45" set the clock to 19:45 and then added a day to it, leaving the face frozen at 19:45
- * while the day rolled (the Royal Succession court that assembled "at first light" and read 19:45).
+ * The scene probe reads the narrative with comprehension and reports STRUCTURED values — `days`
+ * (whole days passed), `minutes` (sub-day minutes), `phase` (the part of a day a transition marker
+ * landed on), and `clockHour`/`clockMinute` (the clock as it now reads). These are one update, not
+ * two: `advanceSceneClock` moves the DAY by the elapsed and sets the FACE from the clock (or the
+ * marker's implied phase). Before this, `time` was folded in absolutely by `setContext` and
+ * `elapsed` was added on top by a minute count — a pass reporting "come morning" and "19:45" set
+ * the clock to 19:45 and then added a day to it, leaving the face frozen at 19:45 while the day
+ * rolled (the Royal Succession court that assembled "at first light" and read 19:45).
  *
- * Unlike the player's own message (which must pass the assertion gate in `parseElapsed` to prove it
- * is not a memory), the model has already asserted that time moved: it is answering the questions
- * "how much time passed?" and "what time is it now?". So no English gate is applied — the model is
- * the authority here, in any language.
+ * The model is the authority here, in any language: it read the prose and answered with numbers,
+ * so no English gate is applied to any of it.
  *
  * @param {object} [stated] The scene probe's answers.
- * @param {string} [stated.elapsed] The `elapsed` answer.
- * @param {string} [stated.time] The `time` answer.
- * @param {string} [stated.date] The `date` answer.
+ * @param {number} [stated.days] Whole days passed.
+ * @param {number} [stated.minutes] Sub-day minutes passed.
+ * @param {string} [stated.phase] The part of a day a marker landed on: '' or a day part.
+ * @param {number} [stated.clockHour] The hour the clock reads now, or NaN.
+ * @param {number} [stated.clockMinute] The minute, or NaN.
+ * @param {boolean} [stated.dateChanged] Whether a new day was named.
  * @returns {{skipped: boolean, minutes?: number}} Whether the clock moved.
  */
-export function noteSceneElapsed({ elapsed = '', time = '', date = '' } = {}) {
-    const clock = advanceSceneClock(loadClock(), { elapsed, time, date });
+export function noteSceneElapsed({ days = 0, minutes = 0, phase = '', clockHour = NaN, clockMinute = NaN, dateChanged = false } = {}) {
+    const clock = advanceSceneClock(loadClock(), { days, minutes, phase, clockHour, clockMinute, dateChanged });
     if (!clock.accepted) {
         return { skipped: false };
     }
@@ -226,23 +210,6 @@ function applyClock(clock, source) {
         observe.note('clock:scene-elapsed');
     }
     return { skipped: true, minutes: clock.minutes };
-}
-
-/**
- * Advance the persisted clock by a number of minutes and keep its consumers in step.
- *
- * The player's own elision path: `skipClock` adds a minute count to the running clock and wraps the
- * day, which is exactly right for a declared duration ("I spend three hours") and would be wrong for
- * a scene-transition marker — which is why the scene path uses `advanceSceneClock` instead.
- * @param {number} minutes Minutes to advance.
- * @returns {{skipped: boolean, minutes?: number}} The outcome.
- */
-function advanceClockBy(minutes) {
-    const clock = skipClock(loadClock(), minutes);
-    if (!clock.accepted) {
-        return { skipped: false };
-    }
-    return applyClock(clock, 'player');
 }
 
 /**
@@ -668,7 +635,13 @@ export function noteShadow(entries) {
  * @returns {{inv: Map, vitals: Map, marks: Map, since: Map, contributors: Map}} Derived state.
  */
 export function derive() {
-    return deriveState(chronicle.liveEvents(), { seeds: entities.markSeeds() });
+    // `reachKeys` is the migration's OWN record of the legacy contact rows it moved — exact item
+    // keys, never an English place word. `loadValue` returns undefined when no migration has run.
+    const reachKeys = loadValue('state.migrated.reachKeys');
+    return deriveState(chronicle.liveEvents(), {
+        seeds: entities.markSeeds(),
+        reachKeys: Array.isArray(reachKeys) ? new Set(reachKeys) : null,
+    });
 }
 
 /** @returns {string} The point-of-view character's name, or ''. */
@@ -696,18 +669,26 @@ export function deltaSchema() {
                 items: {
                     type: 'object',
                     properties: {
-                        item: { type: 'string', description: 'Item name, singular, lowercase.' },
+                        item: { type: 'string', description: 'Item name, singular, lowercase. When you mean an item the State block already lists, use its EXACT name from the State block.' },
+                        same_as: {
+                            type: 'string',
+                            description: 'The exact name of an item the State block already lists, when THIS entry is a different spelling of that same thing. Empty when this is a new item or already uses the exact name. Never guess a name fold holds under a different spelling without saying so here.',
+                        },
                         dq: { type: 'integer', description: 'Change in quantity: positive gained, negative lost.' },
                         set: {
                             type: 'integer',
                             description: 'The absolute total now held, instead of a change — "the treasury holds 12,400 marks" is set 12400, never dq. Use set only when the story states a current balance or count outright.',
+                        },
+                        magnitude: {
+                            type: 'integer',
+                            description: 'The quantity the narrative actually states, when it states one — "a hundred silver" is 100, "forty wolves" is 40. 0 when no explicit count is given. This is what corroborates a large change; fold never guesses a magnitude from prose.',
                         },
                         at: {
                             type: 'string',
                             description: 'Where it is: "carried" (on the character, incl. worn or drawn), a place name ("apartment", "car boot"), "assets" (owned property not carried), "abilities" (a capability), or "money" (the currency name, set or dq = amount). Contact details — a phone number, address, email — are never items.',
                         },
                     },
-                    required: ['item', 'dq', 'set', 'at'],
+                    required: ['item', 'same_as', 'dq', 'set', 'magnitude', 'at'],
                     additionalProperties: false,
                 },
             },
@@ -739,6 +720,10 @@ export function deltaSchema() {
                             type: 'string',
                             description: 'The affliction as a short lowercase phrase: "bruised left arm". Record the affliction, never the reassurance — "otherwise unhurt" is not a condition.',
                         },
+                        subject: {
+                            type: 'string',
+                            description: 'What the condition is ABOUT, as a short lowercase phrase: "hangover", "left arm", "ribs". This is what groups "mild hangover" and "hangover mostly eased" as one condition. Empty only when the phrase has no content word.',
+                        },
                         on: { type: 'boolean', description: 'True if it started, false if it healed or was treated away.' },
                         severity: {
                             type: 'string',
@@ -750,7 +735,7 @@ export function deltaSchema() {
                             description: 'How many exchanges it lasts on its own; 0 for a wound or anything that needs treatment or time.',
                         },
                     },
-                    required: ['who', 'flag', 'on', 'severity', 'turns'],
+                    required: ['who', 'flag', 'subject', 'on', 'severity', 'turns'],
                     additionalProperties: false,
                 },
             },
@@ -783,9 +768,11 @@ export function deltaInstruction() {
         'dcur is the change from the current value, never the new total; max only when newly established.',
         'Contact details (phone number, address, email) are NOT items — never record them as gained.',
         'Set "at": "carried" when on the character, otherwise the place; moving between places is a loss in one and a gain in the other.',
+        'Identity is yours, not fold\'s: when you mean an item the State block already lists, reuse its EXACT name from the State block. If you write a different spelling of a held item, set "same_as" to the exact held name. fold merges only on your word; it never guesses from spelling.',
         '"at": "assets" for owned property (house, ship, mount); "at": "abilities" for a capability gained or lost (spell, skill, power). These are the most commonly missed.',
         'Every condition belongs to somebody: "who" is the person\'s name, exactly as in the people list; empty only for the point-of-view character.',
         'Record the affliction, never the reassurance — "otherwise unhurt" is not a condition.',
+        '"subject" is what the condition is ABOUT, not its severity or its wording: "mild hangover" and "hangover mostly eased" are both subject "hangover", "bruised left arm" is subject "left arm". This is what groups two phrasings of one condition into one.',
         'Use empty arrays when an event changed nothing.',
     ].join(' ');
 }
@@ -805,9 +792,11 @@ export function deltaInstruction() {
  *   pass. Threaded from `extract.js` through `chronicle.applyExtraction` rather than re-derived
  *   here, because the question the gate asks is "what was this model told", and only the caller
  *   that built the prompt knows the answer.
+ * @param {Set<string>|null} [context.mentioned] Names the model reports the excerpt uses —
+ *   coverage by report, not a substring proxy ([ROUTER]).
  * @returns {{delta: object|null, rejected: object[]}} The accepted delta, or null if empty.
  */
-export function validateDelta(raw, { windowText = '', state = null, shown = null } = {}) {
+export function validateDelta(raw, { windowText = '', state = null, shown = null, mentioned = null } = {}) {
     const current = state ?? derive();
 
     const inventory = validateInventory({
@@ -816,11 +805,12 @@ export function validateDelta(raw, { windowText = '', state = null, shown = null
         windowText,
         budget: MAX_CHANGES_PER_TURN,
         shown,
+        mentioned,
         // The contributor trail, so the already-recorded gate can refuse a cross-window re-record
         // (the doubled ₩680,000 payout, the knife and phone numbers) — see the gate's docblock.
         contributors: current.contributors,
     });
-    const vitals = validateVitals({ vitals: current.vitals, deltas: raw?.vit, windowText });
+    const vitals = validateVitals({ vitals: current.vitals, deltas: raw?.vit, windowText, mentioned });
     // ── The cast table is the only thing that can say whether an owner exists ──
     //
     // Threaded in rather than looked up inside `state-table.js`, for that file's standing reason: it
@@ -833,6 +823,7 @@ export function validateDelta(raw, { windowText = '', state = null, shown = null
         windowText,
         cast: entities.load(),
         pov: pov(),
+        mentioned,
     });
 
     if (status.capped) {
@@ -960,11 +951,19 @@ export function ledgerBlock({ windowText = '' } = {}) {
     // scene moved and nobody ever asked where they went. A stale record is exactly the "evidence
     // cannot decide" case the law names — ask, rather than let the panel assert a room they left.
     // Only mentioned-elsewhere and stale-elsewhere; a person freshly placed needs no question.
+    //
+    // The "mentioned" signal is the model's OWN coverage report from the previous pass
+    // (`coveredCast()`), not a substring test of the window: whether the excerpt actually used the
+    // person's name is a reading-comprehension question the probe already answered, in any
+    // language. [ROUTER]: admission by coverage, never a token match.
+    const castCovered = coveredCast();
+    const castMentioned = person => castCovered.has(String(person.name ?? '').toLowerCase().trim())
+        || castCovered.has(String(person.key ?? '').toLowerCase().trim());
     const misplaced = windowText
-        ? castRows.elsewhere.filter(person => isMentioned(person.name, windowText))
+        ? castRows.elsewhere.filter(person => castMentioned(person))
         : [];
     const staleElsewhere = castRows.elsewhere
-        .filter(person => !isMentioned(person.name, windowText) && (person.stale ?? 0) >= PLACE_STALE_AFTER);
+        .filter(person => !castMentioned(person) && (person.stale ?? 0) >= PLACE_STALE_AFTER);
     const unplaced = [...castRows.unplaced, ...misplaced, ...staleElsewhere];
     // ── [TLB]: the review's hot set scales with the window ──
     //
@@ -972,9 +971,10 @@ export function ledgerBlock({ windowText = '' } = {}) {
     // the Royal Succession chat, 78% answered "still open" or not at all. The window can only settle
     // threads it touches, so `reviewableWindow` poses the touched ones (they might change) and the
     // untouched ones only on the REVIEW_EVERY safety valve ([TLB]: a fixed hot set doesn't scale;
-    // STATE-ARCHIVE.md measured misses growing ~3x per context doubling at constant slots).
+    // STATE-ARCHIVE.md measured misses growing ~3x per context doubling at constant slots). "Touched"
+    // is the model's previous-pass coverage report (`coveredThreads()`), not a substring test.
     const { text: asked, index } = reviewBlock({
-        threads: reviewableWindow(clocks.reviewable(turn), windowText, turn),
+        threads: reviewableWindow(clocks.reviewable(turn), coveredThreads(), turn),
         unplaced,
         contests: contests().map(contest => ({
             field: contest.field, locked: contest.lockedValue, value: contest.narrativeValue, count: contest.count,
@@ -1005,9 +1005,20 @@ export function ledgerBlock({ windowText = '' } = {}) {
 
 /**
  * Render current state for the prompt.
+ *
+ * The `player` line states who the player character is, in the persona's own words. Fold had no
+ * notion of whose story this is beyond the `pov` field the scene probe infers from prose — and
+ * that field can be empty (before the first extraction) or wrong (a scene the narration reads
+ * from another character's shoulder for a stretch). Neither case should leave the narrator free
+ * to decide who the reader is: at initialization and mid-game the model sometimes picked a cast
+ * member as the player character. The persona is the ground truth for that, so it is stated
+ * outright, at the top of the block, close to generation where it cannot decay.
+ *
+ * @param {object} [options] Options.
+ * @param {string} [options.player] The player's identity: "Sol — a young man standing 184cm…".
  * @returns {string} The block, or '' when there is nothing to say.
  */
-export function render() {
+export function render({ player = '' } = {}) {
     const { inv, vitals, marks } = derive();
     const body = renderState({ inv, vitals, marks, pov: pov() });
 
@@ -1104,7 +1115,15 @@ export function render() {
         observe.noteCap('context-stale', dropped);
     }
 
-    const scene = [...context, cast, stakes].filter(Boolean).join('\n');
+    // ── The player, first and always ──
+    //
+    // Identity is the one thing the ledger should assert even when the scene probe has not run yet:
+    // at initialization the block used to say nothing about who the reader is, and the model picked
+    // from the cast. The persona is authoritative for that, so it leads the block. `pov` stays as a
+    // separate fact — who the prose currently follows can differ from who the player is — but the
+    // player is never left to be guessed.
+    const playerLine = player ? `Player: ${player}` : '';
+    const scene = [playerLine, ...context, cast, stakes].filter(Boolean).join('\n');
     if (!scene) {
         return body;
     }

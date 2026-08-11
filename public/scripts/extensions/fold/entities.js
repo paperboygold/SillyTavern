@@ -28,6 +28,7 @@ import {
     foldEntities,
     foldEntity,
     mergeEntities,
+    normalizeEntityName,
     renderEntities,
     resolveEntity,
     splitEntityKey,
@@ -38,6 +39,7 @@ import {
 // this file already depends on both halves.
 import { markPhrases } from './state-table.js';
 import { identityPairs } from './thread-table.js';
+import { noteCoverage } from './coverage.js';
 import * as cold from './cold-store.js';
 import * as observe from './observe.js';
 import { commit, loadTable, loadValue } from './store.js';
@@ -152,8 +154,20 @@ export function schema() {
                     additionalProperties: false,
                 },
             },
+            // ── Coverage, not a substring proxy ([ROUTER]) ──
+            //
+            // The mention gate used to decide "did the window mention this person?" by token-matching
+            // the window text, which fails on paraphrase and on any language fold did not spell out.
+            // The model already READ the window; it is the authority on what it names. `mentions`
+            // is that reading, returned structurally — the names the new excerpt actually uses — and
+            // fold admits a proposal only when its name is in this set. Admission by coverage.
+            mentions: {
+                type: 'array',
+                description: 'Every name or title the NEW excerpt actually uses for a person, exactly as written — "the woman", "the widow", "Vesk", "Sol". One entry per distinct name, including the aliases. This is what proves the excerpt was about someone; a name absent here was not in the excerpt.',
+                items: { type: 'string' },
+            },
         },
-        required: ['people'],
+        required: ['people', 'mentions'],
         additionalProperties: false,
     };
 }
@@ -174,10 +188,12 @@ export function instruction() {
         'One person, one entry: name in "name", the bare place name in "place" (worded exactly as the narration words it — a differently-worded place makes a person vanish from the room), what they are doing in "detail", how to contact them in "reach".',
         'Give "feels" (how they regard the point-of-view character), "wants" (their own agenda), "knows" (what they know about him that matters). These drive behaviour and are worth more than any description of their clothes.',
         'A character called by a title and a name — "the Hero" and "Solomon" — is ONE person: proper name in "name", every other form in "aka".',
+        'Put EVERY name this excerpt actually uses for them in "aka", exactly as written — "the woman", "the widow", "Elin\'s mother" — because an alias is how the reader proves the excerpt was about them. A person whose spoken name is "the woman" and whose stored name is "the widow" is not mentioned unless the alias carries it.',
         'Give "place" for anyone whose position the excerpt establishes; if they walked out, give the place they walked TO. Do not mark them "gone" unless they left the story for good.',
         'Give "reach" whenever the excerpt establishes a way to contact someone — a number exchanged, an address. Contact details are never items.',
         'Give "threat" only while someone is actively dangerous, and set it back to 0 the moment they stop being — defeated, fled, calmed down. Everyone else is 0.',
         'Report ONLY people the NEW excerpt names or places — never someone merely carried over from the already-recorded block. A person the new text does not name is not reported, whatever the record shows. Use an empty array when the new excerpt establishes nobody.',
+        'List EVERY name the NEW excerpt actually uses for anyone — including people you do not otherwise report — in "mentions", exactly as written: "the woman", "Vesk", "Gorak". A name the excerpt does not contain is never listed. This is the coverage proof: only a name in "mentions" may be changed.',
     ].join(' ');
 }
 
@@ -196,24 +212,40 @@ export function applyExtraction(fragment, { windowText = '', turn: at = turn(), 
     // events use, so a trail entry and a closure written by one pass point at one message.
     const mid = sources[sources.length - 1]?.mid;
 
-    // ── Re-promotion by coverage: a cold person the window mentions comes home ──
+    // ── Coverage by the model's own report, never a substring proxy ([ROUTER]) ──
+    //
+    // The model read the window; `mentions` is its structural answer for what the new excerpt
+    // actually names. Fold admits a proposal only when its name (or an alias) is in that set. The
+    // mention gate that used to token-match the window text — failing on paraphrase and on any
+    // language fold did not spell out — is replaced by membership in this report. The report is
+    // also persisted, so the NEXT pass's review hot set and presence questions read it instead of
+    // token-matching the window themselves.
+    //
+    // Members are normalized through the same `normalizeEntityName` the alias keys use, so a
+    // report of "the hooded figure" matches the alias key "hooded figure" — the article mismatch
+    // that otherwise splits one person into two.
+    const mentioned = new Set((fragment?.mentions ?? [])
+        .map(name => normalizeEntityName(String(name ?? ''))?.key)
+        .filter(Boolean));
+    noteCoverage('cast', mentioned);
+
+    // ── Re-promotion by coverage: a cold person the report names comes home ──
     //
     // Same rule as the thread table (clocks.js): a person archived by staleness is written back the
     // moment the window mentions them — a WRITE into the tracked state, never a paste
-    // ([AC-PRODUCT]), admitted by coverage, not a confidence score ([ROUTER]).
-    if (windowText) {
-        const restored = cold.covered(windowText, cold.ofKind('person'));
-        for (const item of restored) {
-            if (cold.promote('person', item.key, item.row, table, at)) {
-                observe.note('cast:recalled');
-            }
+    // ([AC-PRODUCT]), admitted by coverage, not a confidence score ([ROUTER]). The coverage is the
+    // model's own `mentions` report, not a substring test of the window.
+    const restored = cold.covered(mentioned, cold.ofKind('person'));
+    for (const item of restored) {
+        if (cold.promote('person', item.key, item.row, table, at)) {
+            observe.note('cast:recalled');
         }
     }
 
     const people = foldEntities(
         table,
         (fragment?.people ?? []).map(entry => ({ ...entry, kind: PERSON })),
-        { windowText, turn: at, mid });
+        { windowText, turn: at, mid, mentioned });
 
     // ── Stale entities demote, they do not vanish ──
     //

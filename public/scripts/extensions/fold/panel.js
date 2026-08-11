@@ -34,10 +34,9 @@ import { t } from '../../i18n.js';
 import * as state from './state.js';
 import * as entities from './entities.js';
 import * as clocks from './clocks.js';
-import { LONG_STATEMENT, isNegation, splitClauses } from './block-parse.js';
+import { LONG_STATEMENT } from './block-parse.js';
 import { DISPOSITIONS, LEAD_LABELS, PERSON_LABELS, dispositionRank } from './entity-table.js';
 import {
-    findDeadline,
     formatClock,
     formatDate,
     formatGap,
@@ -46,6 +45,7 @@ import {
     timeUntil,
 } from './clock.js';
 import { ABILITIES, ASSETS, CARRIED, CATEGORIES, MONEY, vitalLabel } from './state-table.js';
+import * as trace from './trace.js';
 
 const PANEL_ID = 'foldTracker';
 
@@ -218,17 +218,13 @@ function chipsAndRest(value) {
  * @param {boolean} [options.dropNegations] Whether to hide clauses that assert nothing is wrong.
  * @returns {HTMLElement} A list or a paragraph.
  */
-function bulletsOrProse(value, { dropNegations = false } = {}) {
+function bulletsOrProse(value) {
     const text = String(value ?? '').trim();
-    let parts = text.split(/[;]|,(?=\s)|\bbut\b|\botherwise\b/).map(part => part.trim()).filter(Boolean);
-
-    if (dropNegations) {
-        const afflictions = parts.filter(part => !isNegation(part));
-        if (!afflictions.length) {
-            return el('div', 'fold_prose', sentenceCase(text));
-        }
-        parts = afflictions;
-    }
+    // Punctuation split only — a clause boundary means the same in every language. The old
+    // `\bbut\b|\botherwise\b` split and the `isNegation` word-list (which judged whether a clause
+    // was a reassurance) are gone: whether "otherwise unhurt" is a condition is a reading the model
+    // answers with `on: false`/`subject`, never an English list.
+    const parts = text.split(/[;]|,(?=\s)/).map(part => part.trim()).filter(Boolean);
 
     const listy = parts.length > 1 && parts.every(part => part.split(/\s+/).length <= 6);
     if (!listy) {
@@ -254,7 +250,11 @@ function bulletsOrProse(value, { dropNegations = false } = {}) {
  */
 function statementList(value) {
     const list = el('ul', 'fold_list');
-    for (const statement of splitClauses(value)) {
+    // Punctuation split only — same discipline as `bulletsOrProse`: whether a fragment is a
+    // separate statement is a reading the model answers (the threads probe reports leads
+    // structurally), never the old `FINITE_VERB` English verb list.
+    const statements = String(value ?? '').split(/\s*[;,]\s+/).map(part => part.trim()).filter(Boolean);
+    for (const statement of statements) {
         const row = el('li', 'fold_row fold_stmt');
         row.appendChild(rail(1));
 
@@ -427,24 +427,16 @@ function nearestDeadline(scene, leads) {
         return null;
     }
 
+    // The deadline is the model's STRUCTURED answer — the lead schema's `deadline` field (minutes
+    // since midnight the excerpt scheduled it by), reported in any language. fold never reads a
+    // scheduling time out of prose with an English preposition list; it renders the number the
+    // model reported. The card's own leads field is included only for chats where extraction has
+    // not run yet — those carry no structured deadline, so they contribute nothing to the count.
     const candidates = [];
     for (const lead of leads) {
-        const at = findDeadline(`${lead.name} ${lead.detail}`);
-        if (at !== null) {
+        const at = Number(lead?.deadline);
+        if (Number.isInteger(at) && at >= 0) {
             candidates.push({ label: lead.name, detail: lead.detail, at, key: lead.key });
-        }
-    }
-    // The card's own leads field, for chats where extraction has not run yet. Split into clauses
-    // first: the field is a comma-joined run of several leads, and taking the first eighty
-    // characters of the whole thing puts an unrelated sentence next to the countdown.
-    for (const label of ENTITY_FIELDS.leads) {
-        const raw = scene.get(label);
-        if (!raw) continue;
-        for (const clause of String(raw).split(/[;,](?=\s)|(?<=\.)\s+/)) {
-            const at = findDeadline(clause);
-            if (at !== null) {
-                candidates.push({ label: clause.trim(), detail: '', at });
-            }
         }
     }
 
@@ -560,6 +552,55 @@ function renderSyncChip(sync, { compact = false } = {}) {
         chip.appendChild(el('span', 'fold_sync_label', stale ? t`stalled` : meta.label));
     }
     return chip;
+}
+
+/**
+ * The trace section: the latest extraction pass, if any, shown as the full input->output pair
+ * under a quiet heading. A click prints it verbatim to the console — the same "a question you
+ * ask on purpose" discipline as the calibration report, because the full prompt is long and the
+ * panel exists to be glanced at, not read. `state.log` keeps the last N failures for the footer;
+ * this is the SUCCESSES, which nothing else on the panel shows.
+ * @param {object|null} rec The latest traced pass (from `trace.last()`), or null.
+ * @returns {HTMLElement|null} The section, or null when nothing is traced yet.
+ */
+function renderTraceSection(rec) {
+    if (!rec) {
+        return null;
+    }
+    const head = section(t`Trace`);
+    head.classList.add('fold_head_quiet');
+    const line = el('div', 'fold_trace_line');
+    const when = rec.t ? new Date(rec.t).toLocaleTimeString() : '?';
+    line.appendChild(el('span', 'fold_trace_tag', rec.ok ? 'ok' : `fail: ${rec.reason ?? ''}`));
+    if (rec.turn != null) {
+        line.appendChild(el('span', 'fold_trace_meta', `t${rec.turn}`));
+    }
+    if (rec.mid != null) {
+        line.appendChild(el('span', 'fold_trace_meta', `#${rec.mid}`));
+    }
+    if (rec.why) {
+        line.appendChild(el('span', 'fold_trace_meta', rec.why));
+    }
+    line.appendChild(el('span', 'fold_trace_meta', when));
+    line.appendChild(el('span', 'fold_trace_hint', t`click to print prompt → output to the console`));
+    line.setAttribute('role', 'button');
+    line.setAttribute('tabindex', '0');
+    const print = () => {
+        console.log(`[fold] trace — pass @ ${new Date(rec.t ?? Date.now()).toISOString()}`);
+        console.log(`[fold] PROMPT\n${rec.prompt ?? ''}`);
+        console.log(`[fold] RAW REPLY\n${rec.raw ?? ''}`);
+        console.log(`[fold] PARSED\n${JSON.stringify(rec.parsed ?? null, null, 2)}`);
+    };
+    line.addEventListener('click', print);
+    line.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            print();
+        }
+    });
+    const box = el('div', 'fold_trace_box');
+    box.appendChild(line);
+    return box;
 }
 
 /**
@@ -1090,6 +1131,12 @@ export function render() {
     // value must never be presented as current — the chip says acknowledged/syncing while waiting
     // and failed (red, with the reason) when the pass returned nothing.
     target.appendChild(renderSyncChip(snapshot.sync));
+    // The trace: the last pass's prompt -> output pair, under the sync chip. It is the evidence
+    // for the resolver and the "what did the model actually see and say" answer; a click prints it.
+    const traceSection = renderTraceSection(trace.last());
+    if (traceSection) {
+        target.appendChild(traceSection);
+    }
 
     const deadline = nearestDeadline(scene, stakes.open);
 
@@ -1154,10 +1201,9 @@ export function render() {
         if (list.childElementCount) {
             target.appendChild(list);
         }
-        // Only when the fold has nothing of its own to say. Reassurances are dropped either way —
-        // "otherwise uninjured" is the absence of a condition, not one.
+        // Only when the fold has nothing of its own to say. The card's Health field is shown as-is.
         if (health && !snapshot.status.length) {
-            target.appendChild(bulletsOrProse(health, { dropNegations: true }));
+            target.appendChild(bulletsOrProse(health));
         }
     }
 
@@ -1335,7 +1381,7 @@ export function render() {
     // schema — including contacts and leads when extraction has not yet produced structure.
     const aside = snapshot.context.filter(field => !claimed.has(field.label));
     for (const field of aside) {
-        const statements = splitClauses(field.value);
+        const statements = String(field.value ?? '').split(/\s*[;,]\s+/).map(part => part.trim()).filter(Boolean);
         target.appendChild(section(sentenceCase(field.label), statements.length > 1 ? statements.length : ''));
         target.appendChild(statements.length > 1
             ? statementList(field.value)

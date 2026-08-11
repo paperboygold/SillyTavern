@@ -22,7 +22,6 @@
  * schema").
  */
 
-import { splitClauses } from './block-parse.js';
 import { LEAD_LABELS } from './entity-table.js';
 import { HEALTH_LABELS } from './state-table.js';
 import {
@@ -121,7 +120,12 @@ export function routeBlockFields(context, table, { turn = 0 } = {}) {
             continue;
         }
 
-        const clauses = splitClauses(value).filter(Boolean);
+        // Punctuation split only. The old `splitClauses` judged which comma-separated fragment was
+        // its own statement with the `FINITE_VERB` English verb list — a grammar that could only
+        // read one language. Whether a fragment is a separate lead is a reading the model answers
+        // (the threads probe reports leads structurally from the same block text); this fallback
+        // only routes on shape.
+        const clauses = String(value ?? '').split(/\s*[;,]\s+/).map(part => part.trim()).filter(Boolean);
         if (!clauses.length) {
             continue;
         }

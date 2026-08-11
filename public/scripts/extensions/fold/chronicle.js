@@ -163,6 +163,18 @@ export function extractionSchema({ deltaSchema = null } = {}) {
             description: `Two to ${MAX_KEYWORDS} lowercase search keywords: names, places, objects, actions.`,
             items: { type: 'string' },
         },
+        mentions: {
+            type: 'array',
+            // ── Coverage, not a substring proxy ([ROUTER]) ──
+            //
+            // The delta mention gates used to decide "did the window name this item?" by token
+            // matching the window, which fails on paraphrase and on any language fold did not spell
+            // out. The model already READ the window; `mentions` is its structural answer for what
+            // the excerpt actually names. A delta is admitted only when its item appears in this
+            // set — the model's own report of what it saw, in any language.
+            description: 'Every item, vital or condition the NEW excerpt actually names, exactly as written: "silver", "the spear", "ribs". One entry per distinct name. An item the excerpt does not name is never listed.',
+            items: { type: 'string' },
+        },
     };
     if (deltaSchema) {
         properties.delta = deltaSchema;
@@ -226,6 +238,18 @@ export function applyExtraction(fragment, { sources = [], now = Date.now(), wind
     // swipes it away — which is the behaviour we want.
     const anchor = sources[sources.length - 1];
 
+    // ── Coverage by the model's own report, never a substring proxy ([ROUTER]) ──
+    //
+    // Every event's `mentions` names what the model says the excerpt actually touched. Fold
+    // builds one coverage set across the batch and hands it to the delta validator, which admits
+    // an item/vital/mark only when its name is in it — replacing the token-match mention gate
+    // that failed on paraphrase and on any language fold did not spell out.
+    const mentioned = new Set(
+        raw.flatMap(candidate => Array.isArray(candidate?.mentions) ? candidate.mentions : [])
+            .map(name => String(name ?? '').trim().toLowerCase())
+            .filter(Boolean),
+    );
+
     const rejections = [];
     // Every accepted inventory change this pass made, flattened across its events. Returned rather
     // than acted on: the credits-without-debit trigger is a question about the PASS, not about any
@@ -240,7 +264,7 @@ export function applyExtraction(fragment, { sources = [], now = Date.now(), wind
             // rejected never enters the ledger, which is what lets the fold stay a pure sum.
             let delta = null;
             if (validateDelta && candidate?.delta) {
-                const outcome = validateDelta(candidate.delta, { windowText, shown });
+                const outcome = validateDelta(candidate.delta, { windowText, shown, mentioned });
                 delta = outcome.delta;
                 rejections.push(...outcome.rejected);
                 if (delta) {

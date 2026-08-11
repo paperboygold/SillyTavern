@@ -46,6 +46,17 @@ module.exports = {
             },
         },
         {
+            // Node scripts that live beside the fold extension (harvest.js runs on the command
+            // line over the chat data, not in the browser).
+            files: ['public/scripts/extensions/fold/harvest.js'],
+            env: {
+                node: true,
+            },
+            parserOptions: {
+                sourceType: 'module',
+            },
+        },
+        {
             // Browser-side files
             files: ['public/**/*.js'],
             env: {

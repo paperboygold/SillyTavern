@@ -1,7 +1,8 @@
 /**
  * fold/trigger-table.js — when to look, and when to adjudicate.
  *
- * Pure, imports only ./clock.js. Unit-testable.
+ * Pure, imports only ./clock.js for nothing any more — the scene-probe answers replaced the
+ * narrative time-reading. Unit-testable.
  *
  * ── Why a fixed interval was the wrong unit ──
  *
@@ -27,8 +28,6 @@
  * attempt at something contested, and lets ordinary conversation through untouched.
  */
 
-import { parseElapsed } from './clock.js';
-
 /**
  * ── A verb-based movement gate was tried and DELETED ──
  *
@@ -44,13 +43,8 @@ import { parseElapsed } from './clock.js';
  * only what can be recognised precisely, and the adaptive interval below does the rest.
  */
 
-/** Phrases that open a new scene. Anchored to a time unit, so "the next chamber" cannot match. */
-const SCENE_BREAK = new RegExp([
-    '\\b(?:later that|the (?:next|following)|by the) (?:morning|afternoon|evening|night|day|week|month|year)\\b',
-    '\\b(?:hours|days|weeks|months|years) later\\b',
-    '\\bthat (?:evening|night|morning|afternoon)\\b',
-    '^\\s*[-*#=~_]{3,}\\s*$',
-].join('|'), 'im');
+/** A horizontal rule — the one scene-break marker that is pure punctuation, not vocabulary. */
+const SCENE_BREAK = /^\s*[-*#=~_]{3,}\s*$/m;
 
 /**
  * The two reasons a pass may run that mean *narrative time has moved*, named rather than spelled.
@@ -66,6 +60,15 @@ const SCENE_BREAK = new RegExp([
  *
  * The list is deliberately NOT "every reason": `interval` and `state block` are cadence, not time.
  * A conversational pass that happens to land on the ceiling has skipped nothing.
+ *
+ * ── Why only the horizontal rule, now ──
+ *
+ * `TIME_SKIPPED` and the English phrase half of `SCENE_BREAK` read the narrative with word lists
+ * ("come morning", "hours later") that only work in English. Time passage is the scene probe's
+ * comprehension question (`elapsed_days`/`elapsed_minutes`/`date_changed`), so the cadence gate no
+ * longer guesses it from prose — the interval catches a quiet skip, and the model reports a loud
+ * one. `WORLD_TRIGGERS` still names both reasons so an armed pass can be attributed, but the
+ * trigger that fires them is now the model's own report, not a regex.
  */
 export const TIME_SKIPPED = 'time skipped';
 export const SCENE_BREAK_WHY = 'scene break';
@@ -74,7 +77,9 @@ export const WORLD_TRIGGERS = Object.freeze([TIME_SKIPPED, SCENE_BREAK_WHY]);
 /**
  * Has the scene demonstrably moved?
  *
- * Only claims a move when the text SAYS so. Everything ambiguous is left to the interval.
+ * Only claims a move when the text's SHAPE says so — a horizontal rule, which is punctuation and
+ * means the same thing in every language. Everything else (time skips, scene transitions) is left
+ * to the interval or the scene probe's own report, which is the model's comprehension answer.
  *
  * @param {string} text The latest narrative.
  * @returns {{moved: boolean, why: string}} Whether to look, and what said so.
@@ -83,11 +88,6 @@ export function sceneMayHaveMoved(text) {
     const said = String(text ?? '');
     if (!said.trim()) {
         return { moved: false, why: '' };
-    }
-    // A declared elapse is the one high-precision signal available for free, and fold already parses
-    // it for the clock. "We rest for a week" is one turn and a week; no turn counter can see that.
-    if (parseElapsed(said) !== null) {
-        return { moved: true, why: TIME_SKIPPED };
     }
     if (SCENE_BREAK.test(said)) {
         return { moved: true, why: SCENE_BREAK_WHY };

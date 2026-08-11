@@ -149,13 +149,24 @@ function replay({ split, pinned }) {
     const rejected = [];
     let t = 0;
 
+    // A migrated chat: the rows the real ledger filed under the `contacts` place were recorded by
+    // the migration's own `reachKeys` output, so the read-heal skips those exact keys.
+    const reachKeys = new Set([
+        `${'contacts'}${'\u0000'}kang's phone number`,
+        `${'contacts'}${'\u0000'}jin-woo's phone number`,
+    ]);
+
     for (const pass of PASSES) {
-        const state = deriveState(events);
+        const state = deriveState(events, { reachKeys });
         const shown = pinned ? renderLedger(state).shown : null;
         const windowText = split ? pass.windowNew : pass.windowAll;
 
         for (const proposal of pass.proposals) {
-            const outcome = validateInventory({ inv: state.inv, deltas: proposal.inv, windowText, shown });
+            // Coverage by report, the way production passes it: the model says the window names
+            // the items it proposes, in any language. The fallback `isMentioned` (exact substring)
+            // only runs when no report exists — the block path.
+            const mentioned = new Set((proposal.inv ?? []).map(d => d.item));
+            const outcome = validateInventory({ inv: state.inv, deltas: proposal.inv, windowText, shown, mentioned });
             rejected.push(...outcome.rejected.map(r => ({ ...r, mid: pass.mid })));
             if (outcome.accepted.length) {
                 events.push({ s: proposal.s, kw: [], t: ++t, src: 'llm', d: { inv: outcome.accepted } });
@@ -163,7 +174,7 @@ function replay({ split, pinned }) {
         }
     }
 
-    return { inv: deriveState(events).inv, rejected };
+    return { inv: deriveState(events, { reachKeys }).inv, rejected };
 }
 
 /** How many of a thing the fold ended up holding. */
@@ -175,17 +186,21 @@ describe('what the recorded ledger actually folds to', () => {
     // asserted about it.
     const inv = deriveState(PASSES.flatMap((pass, index) =>
         pass.proposals.map((proposal, n) => ({ s: proposal.s, kw: [], t: index * 10 + n, src: 'llm', d: { inv: proposal.inv } })),
-    )).inv;
+    ), {
+        reachKeys: new Set([
+            `${'contacts'}${'\u0000'}kang's phone number`,
+            `${'contacts'}${'\u0000'}jin-woo's phone number`,
+        ]),
+    }).inv;
 
     test('the phone-number beat exists twice, and its contacts rows no longer derive at all', () => {
         expect(qty(inv, 'jin-woo\'s phone number')).toBe(2);
         expect(qty(inv, 'kang\'s phone number')).toBe(2);
         // The events at mids 50-54 recorded `at: "contacts"` against a schema that never offered
-        // the place. Phase B moved the two rows onto the Kang and Jin-Woo cast rows as `reach` and
-        // could not stop them deriving, because state is a fold and the events are still there
-        // (FOLD-REDESIGN.md §10, Phase B LANDED deviation 7). `deriveState` skips the place on READ
-        // now, which heals every existing chat without rewriting anyone's ledger — so the baseline
-        // this replay measures went from four phone-number rows to two.
+        // the place. The migration records those exact item keys as `reachKeys` and `deriveState`
+        // skips exactly those on READ — keyed on the migration's OWN output, never an English
+        // place word (FOLD-REDESIGN.md §10, Phase B LANDED deviation 7). The baseline this replay
+        // measures went from four phone-number rows to two.
         expect(qty(inv, 'jin-woo\'s phone number', 'contacts')).toBe(0);
         expect(qty(inv, 'kang\'s phone number', 'contacts')).toBe(0);
     });
@@ -237,15 +252,17 @@ describe('replaying the real proposals — each beat once', () => {
     });
 
     test('both mechanisms carry weight, and the counters say which did what', () => {
-        // The window split does the work where the beat is narrated only in the overlap: mids 51-52
-        // and 55-58 say nothing about numbers or candy, so the mention gate refuses the re-report
-        // before the ledger gate is even consulted.
-        expect(reasons.get('not-mentioned')).toBeGreaterThanOrEqual(4);
+        // Coverage by report is the admission gate now: the model says the window names the items
+        // it proposes, so a re-report is refused by the LEDGER gate (already-recorded) rather than
+        // by the old substring mention gate. The window split does its work where the beat is
+        // narrated only in the overlap, which the ledger gate then refuses.
+        expect(reasons.get('not-mentioned')).toBeUndefined();
         // The ledger gate does the work where the new half DOES mention the thing again — the knife
         // at mid 38, the staff and sword at 66 and 68.
         expect(reasons.get('already-recorded')).toBeGreaterThanOrEqual(4);
-        // And the invented place is refused outright.
-        expect(reasons.get('not-an-item')).toBe(2);
+        // The `not-an-item` refusal is gone: the schema instruction ("Contact details are NOT
+        // items") is the contract, and the read-heal skips the migration's own reachKeys instead.
+        expect(reasons.get('not-an-item')).toBeUndefined();
     });
 
     test('the false positive is real and is the price, stated rather than hidden', () => {
@@ -255,17 +272,24 @@ describe('replaying the real proposals — each beat once', () => {
         // This is the "buy a second knife" cost named in `validateInventory`'s docblock, occurring
         // in the real data. It is still an improvement on the alternative, which counted three.
         expect(qty(inv, 'mana-shackle bracers')).toBe(1);
-        expect(rejected.filter(r => r.item === 'mana-shackle bracers' && r.reason === 'already-recorded')).toHaveLength(1);
+        // Both re-bills (mids 66 and 68) are now refused by the ledger gate: coverage by report
+        // admits the model's re-mention, and the held row is shown, so `already-recorded` catches
+        // each one. The old mention gate let the second slip on a substring miss.
+        expect(rejected.filter(r => r.item === 'mana-shackle bracers' && r.reason === 'already-recorded')).toHaveLength(2);
     });
 });
 
 describe('what each half of the fix is worth on its own', () => {
     test('the window split alone still double-bills whatever the new half re-narrates', () => {
         const { inv } = replay({ split: true, pinned: false });
-        // Phones and candy are fixed by the split; the knife and the weapons are not, because the
-        // new half genuinely mentions them again.
-        expect(qty(inv, 'kang\'s phone number')).toBe(1);
-        expect(qty(inv, 'wrapped candy')).toBe(2);
+        // The old substring mention gate used to refuse the phone and candy re-reports whose window
+        // said nothing — a coverage miss, not a decision. Coverage is by the model's OWN report now
+        // (`mentioned`), so with no ledger gate (`pinned: false`) every re-narration bills again:
+        // the knife and the weapons because the new half mentions them, the phones because the
+        // model's report admits them. The split alone cannot refuse a re-report; the ledger gate is
+        // the load-bearing half, which is exactly what this pair of tests measures.
+        expect(qty(inv, 'kang\'s phone number')).toBe(2);
+        expect(qty(inv, 'wrapped candy')).toBe(4);
         expect(qty(inv, 'rusty hunter\'s knife with sheath')).toBe(2);
         expect(qty(inv, 'darkwood staff')).toBe(3);
     });

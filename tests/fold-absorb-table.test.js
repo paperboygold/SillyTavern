@@ -57,14 +57,12 @@ describe('zero new context keys for a label that names a structured domain', () 
         const table = new Map();
         const { shadow } = routeBlockFields(HEADER, table, { turn: 14 });
         const refused = shadow.filter(entry => entry.reason === SHADOW).map(entry => entry.text);
-        // "residency window open, sponsorship active" is a statement of position with no unresolved
-        // word in it, so the gate refuses it — correctly, since the residency THREAD already carries
-        // that stake and admitting the prose copy is exactly the duplication this rule exists to
-        // stop. The pressure clause is refused for stating no dial position.
-        expect(refused).toEqual([
-            'residency window open, sponsorship active',
-            '19 raids remaining in twelve-month window',
-        ]);
+        // The pressure clause is refused for stating no dial position — a structural refusal, not a
+        // word judgement ("19 raids remaining in twelve-month window" contains two numbers and no
+        // dial; guessing which is the fill is the inference that produced the inverted residency
+        // clock). The card's DECLARED leads are honored: `leads:` is a protocol field, and whether a
+        // stated lead duplicates a tracked thread is the identity/review question, not a word list's.
+        expect(refused).toEqual(['19 raids remaining in twelve-month window']);
         // The rejection reports a name `normalizeThreadName` has already truncated to
         // MAX_THREAD_NAME; what is preserved has to be the clause the card actually wrote, which is
         // why every refusal is a substring of the field the card emitted.

@@ -60,10 +60,17 @@ describe('normalizeItemName', () => {
         expect(normalizeItemName('Healing Potion x3')).toEqual({ name: 'healing potion', qty: 3 });
     });
 
-    test('rejects nothing-shaped and dangerous names', () => {
-        for (const raw of ['', '   ', null, undefined, 'None', '__proto__', 'constructor', 'prototype']) {
-            expect(normalizeItemName(raw)).toBeNull();
-        }
+    test('rejects structurally empty and dangerous names', () => {
+        // 'None' is a name the model reported, so it is stored — the English sentinel is gone. Only
+        // structurally empty strings and prototype-pollution keys are unusable.
+        expect(normalizeItemName('')).toBeNull();
+        expect(normalizeItemName('   ')).toBeNull();
+        expect(normalizeItemName(null)).toBeNull();
+        expect(normalizeItemName(undefined)).toBeNull();
+        expect(normalizeItemName('__proto__')).toBeNull();
+        expect(normalizeItemName('constructor')).toBeNull();
+        expect(normalizeItemName('prototype')).toBeNull();
+        expect(normalizeItemName('None')?.name).toBe('none');
     });
 
     test('caps absurd lengths', () => {
@@ -95,8 +102,8 @@ describe('item places', () => {
             .toEqual({ place: 'car boot', name: 'crowbar' });
     });
 
-    test('carried is the default and the synonyms collapse to it', () => {
-        for (const place of [undefined, '', 'carried', 'On Person', 'inventory', 'worn']) {
+    test('carried is the default; the protocol token collapses to it', () => {
+        for (const place of [undefined, '', 'carried']) {
             expect(splitItemKey(itemKey('rope', place)).place).toBe(CARRIED);
         }
     });
@@ -134,25 +141,21 @@ describe('item places', () => {
         expect(block).toContain('Stored (apartment): shotgun');
     });
 
-    test('a treasury is money, whatever the model calls it', () => {
-        // The Royal Succession vault scene: "the coin is where it should be — 12,400 marks in
-        // silver and gold, counted in the ledgers." The model reached for `at: "treasury"` — a
-        // natural word — and without this it became a PLACE named "treasury", so the balance was
-        // never money and the pinned Money: line never appeared. A treasury, coffers and a vault
-        // are stores of money, not rooms to visit.
-        expect(normalizePlace('treasury')).toBe(MONEY);
-        expect(normalizePlace('the treasury')).toBe(MONEY);
-        expect(normalizePlace('coffers')).toBe(MONEY);
-        expect(normalizePlace('vault')).toBe(MONEY);
-        expect(normalizePlace('discretionary fund')).toBe(MONEY);
+    test('a treasury is a literal place now — the model writes "money" for money', () => {
+        // The English synonym list ("treasury"=money, "coffers"=money) is gone: fold does not guess
+        // what an `at` label means. The schema instruction tells the model to write `at: "money"`
+        // for a balance, and fold trusts the protocol token. "treasury" is a room, not a synonym.
+        expect(normalizePlace('treasury')).toBe('treasury');
+        expect(normalizePlace('money')).toBe(MONEY);
+        expect(normalizePlace('assets')).toBe(ASSETS);
+        expect(normalizePlace('abilities')).toBe(ABILITIES);
     });
 
     test('a stated balance establishes through set, not dq', () => {
         // The extraction schema exposes `set` so a first-stated treasury ("12,400 marks") lands as
-        // an establishment. Fold it and the money row appears at the stated total — and "treasury"
-        // normalizes to money, never to a place called "treasury".
+        // an establishment. The model writes `at: "money"` per the instruction; fold keys it there.
         const { inv } = deriveState([
-            ev(1, { inv: [{ item: 'marks', dq: 0, set: 12400, at: 'treasury' }] }),
+            ev(1, { inv: [{ item: 'marks', dq: 0, set: 12400, at: 'money' }] }),
         ]);
         expect(inv.get(itemKey('marks', MONEY))).toEqual({ qty: 12400 });
         // The single money row is keyed under the money place — there is no second row at a place
@@ -185,14 +188,19 @@ describe('normalizeKey', () => {
     });
 });
 
-describe('isMentioned — the mention gate', () => {
-    test('matches on the head of the noun phrase', () => {
-        expect(isMentioned('healing potion', 'she drank the potion')).toBe(true);
-        expect(isMentioned('iron sword', 'he drew his sword')).toBe(true);
+describe('isMentioned — the block-path fallback, exact-name only', () => {
+    test('matches the full name when it appears verbatim', () => {
+        // This is the fallback that runs only when no model report exists. The primary gate is the
+        // model's `mentions` report, which names items exactly. The old head-noun truncation
+        // (`itemHead` splitting "healing potion" on English prepositions) is gone; the name is
+        // matched as the model wrote it.
+        expect(isMentioned('healing potion', 'she drank the healing potion')).toBe(true);
+        expect(isMentioned('iron sword', 'he drew his iron sword')).toBe(true);
     });
 
-    test('ignores parenthetical qualifiers', () => {
-        expect(isMentioned('potion (minor)', 'she drank the potion')).toBe(true);
+    test('a parenthetical is part of the name, not stripped by fold', () => {
+        expect(isMentioned('potion (minor)', 'she drank the potion (minor)')).toBe(true);
+        expect(isMentioned('potion (minor)', 'she drank the potion')).toBe(false);
     });
 
     test('rejects what the narrative never mentions', () => {
@@ -232,6 +240,46 @@ describe('validateInventory — the model proposes, the merge disposes', () => {
     test('rejects a change to something the narrative never mentions', () => {
         // The strongest rule: a model cannot invent state changes for things nobody talked about.
         const result = validateInventory({ ...base, deltas: [{ item: 'dragon egg', dq: 1 }] });
+        expect(result.accepted).toEqual([]);
+        expect(result.rejected[0].reason).toBe('not-mentioned');
+    });
+
+    test('a reported item is accepted even when the window test would fail (coverage wins)', () => {
+        // The model's report is authoritative: a paraphrased item it declares is admitted even if
+        // the window cannot token-match it — the whole point of coverage over substring.
+        const result = validateInventory({
+            ...base,
+            windowText: 'she stowed her things by the door',
+            mentioned: new Set(['the traveller\'s pack']),
+            deltas: [{ item: 'the traveller\'s pack', dq: 1 }],
+        });
+        expect(result.accepted).toEqual([{ item: 'the traveller\'s pack', dq: 1 }]);
+        expect(result.rejected).toEqual([]);
+    });
+
+    test('a window-mentioned item is accepted even when the model under-reported its mentions', () => {
+        // Measured in the Wuxia RP: the model's coverage report omitted items the prose visibly
+        // named, and the old gate rejected every one as `not-mentioned`. The window test rescues a
+        // name the report forgot — while still refusing something neither report nor window has.
+        const result = validateInventory({
+            ...base,
+            windowText: 'she picked up a rope and two coins, then sheathed the iron dagger',
+            mentioned: new Set(['rope', 'coins']), // dagger omitted from the report
+            deltas: [{ item: 'dagger', dq: 1 }],
+        });
+        expect(result.accepted).toEqual([{ item: 'dagger', dq: 1 }]);
+        expect(result.rejected).toEqual([]);
+    });
+
+    test('an item neither reported nor in the window is still refused', () => {
+        // The OR must not admit everything: a fabricated item survives only if neither the report
+        // nor the window carries it.
+        const result = validateInventory({
+            ...base,
+            windowText: 'she picked up a rope and two coins',
+            mentioned: new Set(['rope', 'coins']),
+            deltas: [{ item: 'a dragon egg', dq: 1 }],
+        });
         expect(result.accepted).toEqual([]);
         expect(result.rejected[0].reason).toBe('not-mentioned');
     });
@@ -507,53 +555,54 @@ describe('renderState — and the staleness that no longer hides anything', () =
 // Each of these was visible in the panel before it was a test. They are grouped because they share
 // a cause: a value that should have replaced an earlier one was instead stored beside it.
 
-describe('empty-list sentinels never become items', () => {
-    test('every way a narrator writes "nothing" is rejected', () => {
-        // `test.each` would read better, but the repo's eslint config runs the playwright plugin
-        // over tests/ and its no-standalone-expect rule does not understand jest's table form.
+describe('names are the model\'s report — the schema instruction is the contract', () => {
+    test('a placeholder name the model reported is stored, not refused by an English list', () => {
+        // The old `EMPTY_NAME` sentinel was an English word list ("none", "nothing", "nil", "empty",
+        // "n/a", "unknown", ...) that could only work in one language. The delta instruction says
+        // "Use empty arrays when an event changes nothing" and "Record only what the excerpt NAMES"
+        // — so a name meaning "nothing" is the model's error, visible and correctable, never a
+        // refusal fold makes with words. Only a structurally empty name is unusable.
         for (const raw of ['none carried', 'None carried', 'nothing of note',
             'no items at present', 'none currently', 'nil']) {
-            expect(normalizeItemName(raw)).toBeNull();
+            expect(normalizeItemName(raw)?.name).toBe(raw.toLowerCase());
         }
     });
 
     test('a real name that merely starts with those letters survives', () => {
-        // The `\b` in the sentinel pattern is what protects these.
         expect(normalizeItemName('north gate key')?.name).toBe('north gate key');
         expect(normalizeItemName('notebook')?.name).toBe('notebook');
         expect(normalizeItemName('nail file')?.name).toBe('nail file');
     });
 
-    test('the sentinel cannot accumulate a quantity through the validator', () => {
+    test('only structurally empty names are unusable', () => {
         const { accepted, rejected } = validateInventory({
             inv: new Map(),
             deltas: [{ item: 'none carried', dq: 1 }, { item: 'none carried', dq: 1 }],
             windowText: 'the block said none carried',
+            mentioned: new Set(['none carried']),
         });
-        expect(accepted).toHaveLength(0);
-        expect(rejected.every(r => r.reason === 'unusable-name')).toBe(true);
+        expect(accepted).toHaveLength(2);
+        expect(rejected).toHaveLength(0);
     });
 });
 
-describe('statusSubject — two descriptions of one condition are one fact', () => {
-    test('drops the modifier and keeps the subject', () => {
-        expect(statusSubject('mild hangover')).toBe('hangover');
-        expect(statusSubject('severe concussion')).toBe('concussion');
-    });
-
-    test('finds the subject when the phrase leads with it', () => {
+describe('statusSubject — the subject comes from the schema, not an English modifier list', () => {
+    test('finds the leading content token when the phrase leads with it', () => {
+        // The old `STATUS_MODIFIERS` stoplist that stripped "mild"/"severe" is gone. The subject is
+        // the model's structured `subject` answer; `statusSubject` is only the legacy fallback and
+        // takes the first content token.
         expect(statusSubject('hangover mostly eased')).toBe('hangover');
     });
 
-    test('a phrase of nothing but modifiers has no subject', () => {
-        expect(statusSubject('mostly')).toBeNull();
+    test('a phrase of no content has no subject', () => {
         expect(statusSubject('')).toBeNull();
     });
 
     test('a restatement REPLACES rather than joining — the whole point', () => {
+        // The model reports `subject: "hangover"` for both descriptions, so they fold to one mark.
         const { marks: status } = deriveState([
-            ev(1, { st: [{ flag: 'mild hangover', on: true }] }),
-            ev(2, { st: [{ flag: 'hangover mostly eased', on: true }] }),
+            ev(1, { st: [{ flag: 'mild hangover', subject: 'hangover', on: true }] }),
+            ev(2, { st: [{ flag: 'hangover mostly eased', subject: 'hangover', on: true }] }),
         ]);
         expect(status.size).toBe(1);
         expect(status.get(markKey('', 'hangover'))).toMatchObject({ on: true, phrase: 'hangover mostly eased' });
@@ -573,45 +622,37 @@ describe('statusSubject — two descriptions of one condition are one fact', () 
     });
 });
 
-describe('negations clear a condition, they do not become one', () => {
-    test('a reassurance about nothing tracked is rejected outright', () => {
-        const { accepted, rejected } = validateStatus({
-            status: new Map(),
-            deltas: [{ flag: 'otherwise uninjured', on: true }],
-            windowText: 'he was otherwise uninjured',
-        });
-        expect(accepted).toHaveLength(0);
-        expect(rejected[0].reason).toBe('negation');
-    });
-
-    test('a negation naming something tracked turns it off', () => {
+describe('healing is the model\'s report, not an English word list', () => {
+    test('a flag the model marks on:false turns a tracked condition off', () => {
+        // The schema tells the model to set `on: false` when something heals or is treated away.
+        // That IS the transition; no `isNegation` word list guesses it from prose.
         const { accepted } = validateStatus({
             status: new Map([[markKey('', 'hangover'), { on: true, phrase: 'mild hangover' }]]),
-            deltas: [{ flag: 'hangover gone', on: true }],
+            deltas: [{ flag: 'hangover', on: false }],
             windowText: 'the hangover was gone by noon',
         });
-        expect(accepted).toEqual([{ who: '', flag: 'hangover gone', on: false }]);
+        expect(accepted).toEqual([expect.objectContaining({ who: '', flag: 'hangover', on: false })]);
     });
 
-    test('end to end: an affliction, a restatement and a reassurance leave ONE line', () => {
-        // Exactly the sequence that produced "Hangover mostly eased / Mild hangover /
-        // Otherwise uninjured" stacked in the panel.
-        const window = 'mild hangover, hangover mostly eased, otherwise uninjured';
+    test('an affliction and its later healing leave the healed line', () => {
+        // The model reports the affliction, then a second event reports on:false for the same
+        // subject. The fold shows the healed state, not a reassurance invented by a word list.
+        const window = 'mild hangover';
         const first = validateStatus({
             status: new Map(),
-            deltas: [{ flag: 'mild hangover', on: true }],
+            deltas: [{ flag: 'mild hangover', subject: 'hangover', on: true }],
             windowText: window,
         });
         const state = deriveState([ev(1, { st: first.accepted })]);
         const second = validateStatus({
             status: state.marks,
-            deltas: [{ flag: 'hangover mostly eased', on: true }, { flag: 'otherwise uninjured', on: true }],
-            windowText: window,
+            deltas: [{ flag: 'hangover', subject: 'hangover', on: false }],
+            windowText: 'hangover mostly eased',
         });
         const final = deriveState([ev(1, { st: first.accepted }), ev(2, { st: second.accepted })]);
 
         const shown = [...final.marks.values()].filter(v => v.on).map(v => v.phrase);
-        expect(shown).toEqual(['hangover mostly eased']);
+        expect(shown).toEqual([]);
     });
 });
 
@@ -822,14 +863,16 @@ describe('restated totals — the fold path that heals a runaway count', () => {
     });
 });
 
-describe('canonicalItemName — one coat, however it is spelled', () => {
-    test('a later rewording folds onto the row already there', () => {
+describe('canonicalItemName — exact-key identity', () => {
+    test('a rewording is a NEW row — the model reports names, fold does not merge by morphology', () => {
+        // The old head-token rule folded "m-65 military jacket" onto "m-65 jacket". Whether two
+        // spellings name one thing is the model's reading: it reuses the exact State-block name
+        // when restating, and the review probe answers `[same?]` for a pair fold cannot resolve.
         const { inv } = deriveState([
             ev(1, { inv: [{ item: 'm-65 jacket', dq: 1 }] }),
             ev(2, { inv: [{ item: 'm-65 military jacket', set: 1 }] }),
         ]);
-        expect([...inv.keys()]).toEqual([itemKey('m-65 jacket')]);
-        expect(inv.get(itemKey('m-65 jacket'))).toEqual({ qty: 1 });
+        expect([...inv.keys()].sort()).toEqual([itemKey('m-65 jacket'), itemKey('m-65 military jacket')].sort());
     });
 
     test('the same name in a different place is still a different item', () => {
@@ -883,9 +926,11 @@ describe('the magnitude bound is a RATIO, because an absolute one encodes a genr
         expect(rejected[0].reason).toBe('implausible-delta');
     });
 
-    test('magnitudeCorroborated reads separators and scale words', () => {
+    test('magnitudeCorroborated reads digits, and leaves spelled-out numbers to the model\'s magnitude field', () => {
         expect(magnitudeCorroborated(10000, 'a levy of 10,000')).toBe(true);
-        expect(magnitudeCorroborated(10000, 'thousands answered the call')).toBe(true);
+        // "thousands" is a spelled-out scale word — the model reports magnitude:10000 now; fold
+        // does not guess the order from English.
+        expect(magnitudeCorroborated(10000, 'thousands answered the call')).toBe(false);
         expect(magnitudeCorroborated(10000, 'he found a coin')).toBe(false);
         // Small changes never need corroborating.
         expect(magnitudeCorroborated(3, 'nothing numeric here')).toBe(true);
@@ -939,15 +984,16 @@ describe('staleness hides nothing at all — cap:stale-hidden retired by constru
     });
 });
 
-describe('negations recorded before the filter existed are cleared on read', () => {
-    test('an immortal reassurance stops rendering', () => {
-        // "Otherwise uninjured" survived 74 turns: nothing turns a flag off, and turns=0 means it
-        // never expires. Filtering at write time could not reach it; filtering at read time can.
+describe('a healed condition is recorded as on:false, not guessed from prose', () => {
+    test('an on:false flag is what stops a condition rendering', () => {
+        // Healing is the model's own report (`on: false`), never an English word list reading the
+        // phrase. "Otherwise uninjured" was never a condition a model should have stored as on:true;
+        // the schema forbids recording a reassurance, and a heal arrives as on:false.
         const { marks: status } = deriveState([
-            ev(1, { st: [{ flag: 'otherwise uninjured', on: true }] }),
-            ev(2, { st: [{ flag: 'mild arm fatigue', on: true }] }),
+            ev(1, { st: [{ flag: 'mild arm fatigue', on: true }] }),
+            ev(2, { st: [{ flag: 'mild arm fatigue', on: false }] }),
         ]);
-        expect([...status.values()].map(v => v.phrase)).toEqual(['mild arm fatigue']);
+        expect([...status.values()].filter(v => v.on).map(v => v.phrase)).toEqual([]);
     });
 
     test('a real affliction is untouched', () => {
@@ -975,21 +1021,24 @@ describe('categories are places, and cost nothing', () => {
         expect(splitItemKey(itemKey('second sight', 'abilities'))).toEqual({ place: ABILITIES, name: 'second sight' });
     });
 
-    test('the words a model reaches for reach the category', () => {
-        for (const said of ['assets', 'Assets', 'asset', 'assets and property']) {
+    test('the protocol tokens reach the category; other words are literal places', () => {
+        for (const said of ['assets', 'Assets', 'the assets']) {
             expect(normalizePlace(said)).toBe(ASSETS);
         }
-        for (const said of ['abilities', 'Ability', 'abilities and skills']) {
+        for (const said of ['abilities', 'Abilities', 'the abilities']) {
             expect(normalizePlace(said)).toBe(ABILITIES);
         }
+        // No English synonym guessing: a singular "ability" is a phrase, not the protocol token.
+        expect(normalizePlace('ability')).toBe('ability');
+        expect(normalizePlace('assets and property')).toBe('assets and property');
     });
 
-    test('worn and held things stay CARRIED — no second equipment list', () => {
+    test('the protocol carried token stays CARRIED — no second equipment list', () => {
         // Foundry dnd5e keeps ONE inventory with `equipped` as a flag, after a decade of iteration,
-        // specifically to kill the desync that two parallel lists guarantee.
-        for (const said of ['worn', 'held', 'equipped', 'wearing', 'on person', 'inventory', 'self']) {
-            expect(normalizePlace(said)).toBe(CARRIED);
-        }
+        // specifically to kill the desync that two parallel lists guarantee. "worn"/"held" are
+        // English synonyms fold no longer guesses — the model writes "carried" per the schema.
+        expect(normalizePlace('carried')).toBe(CARRIED);
+        expect(normalizePlace('worn')).toBe('worn');
     });
 
     test('a leading article does not fork a place', () => {
@@ -997,10 +1046,8 @@ describe('categories are places, and cost nothing', () => {
         expect(normalizePlace('my locker')).toBe(normalizePlace('locker'));
     });
 
-    test('"on person" survives the article strip', () => {
-        // It begins with a preposition; stripping first leaves "person", which is a place and the
-        // wrong one. Synonyms are therefore tested before the strip.
-        expect(normalizePlace('on person')).toBe(CARRIED);
+    test('the carried token survives the article strip', () => {
+        expect(normalizePlace('the carried')).toBe(CARRIED);
     });
 
     test('a category never collapses into carried, however phrased', () => {
@@ -1062,9 +1109,11 @@ describe('reject:already-recorded — the model was shown the line and billed it
     const held = new Map([[itemKey('wrapped candy'), { qty: 2 }]]);
     const shown = new Set([itemKey('wrapped candy')]);
     const windowText = 'she presses two wrapped candies into his palm, as if candy fixes lacerations';
+    // Coverage by report, the way production passes it: the model says the window names the item.
+    const mentioned = new Set(['wrapped candy']);
 
     test('a re-report of a line already on the ledger is refused', () => {
-        const { accepted, rejected } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', dq: 2 }], windowText, shown });
+        const { accepted, rejected } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', dq: 2 }], windowText, shown, mentioned });
         expect(accepted).toEqual([]);
         expect(rejected).toEqual([expect.objectContaining({ item: 'wrapped candy', reason: 'already-recorded' })]);
     });
@@ -1072,30 +1121,58 @@ describe('reject:already-recorded — the model was shown the line and billed it
     test('nothing is refused when no ledger was pinned', () => {
         // Block absorption never pins one, and a model that was told nothing cannot be blamed for
         // not knowing. `shown` absent means the gate is off, not empty.
-        const { accepted } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', dq: 2 }], windowText });
+        const { accepted } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', dq: 2 }], windowText, mentioned });
         expect(accepted).toEqual([{ item: 'wrapped candy', dq: 2 }]);
     });
 
     test('nothing is refused for a line the ledger held but did not show', () => {
-        // Refusing against a line the model never saw would punish it for our own omission. The
-        // hole this used to leave — a stale-hidden item could be re-billed — closed with `isFresh`;
-        // the rule stays because the block still omits things it holds (the Elsewhere cast, a hidden
-        // dial's numbers), and reconstructing "what was shown" from state is the second definition
-        // of one fact that `itemHead` was introduced to prevent.
-        const { accepted } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', dq: 2 }], windowText, shown: new Set() });
+        // Refusing against a line the model never saw would punish it for our own omission.
+        const { accepted } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', dq: 2 }], windowText, shown: new Set(), mentioned });
         expect(accepted).toEqual([{ item: 'wrapped candy', dq: 2 }]);
     });
 
     test('a proposal bigger than the ledger covers is not a re-report', () => {
-        const { accepted } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', dq: 5 }], windowText, shown });
+        const { accepted } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', dq: 5 }], windowText, shown, mentioned });
         expect(accepted).toEqual([{ item: 'wrapped candy', dq: 5 }]);
     });
 
-    test('a loss is never a restatement', () => {
-        // Nobody re-narrates dropping something, and refusing a debit is how a ledger stops
-        // being able to go down — the failure this whole design is about.
-        const { accepted } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', dq: -1 }], windowText, shown });
+    test('a loss with no trail is not a restatement', () => {
+        // No contributor trail means no recorded beat to be re-told, so a debit is a fresh change
+        // and is accepted. The old blanket claim — "nobody re-narrates dropping something" — was
+        // falsified by the Time Stop RPG ledger (one spear billed twice, one room rented twice),
+        // which is why the trail now decides the question instead of the sign of `dq`.
+        const { accepted } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', dq: -1 }], windowText, shown, mentioned });
         expect(accepted).toEqual([{ item: 'wrapped candy', dq: -1 }]);
+    });
+
+    test('a loss whose exact magnitude was already recorded is a re-tell, not a fresh debit', () => {
+        // The spear purchase billed at mids 36 AND 38 as `silver -10`: the second bill is the same
+        // event, and refusing it is what keeps the balance from draining to zero and the THIRD bill
+        // from reading as `remove-unknown`. An exact `dq` on the trail, with the magnitude fully
+        // covered by the held quantity, is arithmetic on fold's own numbers.
+        const inv = new Map([[itemKey('silver', 'money'), { qty: 10 }]]);
+        const contributors = new Map([[itemKey('silver', 'money'), [{ dq: -10, summary: 'buys an ash spear', mid: 36 }]]]);
+        const { accepted, rejected } = validateInventory({
+            inv,
+            deltas: [{ item: 'silver', dq: -10, at: 'money' }],
+            windowText: 'Sol purchased a spear from the smith for ten silver',
+            contributors,
+        });
+        expect(accepted).toEqual([]);
+        expect(rejected).toEqual([expect.objectContaining({ item: 'silver', reason: 'already-recorded' })]);
+    });
+
+    test('a loss of a different magnitude than anything recorded is accepted', () => {
+        // Same item, same trail, different amount — a real second transaction, not a re-tell.
+        const inv = new Map([[itemKey('silver', 'money'), { qty: 10 }]]);
+        const contributors = new Map([[itemKey('silver', 'money'), [{ dq: -10, summary: 'buys an ash spear', mid: 36 }]]]);
+        const { accepted } = validateInventory({
+            inv,
+            deltas: [{ item: 'silver', dq: -2, at: 'money' }],
+            windowText: 'Sol pays two silver for a room at the inn',
+            contributors,
+        });
+        expect(accepted).toEqual([{ item: 'silver', dq: -2, at: 'money' }]);
     });
 
     test('the contributor trail refuses a cross-window money re-record', () => {
@@ -1138,13 +1215,14 @@ describe('reject:already-recorded — the model was shown the line and billed it
             deltas: [{ item: 'rusty hunter\'s knife with sheath', dq: 1 }],
             windowText: 'he picks up the rusty knife from the dead goblins',
             contributors,
+            mentioned: new Set(['rusty hunter\'s knife with sheath']),
         });
         expect(accepted).toEqual([]);
         expect(rejected).toEqual([expect.objectContaining({ item: 'rusty hunter\'s knife with sheath', reason: 'already-recorded' })]);
     });
 
     test('a restated total is exempt, because it is idempotent by construction', () => {
-        const { accepted } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', set: 2 }], windowText, shown });
+        const { accepted } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', set: 2 }], windowText, shown, mentioned: new Set(['wrapped candy']) });
         expect(accepted).toEqual([{ item: 'wrapped candy', set: 2 }]);
     });
 
@@ -1158,42 +1236,38 @@ describe('reject:already-recorded — the model was shown the line and billed it
             deltas: [{ item: 'won', dq: 85000, at: 'money' }],
             windowText: 'eighty-five thousand won changes hands',
             shown: new Set([itemKey('won', MONEY)]),
+            mentioned: new Set(['won']),
         });
         expect(accepted).toEqual([{ item: 'won', dq: 85000, at: MONEY }]);
     });
 
     test('the same name in another place is another thing', () => {
-        const { accepted } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', dq: 2, at: 'desk drawer' }], windowText, shown });
+        const { accepted } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', dq: 2, at: 'desk drawer' }], windowText, shown, mentioned: new Set(['wrapped candy']) });
         expect(accepted).toEqual([{ item: 'wrapped candy', dq: 2, at: 'desk drawer' }]);
     });
 });
 
-describe('reject:not-an-item — contact details are not things in a pocket', () => {
-    test('the place the model invented is refused, however it spells it', () => {
+describe('contact details are never items — the schema instruction is the contract', () => {
+    test('a contact row the model reports is stored, not refused by an English place list', () => {
+        // The delta instruction says "Contact details are NOT items — never record them as gained"
+        // and the entity probe reports `reach` structurally. The old `CONTACT_PLACE` regex was an
+        // English word list ("contacts", "phone book", "address book") that could only work in one
+        // language. fold stores what the model reports; a wrong row is the model's error, visible
+        // and correctable, and the review probe re-reads the ledger.
         for (const at of ['contacts', 'contact', 'phone book', 'address book']) {
             const { accepted, rejected } = validateInventory({
                 inv: new Map(),
                 deltas: [{ item: 'kang\'s phone number', dq: 1, at }],
                 windowText: 'he reads out Kang\'s number while Solomon types',
+                mentioned: new Set(['kang\'s phone number']),
             });
-            expect(accepted).toEqual([]);
-            expect(rejected).toEqual([expect.objectContaining({ item: 'kang\'s phone number', reason: 'not-an-item' })]);
+            expect(rejected).toEqual([]);
+            expect(accepted).toEqual([expect.objectContaining({ item: 'kang\'s phone number', dq: 1 })]);
         }
-    });
-
-    test('it is refused before any gate that would merely say the evidence is thin', () => {
-        // "This is not inventory" is a stronger statement than "the window does not mention it",
-        // and the counter should say the stronger one.
-        const { rejected } = validateInventory({
-            inv: new Map(),
-            deltas: [{ item: 'kang\'s phone number', dq: 1, at: 'contacts' }],
-            windowText: '',
-        });
-        expect(rejected).toEqual([expect.objectContaining({ item: 'kang\'s phone number', reason: 'not-an-item' })]);
     });
 });
 
-describe('canonicalItemName — narrowed to head identity', () => {
+describe('canonicalItemName — one name containing another is still two rows', () => {
     test('a phone and a phone number stay two rows', () => {
         // Measured: a block listing `phone` was absorbed into `solomon's phone number`.
         const { inv } = deriveState([
@@ -1203,13 +1277,16 @@ describe('canonicalItemName — narrowed to head identity', () => {
         expect([...inv.keys()].sort()).toEqual([itemKey('phone'), itemKey('solomon\'s phone number')].sort());
     });
 
-    test('one coat described twice is still one row', () => {
+    test('one coat described twice is TWO rows until the model says same', () => {
+        // The old head-token rule merged these. Identity is exact now: whether "m-65 military
+        // jacket" is the same coat as "m-65 jacket" is the review probe's `[same?]` question, not a
+        // fold judgement made from English prepositions.
         const { inv } = deriveState([
             ev(1, { inv: [{ item: 'm-65 jacket', dq: 1 }] }),
             ev(2, { inv: [{ item: 'm-65 military jacket', dq: 1 }] }),
         ]);
-        expect([...inv.keys()]).toEqual([itemKey('m-65 jacket')]);
-        expect(inv.get(itemKey('m-65 jacket'))).toEqual({ qty: 2 });
+        expect([...inv.keys()].sort()).toEqual([itemKey('m-65 jacket'), itemKey('m-65 military jacket')].sort());
+        expect(inv.get(itemKey('m-65 jacket'))).toEqual({ qty: 1 });
     });
 
     test('two people\'s numbers do not collapse into one', () => {
@@ -1347,24 +1424,30 @@ describe('the change budget counts changes', () => {
 });
 
 /*
- * Contact details are `reach` on a person, not a thing in a pocket. Phase B moved the two live rows
- * onto the Kang and Jin-Woo cast rows and could not stop them deriving, because state is a fold and
- * the events are still in the ledger (FOLD-REDESIGN.md §10, Phase B LANDED deviation 7).
+ * Contact details are `reach` on a person, not a thing in a pocket. The read-heal is keyed on the
+ * migration's OWN record — the exact item keys it moved (`reachKeys`) — never on an English place
+ * word. FOLD-REDESIGN.md §10, Phase B LANDED deviation 7.
  */
-describe('the contacts place derives nothing — the residual Phase B printed', () => {
-    test('the real mid-52 event contributes no inventory row', () => {
+describe('the contact read-heal is keyed on the migration\'s own record', () => {
+    test('an exact key the migration recorded contributes no inventory row', () => {
         const inv = deriveState([ev(1, {
             inv: [
                 { item: 'kang\'s phone number', dq: 1, at: 'contacts' },
                 { item: 'jin-woo\'s phone number', dq: 1, at: 'contacts' },
             ],
-        })]).inv;
+        })], {
+            reachKeys: new Set([`contacts${'\u0000'}kang's phone number`, `contacts${'\u0000'}jin-woo's phone number`]),
+        }).inv;
         expect(inv.size).toBe(0);
     });
 
-    test('every spelling of the place, because a refusal that matches one spelling is routed around', () => {
-        for (const place of ['contacts', 'contact list', 'phonebook', 'phone book', 'address book']) {
-            expect(deriveState([ev(1, { inv: [{ item: 'kang\'s number', dq: 1, at: place }] })]).inv.size).toBe(0);
+    test('a spelling the migration did not record folds as the model reported it', () => {
+        // The old rule refused every spelling of the place ("contact list", "phonebook", "phone
+        // book", "address book") with an English word list. fold no longer reads place words to
+        // decide what is a contact; a row not in the migration's own reachKeys record folds.
+        for (const place of ['contact list', 'phonebook', 'phone book', 'address book']) {
+            const inv = deriveState([ev(1, { inv: [{ item: 'kang\'s number', dq: 1, at: place }] })]).inv;
+            expect(inv.size).toBe(1);
         }
     });
 
@@ -1372,7 +1455,7 @@ describe('the contacts place derives nothing — the residual Phase B printed', 
         // The event is untouched — only the fold ignores it. Rewriting the ledger would destroy the
         // evidence that the numbers were ever exchanged.
         const events = [ev(1, { inv: [{ item: 'kang\'s phone number', dq: 1, at: 'contacts' }] })];
-        deriveState(events);
+        deriveState(events, { reachKeys: new Set(['kang\'s phone number']) });
         expect(events[0].d.inv[0]).toEqual({ item: 'kang\'s phone number', dq: 1, at: 'contacts' });
     });
 

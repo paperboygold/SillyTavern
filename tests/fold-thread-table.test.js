@@ -260,9 +260,11 @@ describe('nearIdentity — a trigger for a question, never a decision', () => {
     test('a shared surname is a family, not a person', () => {
         // Measured on Evil Hero Party: accepting a final-position head for the SUBSTITUTION branch
         // asks whether Lord Everard is Lillian Everard. Only a shared first token licenses that
-        // question — the same error "the dining hall" versus "the great hall" would make.
+        // question. "the dining hall" and "the great hall" now SHARE a first token ("the" is no
+        // longer stripped by an English stopword list), so the detector raises the question and the
+        // model answers "different" — a detector that asks costs a question slot, never a merge.
         expect(nearIdentity('Lord Everard', 'Lillian Everard')).toBeNull();
-        expect(nearIdentity('the dining hall', 'the great hall')).toBeNull();
+        expect(nearIdentity('the dining hall', 'the great hall')).toBe('substitution');
     });
 
     test('an echoed review label is a subset, not a new dial', () => {
@@ -280,8 +282,12 @@ describe('nearIdentity — a trigger for a question, never a decision', () => {
         expect(nearIdentity('Solomon', 'the Hero')).toBeNull();
     });
 
-    test('identical token sets raise no question — there is nothing to ask', () => {
-        expect(nearIdentity('the cellar', 'cellar')).toBeNull();
+    test('a name that refines another with an article raises a subset question', () => {
+        // Without the English stopword list, "the" is a token like any other, so "cellar" is a
+        // subset of "the cellar" and the detector raises the question — the model answers "same".
+        // The old rule silently decided "the" carried no identity in exactly one language.
+        expect(nearIdentity('the cellar', 'cellar')).toBe('subset');
+        // Two different articles do not share a first token, so no substitution question is raised.
         expect(nearIdentity('a weapon', 'the weapon')).toBeNull();
     });
 
@@ -289,8 +295,8 @@ describe('nearIdentity — a trigger for a question, never a decision', () => {
         expect(nearIdentity('next raid with Kang', 'next trip with Park')).toBeNull();
     });
 
-    test('noise words carry no identity', () => {
-        expect(nameTokens('the next raid with Kang\'s squad')).toEqual(['next', 'raid', 'kang\'s', 'squad']);
+    test('tokens are tokens — the English stopword list is gone', () => {
+        expect(nameTokens('the next raid with Kang\'s squad')).toEqual(['the', 'next', 'raid', 'with', 'kang\'s', 'squad']);
     });
 
     test('identityPairs asks about pairs and merges nothing', () => {
@@ -334,8 +340,8 @@ describe('bounds', () => {
 
     test('the exposition gate still gates dial-less proposals only', () => {
         const table = new Map();
-        // Lore: nothing in it is unsettled.
-        const lore = foldThreads(table, [{ name: 'the brand', open: 'it permits pain and recall' }], { turn: 1 });
+        // Lore: the model marks it unresolved:false.
+        const lore = foldThreads(table, [{ name: 'the brand', open: 'it permits pain and recall', unresolved: false }], { turn: 1 });
         expect(lore.rejected[0].reason).toBe('exposition');
         // A dial IS its own open question and skips the gate.
         const dial = foldThreads(table, [{ name: 'the guard alert rises', kind: DOOM, size: 6, open: '' }], { turn: 1 });

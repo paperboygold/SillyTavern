@@ -22,6 +22,7 @@ import * as verdict from './verdict.js';
 import * as entities from './entities.js';
 import * as observe from './observe.js';
 import * as state from './state.js';
+import * as trace from './trace.js';
 import { requestSteer } from './steer.js';
 
 async function steerCallback(args, instruction) {
@@ -262,6 +263,43 @@ export function registerFoldSlashCommands() {
     }));
 
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'fold-trace',
+        callback: traceCallback,
+        returns: 'the number of traced passes for this chat',
+        namedArgumentList: [
+            new SlashCommandNamedArgument(
+                'raw',
+                t`Print the latest pass's full prompt, raw reply and parsed fragment to the console`,
+                [ARGUMENT_TYPE.BOOLEAN],
+                false,
+                false,
+                'false',
+            ),
+            new SlashCommandNamedArgument(
+                'download',
+                t`Save the whole per-chat trace file as fold-trace.json`,
+                [ARGUMENT_TYPE.BOOLEAN],
+                false,
+                false,
+                'false',
+            ),
+        ],
+        helpString: `
+        <div>
+            ${t`Shows how many extraction passes are traced for this chat and how many succeeded. Every pass — success and failure — is recorded with its exact prompt, the JSON schema, the raw model reply, and the parsed fragment.`}
+        </div>
+        <div>
+            <strong>${t`Usage:`}</strong>
+            <ul>
+                <li><pre><code class="language-stscript">/fold-trace</code></pre> ${t`count of traced passes`}</li>
+                <li><pre><code class="language-stscript">/fold-trace raw</code></pre> ${t`latest pass's prompt + raw reply + parsed fragment, verbatim, to the console`}</li>
+                <li><pre><code class="language-stscript">/fold-trace download</code></pre> ${t`save the chat's whole trace as fold-trace.json`}</li>
+            </ul>
+        </div>
+    `,
+    }));
+
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'fold-plot',
         callback: plotCallback,
         unnamedArgumentList: [
@@ -478,4 +516,49 @@ function calibrationReport() {
     toastr.info(t`Calibration report written to the console.`);
     console.log(`[fold] calibration\n${text}`);
     return text;
+}
+
+/**
+ * `/fold-trace` — dump the current chat's prompt->output trace.
+ *
+ * The trace is the full record of every extraction pass: the exact prompt sent, the schema, the
+ * raw model reply, and the parsed fragment. `raw` prints the latest pass verbatim to the console
+ * (a question you ask on purpose, the same discipline as the calibration report); `download`
+ * saves the whole per-chat trace file so it can be harvested for the resolver's training data.
+ *
+ * @param {object} _args Named args.
+ * @param {boolean} _args.raw Show the latest pass's full prompt+raw reply verbatim.
+ * @param {boolean} _args.download Save the whole trace file for this chat.
+ * @returns {string} A short report.
+ */
+async function traceCallback(_args, _text) {
+    const records = await trace.load();
+    if (!records.length) {
+        toastr.info(t`No fold extraction passes are traced for this chat yet. They are recorded on every pass going forward.`);
+        return 'no-trace';
+    }
+    const ok = records.filter(r => r.ok).length;
+    const failed = records.length - ok;
+    const newest = records[records.length - 1];
+    if (_args?.download) {
+        const blob = new Blob([JSON.stringify(records, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'fold-trace.json';
+        a.click();
+        URL.revokeObjectURL(url);
+        toastr.success(t`Fold trace for this chat saved (${records.length} passes, ${ok} ok / ${failed} failed).`);
+        return `${records.length}`;
+    }
+    if (_args?.raw) {
+        console.log(`[fold] trace — latest pass @ ${new Date(newest.t ?? Date.now()).toISOString()}`);
+        console.log(`[fold] turn ${newest.turn ?? '?'} mid ${newest.mid ?? '?'} ${newest.ok ? 'ok' : `failed: ${newest.reason ?? ''}`}`);
+        console.log(`[fold] PROMPT\n${newest.prompt ?? ''}`);
+        console.log(`[fold] RAW REPLY\n${newest.raw ?? ''}`);
+        console.log(`[fold] PARSED\n${JSON.stringify(newest.parsed ?? null, null, 2)}`);
+        return `${newest.ok ? 'ok' : 'failed'}`;
+    }
+    toastr.info(t`Fold trace: ${records.length} passes for this chat (${ok} ok / ${failed} failed). Use /fold-trace raw for the latest pass verbatim, /fold-trace download to save the file.`);
+    return `${records.length}`;
 }

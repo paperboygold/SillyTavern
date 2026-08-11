@@ -26,19 +26,17 @@ const DAY = 1440;
  */
 const RECENT_PAST = 180;
 
-/** Named times cards actually write. */
-const NAMED = new Map([
-    ['midnight', 0],
-    ['noon', 720],
-    ['midday', 720],
-]);
+/** Named times cards actually write. Kept empty: "noon"/"midnight" are English words, and the
+ * model is the one that reads a time out of prose — fold only parses the numeric clock SHAPE, which
+ * means the same thing in every language. A card writing "Time: noon" simply does not move the
+ * clock, the safe failure. */
+const NAMED = new Map();
 
 /**
  * Parse a clock time to minutes since midnight.
  *
- * Handles "7:38 AM", "07:38", "8 PM", "20:00", "noon", "midnight". Returns null rather than
- * guessing: a value that is not a time must not become one, because everything downstream treats
- * the result as authoritative.
+ * Handles "7:38 AM", "07:38", "8 PM", "20:00". Returns null rather than guessing: a value that is
+ * not a time must not become one, because everything downstream treats the result as authoritative.
  *
  * @param {string} text A time, or text containing one.
  * @returns {number|null} Minutes since midnight, or null.
@@ -109,26 +107,6 @@ export function formatClock(minutes) {
 }
 
 /**
- * Find a deadline stated in a piece of text.
- *
- * Only times introduced by a scheduling preposition count. "The clinic closed at 6" is a deadline;
- * "she left at 6" is a fact about the past wearing the same clothes, and treating every time in
- * every lead as a countdown would fill the panel with expiring history.
- *
- * @param {string} text A lead, objective or note.
- * @returns {number|null} Minutes since midnight, or null if the text states no deadline.
- */
-export function findDeadline(text) {
-    const source = String(text ?? '').toLowerCase();
-    // Everything from the preposition onward, so the time that follows is the one that is parsed.
-    const scheduled = source.match(/\b(?:at|by|before|until|till|after)\s+(.{0,24})/);
-    if (!scheduled) {
-        return null;
-    }
-    return parseClock(scheduled[1]);
-}
-
-/**
  * How long until a deadline, given the current time.
  *
  * @param {number} now Minutes since midnight, now.
@@ -165,50 +143,20 @@ export function formatGap(minutes) {
 }
 
 /**
- * Compress a written date to a scannable one.
+ * Render a written date for the panel.
  *
- * "Wednesday, September 23, 1998" is four lines in a 288px panel and one glance's worth of
- * information. Parsing is deliberately lenient and the fallback is the original string: a card may
- * be running a calendar that no date library has heard of, and mangling it is worse than leaving
- * it alone.
+ * The date is the scene probe's free-text answer ("Wednesday, September 23, 1998", "the 3rd of
+ * autumn") — display text the model already read from the prose, in any language. It is shown
+ * as written. The old compressor recognised English month and day names to shorten it; that was
+ * an English word-list judging a narrative-derived field, and a date in any other language came
+ * back untouched anyway, so the compression was English-only sugar. The original string is the
+ * honest surface.
  *
  * @param {string} text A written date.
- * @returns {string} "Wed 23 Sep 1998", or the input unchanged.
+ * @returns {string} The date, unchanged.
  */
 export function formatDate(text) {
-    const source = String(text ?? '').trim();
-    if (!source) {
-        return '';
-    }
-
-    const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-    const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-    const lower = source.toLowerCase();
-
-    const month = MONTHS.findIndex(m => lower.includes(m));
-    const day = lower.match(/\b(\d{1,2})\b(?!\s*:)/);
-    const year = lower.match(/\b(\d{4})\b/);
-    if (month === -1 || !day) {
-        return source;
-    }
-
-    const weekday = DAYS.find(d => lower.includes(d));
-    const parts = [
-        weekday ? cap(weekday) : '',
-        day[1],
-        cap(MONTHS[month]),
-        year?.[1] ?? '',
-    ];
-    return parts.filter(Boolean).join(' ');
-}
-
-/**
- * Uppercase the first letter.
- * @param {string} word A word.
- * @returns {string} The word, capitalised.
- */
-function cap(word) {
-    return word ? word[0].toUpperCase() + word.slice(1) : word;
+    return String(text ?? '').trim();
 }
 
 /**
@@ -293,41 +241,8 @@ export function advanceClock(current, { time, date } = {}) {
 }
 
 /**
- * Durations narrators and players actually write, in minutes.
- *
- * Deliberately coarse. "Several hours" is not four hours — it is a gesture at four hours, and
- * pretending to a precision the phrase does not carry would be the same defect as an unmeasured
- * constant. What matters is that the clock MOVES, and by roughly the right amount.
+ * Minutes per unit, so an explicit span in any unit is one multiplication.
  */
-const SPANS = [
-    [/\bthe rest of the (?:day|afternoon)\b/, 300],
-    [/\bthe rest of the (?:night|evening)\b/, 240],
-    [/\b(?:several|a few|some) hours\b/, 210],
-    [/\ba couple of hours\b/, 120],
-    [/\ball (?:day|afternoon|evening|night)\b/, 300],
-    [/\b(?:an|one|another) hour\b/, 60],
-    [/\bhalf an hour\b/, 30],
-    [/\b(?:several|a few|some) minutes\b/, 15],
-    [/\ba (?:little )?while\b/, 45],
-    [/\b(?:several|a few|some) (?:days|weeks)\b/, null],
-    [/\b(\d{1,4})\s*(minutes?|hours?|days?|weeks?|months?|years?)\b/, null],
-    [/\b(?:a|one|another) (day|week|month|year)(?!['’]s)\b/, null],
-    // Scene-transition markers that carry their own unit. "Come morning" is one night's passage
-    // (the sleep before it); "the week settles" is the week it says. Both are the narrator's way
-    // of saying time moved, and both are as concrete as any span. Given explicit minutes rather
-    // than the vague unit-fallback, because a transition to morning is exactly one night and the
-    // fallback would guess three days.
-    [/\bcome\s+(?:the\s+)?(?:next\s+)?(?:morning|afternoon|evening|night|day)\b/, null],
-    [/\bthe\s+(?:next|following)\s+(?:morning|afternoon|evening|night|day)\b/, null],
-    // "First light comes" and "the early morning" open a new day the same way "come morning" does —
-    // a scene that had been in the dark or the previous evening has moved to a fresh morning.
-    [/\bfirst\s+light\s+comes?\b/, null],
-    [/\bthe\s+early\s+morning\b/, null],
-    [/\bthe\s+(week|month|year)\s+settles\b/, null],
-    [/\ba\s+(day|week|month|year)\s+(?:settles|passes|passed|goes|went)\s+by\b/, null],
-];
-
-/** Minutes per unit, so an explicit span in any unit is one multiplication. */
 const UNIT = {
     minute: 1, hour: 60, day: DAY, week: DAY * 7, month: DAY * 30, year: DAY * 365,
 };
@@ -389,168 +304,133 @@ export function parseSpan(text) {
  * reported at a quarter to eight in the evening. A transition to a part of a day is a statement
  * about which part of WHICH day the scene moved to; the face is half of that statement.
  *
- * The probe also reports `time` ("just after dawn", "3:15 PM"), and a parseable `time` outranks a
- * marker's implied phase — the model read the scene's clock directly. These are the fallback when
- * the narrative moved to a named part of a day without writing a clock time.
- */
+  * The probe also reports the clock directly (`clockHour`/`clockMinute`), and a parseable clock
+  * outranks a marker's implied phase — the model read the scene's clock directly. This is the
+  * fallback when the narrative moved to a named part of a day without writing a clock time.
+  */
 const MORNING = 6 * 60;
 const AFTERNOON = 13 * 60;
 const EVENING = 18 * 60;
 const NIGHT = 21 * 60;
 
-const MARKER_PHASE = new Map([
-    // "come morning", "the next morning", "the early morning": the scene is at morning.
-    ['morning', MORNING],
-    ['afternoon', AFTERNOON],
-    ['evening', EVENING],
-    ['night', NIGHT],
-    // "first light" is a new day's opening; "overnight" is the night just gone, so both land on the
-    // morning that follows them.
-    ['first light', MORNING],
-    ['dawn', MORNING],
-    ['dusk', EVENING],
-    // A bare "come day"/"the next day" carries no part of a day, so no phase — the face keeps
-    // running and only the day moves.
-    ['day', null],
-]);
-
 /**
- * How much time a scene-transition marker moves the clock.
+ * The face a protocol day-part implies, in minutes since midnight.
  *
- * ── Why this is NOT `parseElapsed` ──
- *
- * `parseElapsed` below reads a NARRATIVE SENTENCE with an assertion gate ("spend", "continue") that
- * exists to prove the speaker means time to pass. The scene probe answers the question "how much
- * time passed?" directly — the model has already done the assertion work — so the gate is wrong here
- * and the phrase is read as a bare duration, in any language the model reported it.
- *
- * The phrase may name a counted span ("3 hours", "a week"), a small word-counted span ("three
- * hours", "a couple of days"), a bare unit, or a scene-transition marker that carries its own unit
- * ("overnight", "come morning", "first light").
- *
- * @param {string} text The scene probe's `elapsed` answer.
- * @returns {{days: number, minutes: number, phase: number|null}|null} What the clock should do:
- *   whole `days` to advance, sub-day `minutes` to add to the running face (durations), and a `phase`
- *   to land on when the marker names a part of a day. `phase` wins over `minutes`; both are null
- *   when nothing moved.
+ * This is fold's own vocabulary — the scene schema's `phase` enum — mapped to an hour by pure
+ * arithmetic. The MODEL decides the phase from the narrative ("come morning" is `morning` in any
+ * language); fold only turns the enum value into minutes, which is the same in every language.
  */
-export function parseSceneElapsed(text) {
-    const said = String(text ?? '').toLowerCase().trim();
-    if (!said) {
-        return null;
-    }
-    const wordCount = said.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten|a couple of|a few)\s+(minute|hour|day|week|month|year)s?\b/);
-    if (wordCount) {
-        const number = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, 'a couple of': 2, 'a few': 3 }[wordCount[1]];
-        if (number) {
-            return spanOf(Math.min(MAX_SKIP, number * UNIT[wordCount[2]]));
-        }
-    }
-    const span = parseSpan(said);
-    if (span !== null) {
-        return spanOf(span);
-    }
-    // Scene-transition markers: a transition to a part of a day moves the clock to that part of the
-    // NEXT day — the day rolls and the face lands where the marker says.
-    const marker = said.match(/(?:come\s+(?:the\s+)?(?:next\s+)?(?:morning|afternoon|evening|night|day)|first\s+light\b|the\s+(?:next|following)\s+(?:morning|afternoon|evening|night|day)|the\s+early\s+morning|overnight|at\s+(?:dawn|dusk))\b/);
-    if (marker) {
-        const part = /dawn|first\s+light/.test(marker[0]) ? 'first light'
-            : /dusk/.test(marker[0]) ? 'dusk'
-                : /overnight/.test(marker[0]) ? 'morning'
-                    : (marker[0].match(/\b(morning|afternoon|evening|night|day)\b/) || [])[1];
-        return {
-            days: 1,
-            minutes: 0,
-            phase: MARKER_PHASE.has(part) ? MARKER_PHASE.get(part) : null,
-        };
-    }
-    return null;
-}
+const PHASE_MINUTES = {
+    morning: MORNING,
+    afternoon: AFTERNOON,
+    evening: EVENING,
+    night: NIGHT,
+};
 
-/**
- * Split a minute total into whole days and sub-day minutes.
- * @param {number} minutes Total minutes.
- * @returns {{days: number, minutes: number, phase: null}} The parts; `phase` is null because a
- *   duration adds to the running face rather than landing on one.
- */
-function spanOf(minutes) {
-    const bounded = Math.min(MAX_SKIP, Math.max(0, Number(minutes) || 0));
-    return { days: Math.floor(bounded / DAY), minutes: bounded % DAY, phase: null };
-}
 
 /**
  * Advance the clock on the scene probe's own reading.
  *
  * ── One update, not two ──
  *
- * The scene probe reports `elapsed` (how much time passed) and `time` (the clock as it now reads).
- * Both used to write the same clock through different paths on the same pass — `setContext` folded
- * `time` in absolutely (`advanceClock`) and `noteSceneElapsed` added `elapsed` on top (`skipClock`)
- * — so a pass that reported "a week" and "19:45" first set 19:45 and then added a week to it. The
- * correct reading is complementary, not additive:
+ * The scene probe reports `days` (whole days passed), `minutes` (sub-day minutes), `phase` (the
+ * part of a day a transition marker landed on) and `clockHour`/`clockMinute` (the clock as it now
+ * reads). All used to write the same clock through different paths on the same pass — `setContext`
+ * folded `time` in absolutely (`advanceClock`) and `noteSceneElapsed` added `elapsed` on top
+ * (`skipClock`) — so a pass that reported "a week" and "19:45" first set 19:45 and then added a
+ * week to it. The correct reading is complementary, not additive:
  *
- *   · a parseable `time` is the FACE — the model read the scene's clock directly;
- *   · a marker's implied `phase` is the face when no time was read;
+ *   · a parseable clock (`clockHour`/`clockMinute`) is the FACE — the model read the scene's clock
+ *     directly;
+ *   · a marker's implied `phase` is the face when no clock was read;
  *   · a duration's `minutes` are added to the running face;
  *   · `days` roll the day;
- *   · a changed `date` rolls the day even when no duration or marker said so — a named day is the
- *     one unambiguous signal that a full day has passed (`advanceClock`'s own rule, line for line).
+ *   · `dateChanged` rolls the day even when no duration or marker said so — a named day is the one
+ *     unambiguous signal that a full day has passed.
  *
- * `time` outranks the marker's phase because a direct reading is more specific than an inference.
+ * The clock outranks the marker's phase because a direct reading is more specific than an inference.
+ *
+ * Everything is the model's structured answer, never fold parsing prose: the probe reads the
+ * narrative in any language and returns numbers.
  *
  * @param {object} current The stored clock.
  * @param {object} [stated] The probe's answers.
- * @param {string} [stated.elapsed] The `elapsed` answer.
- * @param {string} [stated.time] The `time` answer.
- * @param {string} [stated.date] The `date` answer.
+ * @param {number} [stated.days] Whole days passed.
+ * @param {number} [stated.minutes] Sub-day minutes passed.
+ * @param {string} [stated.phase] The part of a day a marker landed on: '' or a day part.
+ * @param {number} [stated.clockHour] The hour the clock reads now, or NaN.
+ * @param {number} [stated.clockMinute] The minute, or NaN.
+ * @param {boolean} [stated.dateChanged] Whether a new day was named.
  * @returns {object} The new clock, with `accepted` and `reason`.
  */
-export function advanceSceneClock(current, { elapsed = '', time = '', date = '' } = {}) {
+export function advanceSceneClock(current, { days = 0, minutes = 0, phase = '', clockHour = NaN, clockMinute = NaN, dateChanged = false } = {}) {
     const seen = (current?.seen ?? 0) + 1;
     const kept = { ...current, seen };
 
-    const span = parseSceneElapsed(elapsed);
-    const face = parseClock(time);
+    const spanDays = Math.max(0, Math.floor(Number(days) || 0));
+    const spanMinutes = Math.max(0, Math.floor(Number(minutes) || 0));
 
-    // A changed date is the one evidence of a day boundary that needs no guessing — the same rule
-    // `advanceClock` applies to a card's block. A date that differs from the one stored means a day
-    // turned over somewhere between the last scene and this one. It alone is enough to move the
-    // clock, so the "nothing to do" check happens after it.
-    const stated = String(date ?? '').trim();
-    const known = String(current?.date ?? '').trim();
-    const dateChanged = stated && known && stated !== known;
+    // The face, from the model's direct clock reading or the transition marker's phase. A bare
+    // part of day is a protocol value the probe emits; the hour it means is pure arithmetic.
+    //
+    // ── Why the sentinel is refused here ──
+    //
+    // The scene schema tells the model to report `clock_hour`/`clock_minute` as -1 when the
+    // narrative states no clock time. -1 IS finite, so a naive `Number.isFinite` read admits it as
+    // a face: `((-1 % 24) * 60 + -1)` = -61, and `formatClock(-61)` = "22:59". Measured in the
+    // Xianxia chat: the probe returned the -1/-1 sentinel on 53 of 57 passes, so every pass that
+    // also reported a phase froze the face at 22:59 while the day rolled. The reading is only real
+    // when the model reports actual clock digits; a negative value is the protocol's "no time".
+    const hasClock = clockHour >= 0 && clockMinute >= 0
+        && Number.isFinite(clockHour) && Number.isFinite(clockMinute);
+    let face = hasClock
+        ? ((Math.floor(clockHour) % 24) * 60 + Math.floor(clockMinute) % 60)
+        : phase
+            ? PHASE_MINUTES[phase] ?? null
+            : null;
 
-    if (!span && face === null && !dateChanged) {
+    // ── A restated phase is not a move ──
+    //
+    // `phase` is a move TO a part of a day ("come morning", "dusk"). When the narrative merely
+    // restates the part of day the clock has already reached — the model reports `phase: "morning"`
+    // on turn after turn of the same morning — the phase's fixed hour (06:00) sits EARLIER than the
+    // running face once continuous time has advanced it (06:45). Applying it would compute
+    // `after < before` and refuse the whole pass as `reversed`, freezing the clock all over again.
+    // Restating where the story already is is not a move, so the phase face is dropped and the
+    // duration path (which only moves forward) takes over. A real transition still sets the face: a
+    // new day (`days`/`dateChanged`) always lands forward, and a later same-day phase (morning ->
+    // afternoon) does not reverse.
+    if (!hasClock && face !== null && !spanDays && !dateChanged
+        && Number.isFinite(current?.minutes) && face <= current.minutes) {
+        face = null;
+    }
+
+    if (!spanDays && !spanMinutes && face === null && !dateChanged) {
         return { ...kept, accepted: false, reason: 'unstated' };
     }
 
-    let days = (current?.day ?? 0);
-    let minutes;
+    let day = (current?.day ?? 0);
+    let minuteOfDay;
     if (face !== null) {
         // The probe read the clock directly — that is the face. The elapsed still rolls the day.
-        days += span?.days ?? 0;
-        minutes = face;
-    } else if (span && span.phase !== null) {
-        // A marker named a part of a day; land on it, on the day the marker moved to.
-        days += span.days;
-        minutes = span.phase;
+        day += spanDays;
+        minuteOfDay = face;
     } else {
         // A duration: add its sub-day minutes to the running face, rolling the day on overflow.
-        const total = (current?.minutes ?? 0) + (span?.minutes ?? 0);
-        days += (span?.days ?? 0) + Math.floor(total / DAY);
-        minutes = total % DAY;
+        const total = (current?.minutes ?? 0) + spanMinutes;
+        day += spanDays + Math.floor(total / DAY);
+        minuteOfDay = total % DAY;
     }
 
     if (dateChanged) {
-        days += 1;
+        day += 1;
     }
 
     const next = {
         ...kept,
-        day: days,
-        minutes,
-        raw: formatClock(minutes),
-        date: stated || known,
+        day,
+        minutes: minuteOfDay,
+        raw: formatClock(minuteOfDay),
     };
 
     if (!Number.isFinite(current?.minutes)) {
@@ -558,7 +438,7 @@ export function advanceSceneClock(current, { elapsed = '', time = '', date = '' 
     }
 
     const before = clockScalar(current.day, current.minutes);
-    const after = clockScalar(days, minutes);
+    const after = clockScalar(day, minuteOfDay);
     if (after < before) {
         return { ...kept, accepted: false, reason: 'reversed' };
     }
@@ -571,111 +451,15 @@ export function advanceSceneClock(current, { elapsed = '', time = '', date = '' 
 }
 
 /**
- * How much time a phrase says has passed.
- *
- * ── Why the PLAYER's message is the source ──
- *
- * Measured on a real chat: three of twenty-nine player turns skip time explicitly — "I continue
- * working for the next several hours" — and nothing in fold moved the clock for any of them. A
- * card's status block only reports the time when it feels like it, so the one reliable statement
- * about elapsed time is the one the player made. Neither Scribe nor Marinara advances a clock this
- * way; both wait for the model to say so.
- *
- * Only forward-looking phrasing counts. "An hour ago" is history, and advancing on it would run
- * the clock forward for a memory.
- *
- * @param {string} text A message.
- * @returns {number|null} Minutes elapsed, or null if the text claims none.
- */
-export function parseElapsed(text) {
-    const source = String(text ?? '').toLowerCase();
-    // Backward-looking phrasing is history, not a skip: "an hour ago", "yesterday", "last night".
-    // "Overnight" is NOT in that class — "the wind having died overnight" is the night that just
-    // passed, and rejecting it froze the clock on the morning that followed it (the Royal
-    // Succession chat's "First light comes grey and cold... the wind having died overnight").
-    if (!source || /\b(?:ago|earlier|yesterday|last night)\b/.test(source)) {
-        return null;
-    }
-    // A skip has to be asserted, not merely mentioned: "for the next", "spend", "continue".
-    // The narrator's phrasings count too — "come morning", "the week settles", "a day passes" —
-    // because a narrator writes time passage as scene movement, not as a player's declaration of
-    // intent. Measured on the Royal Succession chat: "The week settles into a rhythm of early
-    // mornings" and "Come morning I rise early" both moved the story forward a day and a week, and
-    // the clock never advanced for either because the gate recognised only a narrow set of verbs.
-    // A forward scene-break marker is as unambiguous a claim as "spend", and no more likely to be
-    // history: "come morning", "the next/following day", "a week settles/passes/goes by".
-    if (!/\b(?:for the next|for another|over the next|spend|spends|spent|continue|continues|keeps? (?:at|working)|work(?:s|ed)? (?:on|through)|wait(?:s|ed)?|rest(?:s|ed)?|sleep(?:s|t)?|come\s+(?:the\s+)?(?:next\s+)?(?:morning|afternoon|evening|night|day)|the\s+(?:next|following)\s+(?:morning|afternoon|evening|night|day)|first\s+light\s+comes?|the\s+early\s+morning|a\s+(?:day|week|month|year)\s+(?:settles|passes|passed|goes|went)\s+by|the\s+(?:week|month|year)\s+settles)\b/.test(source)) {
-        return null;
-    }
-
-    // The earliest match in the TEXT wins, not the first match in the list. SPANS is ordered by
-    // duration specificity, and a message that says "The week settles into a rhythm... and the
-    // election comes one day later" contains both "the week settles" (position 0) and "one day"
-    // (position 3000+) — the story skipped a WEEK, and the list-ordered loop would have returned
-    // the later "one day". The narrative's opening transition is the one that happened; later
-    // mentions are usually the same duration restated or a detail.
-    let best = null;
-    for (const [pattern, minutes] of SPANS) {
-        const match = source.match(pattern);
-        if (!match) continue;
-        if (minutes !== null && (!best || match.index < best.match.index)) {
-            best = { match, minutes, unit: null };
-            continue;
-        }
-        if (minutes === null && (!best || match.index < best.match.index)) {
-            best = { match, minutes, unit: null };
-        }
-    }
-    if (!best) {
-        return null;
-    }
-    const { match, minutes } = best;
-
-    if (minutes !== null) return minutes;
-
-    // ── Scene-transition markers carry their own unit ──
-    //
-    // "come morning" and "the next morning" are a night's passage; "the week settles" and
-    // "a day passes by" are the unit they name. These are NOT "several days" (vague, 3x the
-    // unit) and NOT a counted "N days" — they name one transition, and the unit word sits in
-    // the phrase. Map it to a single unit so the clock moves by what the story said.
-    const transition = match[0].match(/\b(?:morning|afternoon|evening|night|day|week|month|year)s?\b/);
-    if (/^first\s+light/.test(match[0]) || /^the\s+early\s+morning$/.test(match[0])
-        || (transition && /^(morning|afternoon|evening|night|day)$/.test(transition[0]))) {
-        // A transition to a part of a day is one night/day's passage. DAY for a day-name;
-        // for a named part of day the passage is the night that precedes it — bounded by
-        // MAX_SKIP like everything else, so a long story that strings transitions still
-        // accumulates correctly turn by turn.
-        return Math.min(MAX_SKIP, DAY);
-    }
-    if (transition && UNIT[transition[0]]) {
-        return Math.min(MAX_SKIP, UNIT[transition[0]]);
-    }
-
-    const unit = Object.keys(UNIT).find(u => new RegExp(`\\b${u}s?\\b`).test(match[0]));
-    if (!unit) {
-        // "several days" / "a few weeks" — vague, so the coarse reading, same as the hours row.
-        const vague = /weeks/.test(match[0]) ? UNIT.week * 3 : UNIT.day * 3;
-        return Math.min(MAX_SKIP, vague);
-    }
-    const count = Number(match[1]) || 1;
-    if (count <= 0) return null;
-    return Math.min(MAX_SKIP, count * UNIT[unit]);
-}
-
-/**
  * Longest single skip accepted.
  *
  * ── Why this is so large, and why it is not the cap it looks like ──
  *
  * The first version capped at twelve hours, which was the same genre bug as an absolute quantity
- * bound: a scenario that jumps a month between chapters is not a misparse, it is the premise. A
- * player writing "I spend the next three months rebuilding the fleet" has ASSERTED that, and fold
- * has no standing to refuse it.
- *
- * So the real guard is not this number — it is that a skip must be asserted at all
- * (`parseElapsed`'s preposition check) and must not be backwards-looking. This only stops a runaway
- * parse turning a typo into a geological era. Ten years.
+ * bound: a scenario that jumps a month between chapters is not a misparse, it is the premise. The
+ * scene probe reports "a week" as 7 days and "the next three months" as 90; fold has no standing to
+ * refuse the story's own skip. This only stops a runaway value turning a typo into a geological
+ * era. Ten years.
  */
 export const MAX_SKIP = DAY * 365 * 10;
 

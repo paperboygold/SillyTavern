@@ -51,6 +51,7 @@ import { lookup } from './lib/hash.js';
 import * as chronicle from './chronicle.js';
 import * as cold from './cold-store.js';
 import * as observe from './observe.js';
+import { noteCoverage } from './coverage.js';
 import { commit, loadTable } from './store.js';
 
 /**
@@ -149,24 +150,43 @@ export function schema() {
                         },
                         open: {
                             type: 'string',
-                            description: 'What is still unknown or undone — the gap, not the goal, phrased explicitly: "the final command is unknown", "six wolves still to be killed". A flat objective ("kill six wolves") will be discarded; empty if nothing is unresolved.',
+                            description: 'What is still unknown or undone — the gap, not the goal, phrased explicitly: "the final command is unknown", "six wolves still to be killed".',
+                        },
+                        unresolved: {
+                            type: 'boolean',
+                            description: 'Whether anything about this is genuinely still open or unknown right now. TRUE for a thread — a question the story has not answered, a task not yet done. FALSE for background: a fact, a completed act, a power, lore. This is the gate that decides whether it is a thread at all; a false "unresolved" is discarded however it is phrased.',
                         },
                         status: {
                             type: 'string',
                             enum: THREAD_STATUSES,
                             description: 'open if still unsettled, closed if the excerpt settled it, moot if it stopped being about anything.',
                         },
+                        deadline: {
+                            type: 'integer',
+                            description: 'Minutes since midnight the excerpt scheduled this to happen BY, when it names one: "offline at 8:00 AM" is 480, "locks up by 6 PM" is 1080. -1 when the excerpt names no deadline. This is what renders a countdown; fold never reads a scheduling time out of prose itself.',
+                        },
                         source: {
                             type: 'string',
                             description: 'Where this was learned: "RPD dispatch, 11:18 AM", "overheard at the ramen shop". Empty if the excerpt does not say.',
                         },
                     },
-                    required: ['name', 'detail', 'open', 'status', 'source'],
+                    required: ['name', 'detail', 'open', 'unresolved', 'status', 'deadline', 'source'],
                     additionalProperties: false,
                 },
             },
+            // ── Coverage, not a substring proxy ([ROUTER]) ──
+            //
+            // The tick gate used to decide "did the window mention this dial?" by token-matching the
+            // window text. The model already READ the window; `mentions` is its structural answer for
+            // what the new excerpt actually names. A dial is admitted to advance only when its name
+            // or subject is in this set.
+            mentions: {
+                type: 'array',
+                description: 'Every name or phrase the NEW excerpt actually uses for a stake — the dial\'s outcome, its subject, or its place, exactly as written: "the Blight", "the residency window", "the Smokewood". One entry per distinct mention. A stake the excerpt does not touch is never listed.',
+                items: { type: 'string' },
+            },
         },
-        required: ['ticks', 'leads'],
+        required: ['ticks', 'leads', 'mentions'],
         additionalProperties: false,
     };
 }
@@ -180,9 +200,10 @@ export function instruction() {
         `Say whether filling the dial is bad ("${DOOM}") or good ("${PROGRESS}"). Set "kind" and "size" once, when the dial is first established; afterwards send only the tick.`,
         'A thread with no dial is a title plus specifics: "missing-persons cluster" with detail "Arklay County, 15-18 September".',
         'A thread already listed in the review section is RECORDED — never propose it again as new. The "T6" on a review line is a label, not part of the name; reporting "T6 Geldfurt funding" opens a duplicate of an existing thread.',
-        'A thread must have something unresolved, and "open" must say it — the gap, not the goal: "the final command is unknown", "six wolves still to be killed". A flat objective ("kill six wolves") is discarded.',
-        'Exposition is not a thread: what a power does, what an object is for, what someone was told to do and then did — background, however new.',
+        'A thread must have something unresolved, and "open" must say what: "the final command is unknown", "six wolves still to be killed". Set "unresolved" true exactly when something is genuinely still open or unknown.',
+        'Exposition is not a thread: what a power does, what an object is for, what someone was told to do and then did — background, however new. Set "unresolved" false for those, whatever the "open" field says.',
         'Say where each thread came from in "source". Use empty arrays when nothing advanced and nothing new opened.',
+        'List EVERY name or phrase the NEW excerpt actually uses for a stake in "mentions", exactly as written: "the Blight", "the residency window", "the Smokewood". A stake the excerpt does not touch is never listed. This is the coverage proof: only a stake in "mentions" may advance.',
     ].join(' ');
 }
 
@@ -197,20 +218,28 @@ export function applyExtraction(fragment, { turn = 0, windowText = '', sources =
     const table = load();
     const proposed = fragment?.ticks;
 
-    // ── Re-promotion by coverage: a cold thread the window mentions comes home ──
+    // ── Coverage by the model's own report, never a substring proxy ([ROUTER]) ──
+    //
+    // The model read the window; `mentions` is its structural answer for what the new excerpt
+    // actually names. A dial is admitted to advance only when its name or subject is in that set —
+    // replacing the token-match gate that failed on paraphrase and on any language fold did not
+    // spell out. The report is also persisted, so the NEXT pass's review hot set reads it instead
+    // of token-matching the window.
+    const mentioned = new Set((fragment?.mentions ?? []).map(name => String(name ?? '').trim().toLowerCase()).filter(Boolean));
+    noteCoverage('threads', mentioned);
+
+    // ── Re-promotion by coverage: a cold thread the report names comes home ──
     //
     // A thread that lost its slot to the cap is archived, not destroyed (cold-store.js). When the
-    // story returns to it — the window mentions its name or subject — it is written back into the
-    // table so the probe can tick it and the review can settle it. This is a WRITE into the tracked
-    // state, never a paste of its old text into the window ([AC-PRODUCT]: the routed vote was
-    // catastrophic). Admission is by coverage — a mention in the window — not by a similarity
-    // score ([ROUTER]: confidence proxies are unsound, coverage is the missing quantity).
-    if (windowText) {
-        const restored = cold.covered(windowText, cold.ofKind('thread'));
-        for (const item of restored) {
-            if (cold.promote('thread', item.key, item.row, table, turn)) {
-                observe.note('threads:recalled');
-            }
+    // story returns to it — the model reports its name or subject in the window — it is written back
+    // into the table so the probe can tick it and the review can settle it. This is a WRITE into the
+    // tracked state, never a paste of its old text into the window ([AC-PRODUCT]: the routed vote
+    // was catastrophic). Admission is by coverage — the model's own `mentions` report — not by a
+    // similarity score ([ROUTER]: confidence proxies are unsound, coverage is the missing quantity).
+    const restored = cold.covered(mentioned, cold.ofKind('thread'));
+    for (const item of restored) {
+        if (cold.promote('thread', item.key, item.row, table, turn)) {
+            observe.note('threads:recalled');
         }
     }
 
@@ -226,7 +255,7 @@ export function applyExtraction(fragment, { turn = 0, windowText = '', sources =
         observe.note('pressure:empty');
     }
 
-    const ticks = foldTicks(table, proposed ?? [], { turn, windowText });
+    const ticks = foldTicks(table, proposed ?? [], { turn, windowText, mentioned });
     const opened = foldThreads(table, fragment?.leads ?? [], { turn, windowText });
     commit(THREADS_PATH, table);
 

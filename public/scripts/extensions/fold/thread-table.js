@@ -477,7 +477,7 @@ function clamp(value, size, kind = DOOM) {
  */
 export function foldThread(table, {
     name, tick = 0, size, kind, aka = '', open = '', detail = '', about = '', steps, per = '',
-    status = '', seen = OPEN, where = '', source = '', turn = 0, ticked,
+    status = '', seen = OPEN, where = '', source = '', deadline = NaN, turn = 0, ticked,
 } = {}) {
     const parsed = normalizeThreadName(name);
     if (!parsed) {
@@ -548,6 +548,9 @@ export function foldThread(table, {
         // it stops being HERE.
         where: String(where ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_THREAD_NAME),
         source: String(source ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_THREAD_TEXT),
+        // Minutes since midnight the excerpt scheduled this by, when the model reported one.
+        // Rendered as a countdown; fold never reads a scheduling time out of prose.
+        ...(Number.isInteger(Number(deadline)) && Number(deadline) >= 0 ? { deadline: Number(deadline) } : {}),
         turn,
     });
     return { key, evicted };
@@ -587,14 +590,20 @@ function mentionsDial(windowText, observed) {
 /**
  * Fold a batch of dial ticks, refusing the ones the narrative does not support.
  *
+ * The gate is COVERAGE BY THE MODEL'S REPORT when one exists (`mentioned`): a Set of the names
+ * the model says the new excerpt actually uses. A dial is admitted to advance only when its name,
+ * outcome, or subject is in that set ([ROUTER]: coverage, not a substring proxy). The block path
+ * (`absorb-table.js`) carries no report and falls back to the structural mention test.
+ *
  * @param {Map<string, object>} table Thread table, mutated.
  * @param {object[]} observations Proposed ticks.
  * @param {object} [options] Options.
  * @param {number} [options.turn] Turn counter.
  * @param {string} [options.windowText] Narrative window, for the diagnostics record.
+ * @param {Set<string>} [options.mentioned] Names the model reports the excerpt uses.
  * @returns {{accepted: number, rejected: object[], fired: object[]}} What happened.
  */
-export function foldTicks(table, observations, { turn = 0, windowText = '' } = {}) {
+export function foldTicks(table, observations, { turn = 0, windowText = '', mentioned = null } = {}) {
     const rejected = [];
     const fired = [];
     let accepted = 0;
@@ -615,7 +624,13 @@ export function foldTicks(table, observations, { turn = 0, windowText = '' } = {
         // something the window never touched was ACCEPTED (a hallucinated advance); only a zero
         // tick got caught, and only as `no-change`. A tick for an unmentioned dial is
         // `not-mentioned`, the same refusal an unmentioned person gets.
-        if (windowText && !mentionsDial(windowText, observed)) {
+        const covered = mentioned
+            ? [parsed.key, observed?.about, observed?.where]
+                .map(raw => String(raw ?? '').toLowerCase().trim())
+                .filter(Boolean)
+                .some(key => mentioned.has(key))
+            : !windowText || mentionsDial(windowText, observed);
+        if (!covered) {
             rejected.push({ item: parsed.display, reason: 'not-mentioned', raw: observed, snippet });
             continue;
         }
@@ -862,42 +877,21 @@ export function threads(table, turn = 0, { at = '' } = {}) {
 /**
  * Do these two place names refer to the same place?
  *
- * The same subset rule entity presence uses, and for the same reason: overlap alone makes "the
- * dining hall" and "the great hall" one room. Duplicated rather than imported — unlike
- * `isExposition` above — because it is six lines of equality with no judgement in it, and because
- * this copy is Unicode-aware (`\p{L}\p{N}`) where `entity-table.js`'s `placeTokens` is ASCII-only;
- * importing would silently change locality for every non-Latin place name in a chat.
- *
- * Exported since Phase W: it is the predicate that gates whether a hidden world event may be
- * asserted plainly (FOLD-REDESIGN.md §7.5 — "walk back to the Nowon gate site and the pinned block
- * may now assert what changed there"), and `world-table.js` must use THIS copy rather than
- * `entity-table.js`'s for the Unicode reason above — a Korean place name would otherwise never
- * unlock its own news.
+ * Exact equality, and deliberately nothing more. This used to be a token-subset test ("the dining
+ * hall" and "the great hall" stay apart because neither set contains the other) built on an English
+ * stopword list — a string algebra deciding locality in exactly one language. The model is told to
+ * word a place exactly as the narration words it (the entities probe: "a differently-worded place
+ * makes a person vanish from the room"), so fold compares what the model reported, exactly. Whether
+ * two spellings name one place is the model's reading, resolved by the review probe's `[same?]` and
+ * `[where now?]` questions — never a fold guess from words.
  *
  * @param {string} a One place.
  * @param {string} b Another.
- * @returns {boolean} True if they name the same place.
+ * @returns {boolean} True only if they are the same string.
  */
 export function samePlace(a, b) {
-    const words = raw => new Set(String(raw ?? '').toLowerCase()
-        .split(/[^\p{L}\p{N}'-]+/u)
-        .filter(word => word.length > 1 && !PLACE_NOISE.has(word)));
-    const [left, right] = [words(a), words(b)];
-    if (!left.size || !right.size) {
-        return false;
-    }
-    const [small, large] = left.size <= right.size ? [left, right] : [right, left];
-    return [...small].every(token => large.has(token));
+    return String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
 }
-
-/**
- * Words carrying no place information.
- *
- * ⚠ English only, and it degrades rather than breaks: in another language nothing is stripped, so
- * two spellings of the same place simply have to match more exactly. Never used to DECIDE anything
- * a model could be asked instead — only to make an equality test more forgiving.
- */
-const PLACE_NOISE = new Set(['the', 'a', 'an', 'of', 'in', 'at', 'on', 'near', 'by', 'into', 'to']);
 
 /**
  * The content tokens of a thread name.
@@ -912,11 +906,8 @@ const PLACE_NOISE = new Set(['the', 'a', 'an', 'of', 'in', 'at', 'on', 'near', '
 export function nameTokens(raw) {
     return String(raw ?? '').toLowerCase()
         .split(/[^\p{L}\p{N}'-]+/u)
-        .filter(word => word && !NAME_NOISE.has(word));
+        .filter(word => word.length > 0);
 }
-
-/** Articles and joining words that carry no identity. Never a noun. */
-const NAME_NOISE = new Set(['the', 'a', 'an', 'of', 'and', 'with', 'for', 'to', 'in', 'at', 'on', 'is', 'my', 'his', 'her', 'their']);
 
 /**
  * Might these two names be the same thing?

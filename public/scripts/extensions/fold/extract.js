@@ -21,6 +21,7 @@ import * as observe from './observe.js';
 import { extractMark, ledgerBlock, noteExtracted, noteExtractedWindow, setSync } from './state.js';
 import * as log from './log.js';
 import { peekPendingCost, takePendingCost } from './verdict.js';
+import * as trace from './trace.js';
 
 /**
  * How much bigger the retry's budget is than the first attempt's.
@@ -122,7 +123,15 @@ export function buildWindow(size, mark = {}) {
     const messages = (chat ?? [])
         .map((message, mid) => ({ message, mid }))
         .filter(({ message }) => message?.mes && !message.is_system)
-        .map(({ message, mid }) => ({ mid, key: contentKey(message.mes), name: message.name ?? 'Unknown', text: message.mes }));
+        .map(({ message, mid }) => ({
+            mid,
+            key: contentKey(message.mes),
+            name: message.name ?? 'Unknown',
+            // The card's own status block is preserved verbatim on the message and is prose in the
+            // card's language — the model must read it, not fold. `absorb` strips it from `mes` for
+            // display, so it is re-attached here for the extraction pass.
+            text: message.extra?.fold_block ? `${message.mes}\n${message.extra.fold_block}` : message.mes,
+        }));
 
     return splitWindow(messages, { size, mark });
 }
@@ -434,6 +443,21 @@ export async function runExtraction({ windowSize = 6, responseLength = 800, prof
                 detail,
                 raw: rawReplyText ? `reply: ${rawReplyText}` : 'reply: (empty string)',
             });
+            // ── The trace keeps the FAILING pass too — the unparseable reply is exactly the
+            // prompt bug the resolver's data cannot afford to lose. ──
+            trace.record({
+                turn,
+                mid: window.sources[window.sources.length - 1]?.mid,
+                why,
+                profileId,
+                responseLength,
+                prompt,
+                schema,
+                raw: rawReplyText,
+                parsed: null,
+                ok: false,
+                reason,
+            });
             // ── The backstop: a window the model cannot parse must not freeze the ledger ──
             consecutiveFailures++;
             if (consecutiveFailures >= FAILURE_BACKSTOP) {
@@ -521,6 +545,22 @@ export async function runExtraction({ windowSize = 6, responseLength = 800, prof
         // comes to be read three times, and the model declining to re-report it is the behaviour
         // that shows up as `extract:delta-empty` rather than as a saving.
         noteExtractedWindow(read);
+        // ── The trace: the exact prompt, the raw reply, and the parsed fragment — the full
+        // input->output pair of this pass, kept for training and later analysis. Fire-and-forget:
+        // a failed trace write must not fail the pass it records. ──
+        trace.record({
+            turn,
+            mid: read.mid,
+            why,
+            profileId,
+            responseLength,
+            prompt,
+            schema,
+            raw: String(rawReply ?? ''),
+            parsed,
+            ok: true,
+            reason: '',
+        });
         return { ok: true, results };
     } catch (error) {
         console.error('[fold] extraction failed', error);

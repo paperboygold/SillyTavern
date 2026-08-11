@@ -22,10 +22,12 @@ describe('shouldExtract — the interval is a ceiling, not a schedule', () => {
             .toEqual({ run: true, why: 'interval' });
     });
 
-    test('a declared time skip fires immediately, however few turns have passed', () => {
-        // The case a turn counter can never see: one turn, one week.
+    test('a declared time skip is the model\'s report, not a prose pre-filter', () => {
+        // The cadence gate used to read "We rest for a week" with an English verb list. Time
+        // passage is now the scene probe's comprehension answer (elapsed_days/elapsed_minutes),
+        // reported on the extraction it triggers by interval. The gate must not guess it from prose.
         expect(shouldExtract({ since: 1, interval: 4, text: 'We rest for a week before setting out.' }))
-            .toMatchObject({ run: true, why: 'time skipped' });
+            .toEqual({ run: false, why: 'waiting' });
     });
 
     test('travel language does NOT fire — it was measured and deleted', () => {
@@ -68,11 +70,12 @@ describe('shouldExtract — the interval is a ceiling, not a schedule', () => {
         expect(sceneMayHaveMoved('He strikes the hobgoblin across the jaw.').moved).toBe(false);
     });
 
-    test('scene breaks count, but only when anchored to a time unit', () => {
-        for (const said of ['The next morning, the camp stirs.', 'Hours later, the fire is out.']) {
-            expect(sceneMayHaveMoved(said).moved).toBe(true);
-        }
-        // The false positive that made the old pattern useless.
+    test('a horizontal rule is a scene break — the one shape that is punctuation, not vocabulary', () => {
+        expect(sceneMayHaveMoved('---').moved).toBe(true);
+        expect(sceneMayHaveMoved('***\n').moved).toBe(true);
+        // English time phrases are the model's report now, not a gate's guess.
+        expect(sceneMayHaveMoved('The next morning, the camp stirs.').moved).toBe(false);
+        expect(sceneMayHaveMoved('Hours later, the fire is out.').moved).toBe(false);
         expect(sceneMayHaveMoved('We push into the next chamber.').moved).toBe(false);
     });
 });

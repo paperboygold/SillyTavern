@@ -64,10 +64,11 @@ describe('normalizeEvent', () => {
 
     test('falls back to summary tokens when the model returns no keywords', () => {
         // An event with no keywords would be unreachable by retrieval — dead weight in the ledger.
+        // The fallback tokenizes the summary structurally (length filter only; no English stoplist).
         const event = normalizeEvent({ summary: 'The party defeated the ancient dragon', keywords: [] });
         expect(event.kw.length).toBeGreaterThan(0);
         expect(event.kw).toContain('dragon');
-        expect(event.kw).not.toContain('the');
+        expect(event.kw).toContain('the');
     });
 
     test('records mid only when it is an integer', () => {
@@ -77,14 +78,18 @@ describe('normalizeEvent', () => {
 });
 
 describe('tokenize', () => {
-    test('drops stopwords and short noise, keeps content words', () => {
+    test('keeps content words and drops short noise — no English stoplist', () => {
+        // The old 90-word English stoplist is gone: the events carry model-chosen keywords, so a
+        // function word in the query ("the", "went") never matches an event keyword anyway. Only
+        // the structural length filter survives — it means the same in every language.
         expect(tokenize('The party went to the Dragon Keep'))
-            .toEqual(['party', 'went', 'dragon', 'keep']);
+            .toEqual(['the', 'party', 'went', 'the', 'dragon', 'keep']);
     });
 
     test('is total over junk input', () => {
         expect(tokenize(null)).toEqual([]);
         expect(tokenize('!!! ... ???')).toEqual([]);
+        expect(tokenize('a an to')).toEqual([]);
     });
 });
 

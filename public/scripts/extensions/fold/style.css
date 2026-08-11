@@ -893,13 +893,28 @@ li.fold_cond.fold_mark_severe { color: var(--fold-crit); }
 /*
  * One small integer, and only while somebody is actually dangerous. Set in the mono face for the
  * reason every other number on this panel is: it is a quantity fold does arithmetic on, not prose.
+ *
+ * Placed as a full-width row field like the other derived lines (`grid-column: 2 / -1`) and kept
+ * to a bounded chip. Without the placement, the span auto-placed into the grid's `1fr` column and
+ * rendered as an unbroken horizontal run — "threat 6" stretched across the row instead of sitting
+ * as a chip beside the description (measured: Vesk's row in Time Stop RPG).
  */
 .fold_threat {
+    grid-column: 2 / -1;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    width: fit-content;
     font-family: var(--fold-mono);
     font-size: calc(var(--mainFontSize) * 0.7);
     color: var(--fold-crit);
     letter-spacing: 0.04em;
-    margin-left: 0.4em;
+    border: 1px solid var(--fold-crit);
+    border-radius: 3px;
+    padding: 0.05em 0.45em;
+    margin-top: 0.15em;
+    overflow-wrap: anywhere;
+    max-width: 100%;
 }
 
 /* Standing truths that never age. Quiet, because they never change and never need looking at. */
@@ -1031,6 +1046,44 @@ li.fold_cond.fold_mark_severe { color: var(--fold-crit); }
     flex-wrap: wrap;
 }
 .fold_log_sep { opacity: 0.4; }
+
+/* The trace row: the last extraction pass's input->output pair, under the sync chip. Flex-gap so
+ * the tag, turn, mid, why and time do not run together into one unreadable string — the measured
+ * "okt17#29unread4:50:37 PMclick to print" defect. */
+.fold_trace_box { margin: 0.25em 0 0.35em; }
+.fold_trace_line {
+    display: flex;
+    gap: 0.5em;
+    align-items: baseline;
+    flex-wrap: wrap;
+    font-size: calc(var(--mainFontSize) * 0.74);
+    line-height: 1.35;
+    padding: 0.15em 0;
+    cursor: pointer;
+    border-radius: 0.25em;
+}
+.fold_trace_line:hover { background: rgba(128, 128, 128, 0.08); }
+.fold_trace_tag {
+    font-family: var(--fold-mono);
+    font-size: calc(var(--mainFontSize) * 0.6);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+    color: var(--fold-fresh);
+}
+.fold_trace_meta {
+    font-family: var(--fold-mono);
+    font-size: calc(var(--mainFontSize) * 0.62);
+    opacity: 0.55;
+    white-space: nowrap;
+}
+.fold_trace_hint {
+    font-size: calc(var(--mainFontSize) * 0.62);
+    font-style: italic;
+    opacity: 0.45;
+    margin-left: auto;
+    white-space: nowrap;
+}
 .fold_log_raw,
 .fold_log_caret {
     font-family: var(--fold-mono);

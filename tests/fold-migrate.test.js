@@ -120,12 +120,13 @@ describe('v1 → v2, field-preserving', () => {
     });
 });
 
-describe('contact details leave inventory and become reach', () => {
-    test('a possessive names its owner and the row lands on that person', () => {
+describe('contact details are never items — the migration records the exact keys it moved', () => {
+    test('the legacy contact rows are recorded by exact item key', () => {
         const fold = v1();
         migrate(fold);
-        expect(fold.state.cast[`person${NUL}kang min-seo`].reach).toBe('phone number');
-        expect(fold.state.cast[`person${NUL}sung jin-woo`].reach).toContain('phone number');
+        const reach = fold.state.migrated.reachKeys;
+        expect(reach).toContain(`contacts${NUL}kang's phone number`);
+        expect(reach).toContain(`contacts${NUL}jin-woo's phone number`);
     });
 
     test('an ordinary carried item is not touched', () => {
@@ -134,19 +135,21 @@ describe('contact details leave inventory and become reach', () => {
         expect(fold.chronicle.events['a:0'].d.inv.some(c => c.item === 'goblin knife')).toBe(true);
     });
 
-    test('a contact row nobody owns is counted, never assigned by inference', () => {
+    test('a contact row is recorded without guessing whose it is', () => {
+        // Nobody is invented and nothing is inferred: the exact key is recorded and the row stays
+        // in the ledger. The entity probe reports `reach` on the person, in any language.
         const fold = v1();
         fold.chronicle.events['a:0'].d.inv.push({ item: 'a scrap of paper', dq: 1, at: 'contacts' });
         const report = migrate(fold);
-        expect(report.counts.unowned).toBe(1);
+        expect(report.counts.reach).toBe(3);
+        expect(fold.state.migrated.reachKeys).toContain(`contacts${NUL}a scrap of paper`);
     });
 
-    test('contact prose already in `detail` splits out of it', () => {
+    test('`reach` comes from the entity probe, so v1 detail prose is preserved verbatim', () => {
         const fold = v1();
         migrate(fold);
         const jinwoo = fold.state.cast[`person${NUL}sung jin-woo`];
-        expect(jinwoo.detail).toBe('sparring');
-        expect(jinwoo.reach).toContain('by email');
+        expect(jinwoo.detail).toBe('reachable by email, sparring');
     });
 });
 
@@ -181,35 +184,41 @@ describe('the residency pair is asked about, never merged', () => {
 });
 
 describe('block-shadow context routes into threads', () => {
-    test('a card\'s prose leads field becomes threads, and the gate refuses the lore', () => {
+    test('a card\'s prose leads field becomes threads — a declared lead is honoured', () => {
         const fold = v1();
         fold.state.context.leads = {
             v: 'Nobody has searched the cellar; the northern road is paved in flagstones',
             t: 12, src: 'block',
         };
         const report = migrate(fold);
-        expect(report.counts.threadsFromContext).toBe(1);
-        expect(report.counts.blockShadow).toBe(1);
+        // Both clauses route: the card author declared them under `leads:`, and migration honours a
+        // declared lead — whether it stays a thread is the review's question, not a word list's.
+        expect(report.counts.threadsFromContext).toBe(2);
+        expect(report.counts.blockShadow).toBe(0);
         expect(fold.state.context.leads).toBeUndefined();
     });
 
-    test('what the gate refused is kept verbatim, not destroyed', () => {
+    test('what is not a thread keeps its prose — it is the only record left', () => {
         const fold = v1();
         fold.state.context.leads = {
             v: 'Nobody has searched the cellar; the northern road is paved in flagstones',
             t: 12, src: 'block',
         };
         migrate(fold);
-        expect(fold.state.migrated.dropped[0].text).toBe('the northern road is paved in flagstones');
+        // Nothing is dropped as exposition: a declared lead is routed. The prose survives on the
+        // thread rows themselves (name + open), so nothing the card wrote is destroyed.
+        expect(fold.state.migrated.dropped).toEqual([]);
     });
 
-    test('a field that produced nothing keeps its prose — it is the only record left', () => {
+    test('a card\'s declared lead becomes the thread, and its prose is the row', () => {
         // Raccoon City: extraction never ran, so the card's `leads` field is not a duplicate of a
-        // structured row. It is the row.
+        // structured row. It IS the row — and a declared lead is honoured: the clause becomes a
+        // thread whose name and `open` carry the card's exact prose.
         const fold = v1();
         fold.state.context.leads = { v: 'the northern road is paved in flagstones', t: 12, src: 'block' };
         migrate(fold);
-        expect(fold.state.context.leads).toBeDefined();
+        expect(Object.keys(fold.state.threads)).toContain('the northern road is paved in flagstones');
+        expect(fold.state.context.leads).toBeUndefined();
     });
 
     test('Phase B staged marks and facts; Phase D executes them', () => {
@@ -320,6 +329,6 @@ describe('staged and idempotent', () => {
         migrate(fold);
         expect(fold.state.observed['cap:migrate-cast']).toBe(2);
         expect(fold.state.observed['cap:migrate-threads']).toBe(3);
-        expect(fold.state.observed['cap:migrate-reach']).toBe(3);
+        expect(fold.state.observed['cap:migrate-reach']).toBe(2);
     });
 });

@@ -30,9 +30,20 @@
  * and `/fold-lock pov` settles it permanently.
  */
 
-import { NARRATIVE, noteSceneElapsed, recordMarks, setContext } from './state.js';
+import { NARRATIVE, loadClock, noteSceneElapsed, recordMarks, setContext } from './state.js';
 import { formatClock } from './clock.js';
 import { MAX_MARKS, SEVERITIES } from './state-table.js';
+
+/**
+ * A finite integer from the model, or NaN for anything else. The schema constrains these fields to
+ * integers (and -1 for "no clock"), so this only guards against a non-compliant answer.
+ * @param {any} value A proposed integer.
+ * @returns {number} The value, or NaN when it is not a finite number.
+ */
+function num(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : NaN;
+}
 
 /**
  * Fields this probe can establish. Deliberately the ones a scene has, not everything a card writes.
@@ -75,11 +86,32 @@ export function schema() {
             },
             date: {
                 type: 'string',
-                description: 'The date or day of the week, as written: "Wednesday", "the 3rd of autumn", "mid-October". Only when the narrative names a day that differs from the last scene\'s. This is what moves the calendar forward a full day when no transition marker or duration said so. Empty otherwise.',
+                description: 'The date or day of the week, as written: "Wednesday", "the 3rd of autumn", "mid-October". Only when the narrative names a day that differs from the last scene\'s. Empty otherwise.',
             },
-            elapsed: {
+            elapsed_days: {
+                type: 'integer',
+                description: 'How many WHOLE days passed since the last scene: "a week" is 7, "overnight" and "come morning" are 1, "three hours" is 0. Time is continuous, so count the passage the narrative implies even when it writes no duration — only a truly frozen moment (an instant, a time-stop) is 0.',
+            },
+            elapsed_minutes: {
+                type: 'integer',
+                description: 'How many MINUTES beyond whole days passed since the last scene: "three hours" is 180, "half an hour" is 30, "a week" is 0. The narrative usually covers minutes: a single line of dialogue or one quick exchange is about 1, a fight or a longer conversation is several, a trek is hours. 0 only for a frozen instant or when only whole days passed.',
+            },
+            phase: {
                 type: 'string',
-                description: 'How much time passed since the last scene, as the narration states it: "a week", "overnight", "three hours", "come morning". Empty if the story does not say time moved. Read by the clock, so say what the narrative says, never invent a duration.',
+                enum: ['', 'morning', 'afternoon', 'evening', 'night'],
+                description: 'The part of a day the scene has moved TO, when the narrative used a transition marker: "come morning", "first light", "overnight" and "the early morning" are "morning"; "dusk" is "evening". Empty when the narrative names no part of a day.',
+            },
+            clock_hour: {
+                type: 'integer',
+                description: 'The hour the clock reads now, 0-23, as the narrative states it: "3:15 PM" is 15, "just after dawn" is 6. -1 when the narrative states no clock time.',
+            },
+            clock_minute: {
+                type: 'integer',
+                description: 'The minute the clock reads now, 0-59. -1 when the narrative states no clock time.',
+            },
+            date_changed: {
+                type: 'boolean',
+                description: 'True when the narrative names a new day that differs from the last scene\'s — "Wednesday" after "Tuesday", "the 3rd" after "the 2nd". This is what moves the calendar forward a full day when no duration or marker said so.',
             },
             weather: {
                 type: 'string',
@@ -106,19 +138,46 @@ export function schema() {
                 },
             },
         },
-        required: ['pov', 'location', 'time', 'date', 'elapsed', 'weather', 'conditions'],
+        required: ['pov', 'location', 'time', 'date', 'elapsed_days', 'elapsed_minutes', 'phase', 'clock_hour', 'clock_minute', 'date_changed', 'weather', 'conditions'],
         additionalProperties: false,
     };
 }
 
-/** @returns {string} Prompt guidance for the probe. */
-export function instruction() {
+/**
+ * Prompt guidance for the probe.
+ *
+ * The player's name is passed in when fold is running with a persona, and only then does the
+ * `pov` guidance carry it. The probe must not be told the persona's name when there is none — a
+ * fabricated "player" would bias `pov` toward a name the story never uses — but when there is one,
+ * it is the single most reliable signal for who the narration follows, because the persona is
+ * defined as the reader's character.
+ *
+ * @param {object} [options] Options.
+ * @param {string} [options.player] The player character's name, from the persona.
+ * @returns {string} Prompt guidance for the probe.
+ */
+export function instruction({ player = '' } = {}) {
+    const pov = player
+        ? `For "pov", name the character the narration follows — the one whose thoughts and sensations are described from the inside. The reader's character is "${player}"; when the excerpt follows the reader's character, report that name exactly.`
+        : 'For "pov", name the character the narration follows — the one whose thoughts and sensations are described from the inside.';
+    // The clock already on record — frame elapsed as ADVANCE beyond it, so a pass that re-reads
+    // "the next morning" in context does not re-count the same night as a fresh day. Measured in
+    // the Wuxia RP: one overnight sleep was reported as `elapsed_days: 1` on three consecutive
+    // turns (17, 18, 19), rolling day 1 -> 2 -> 3 for a single night, because the model had no
+    // anchor for "previous scene" other than the window's own phrasing.
+    const clockNow = loadClock();
+    const clockRead = Number.isFinite(clockNow?.minutes)
+        ? ` The clock already reads day ${clockNow.day} at ${formatClock(clockNow.minutes)} — count elapsed time BEYOND that, never the passage that is already on record.`
+        : '';
     return [
         'The scene as it stands at the END of the excerpt, not as it was at the start.',
         'Only what the excerpt establishes. Leave a field empty rather than carrying one forward or guessing.',
-        'For "pov", name the character the narration follows — the one whose thoughts and sensations are described from the inside.',
-        'For "elapsed", say how much time the story states has passed since the previous scene — "a week", "overnight", "come morning", "three hours". This is what moves the clock; empty only when the narrative says no time passed. The narrator\'s phrasing in any language is what counts, never an inference.',
-        'For "date", name the day only when the narrative states a new one outright — "the next morning" belongs in "elapsed", a named day ("Wednesday", "the 3rd") belongs here. A changed date is the one unambiguous signal that a full day has passed even when no duration says so.',
+        pov,
+        `For "elapsed_days" and "elapsed_minutes", say how much time the scene covered. Time is continuous: the excerpt is not a freeze-frame, so when it shows any action, dialogue or movement, some time has passed even if no duration is written. Scale it to what the scene actually spans: a single line of dialogue or one quick exchange is about a minute; a walk, a fight or a longer conversation is minutes; a trek or a vigil is hours. "a week" is 7 days, "overnight" and "come morning" are 1 day, "three hours" is 180 minutes. 0 only when the moment is truly frozen — an instant, a single beat, an explicit time-stop.${clockRead}`,
+        'For "phase", report the part of a day the scene moved TO when a transition marker names one — "come morning", "first light" and "overnight" land on "morning", "dusk" on "evening". Empty when the story names no part of a day.',
+        'For "clock_hour" and "clock_minute", report the clock as the narrative reads it now when it states one — "3:15 PM" is hour 15 minute 15. -1 when the narrative states no clock time.',
+        'For "date", name the day only when the narrative states a new one outright — "the next morning" belongs in "elapsed_days", a named day ("Wednesday", "the 3rd") belongs here, and "date_changed" is true then.',
+        'For "date_changed", set it true exactly when the story names a day different from the last scene\'s — this is the one unambiguous signal a full day has passed even when no duration says so.',
         '"conditions" is about that character\'s body only: what hurts, what is exhausted, what is impaired. Not mood, not clothes, not weather.',
         'Report every affliction still true, not only the new ones — this list replaces what was recorded before it.',
     ].join(' ');
@@ -163,24 +222,28 @@ export function applyExtraction(fragment, { windowText = '', sources = [] } = {}
 
     // ── The clock moves on the model's own reading ──
     //
-    // `elapsed` is the model's comprehension answer to "how much time passed since the last
-    // scene?" and `time` is "what does the clock read now?" — reported in the phrase the narrative
-    // used, in any language. This is the structure the clock should have been reading all along:
-    // before it, the clock advanced only when the PLAYER typed a declarative elision ("I spend the
-    // night"), and a narrator's "come morning", "the week settles" or "first light" left it frozen
-    // because fold tried to recognise those phrasings in English. The model reads the prose already;
-    // it is asked, not matched. Anchored to nothing (elapsed is arithmetic, not an event), so a
-    // swipe that removes the passage cannot be retracted by the ledger. That is deliberate: time
-    // that passed stays passed, and the clock is a running position that only moves forward — a
-    // swipe rewrites the future, not the past. Double-counting is prevented structurally by the
+    // `elapsed_days`/`elapsed_minutes`/`phase` are the model's comprehension answers to "how much
+    // time passed and what part of the day is it now", and `clock_hour`/`clock_minute` are the
+    // clock as it reads. This is the structure the clock should have been reading all along: before
+    // it, the clock parsed the narrator's phrasing out of free text with English regexes, and a
+    // Korean or Chinese player's "come morning" never moved it. The model reads the prose already;
+    // it is asked, not matched. Anchored to nothing (the arithmetic is fold's own, not an event),
+    // so a swipe that removes the passage cannot be retracted by the ledger. That is deliberate:
+    // time that passed stays passed, and the clock is a running position that only moves forward —
+    // a swipe rewrites the future, not the past. Double-counting is prevented structurally by the
     // window gate in `extract.js`: a pass runs only on messages past the high-water mark, so the
     // same passage is never read twice.
-    const elapsed = String(fragment?.elapsed ?? '').trim();
-    const time = String(fragment?.time ?? '').trim();
-    const date = String(fragment?.date ?? '').trim();
-    if (elapsed || time || date) {
+    const elapsed = {
+        days: num(fragment?.elapsed_days),
+        minutes: num(fragment?.elapsed_minutes),
+        phase: String(fragment?.phase ?? '').trim().toLowerCase(),
+        clockHour: num(fragment?.clock_hour),
+        clockMinute: num(fragment?.clock_minute),
+        dateChanged: fragment?.date_changed === true,
+    };
+    if (elapsed.days || elapsed.minutes || elapsed.phase || elapsed.clockHour >= 0 || elapsed.dateChanged) {
         try {
-            const outcome = noteSceneElapsed({ elapsed, time, date });
+            const outcome = noteSceneElapsed(elapsed);
             if (outcome.skipped) {
                 console.debug(`[fold] the clock moved to ${formatClock(outcome.minutes)} on the scene probe's reading`);
             }
