@@ -992,6 +992,37 @@ export function nearIdentity(a, b) {
             return 'substitution';
         }
     }
+    // ── The variant branch: one substitution agreeing anywhere but the head ──
+    //
+    // The two pairs the head gate was added to exclude are `Lord Everard` / `Lillian Everard` and
+    // `the dining hall` / `the great hall` — same size, one differing token, agreeing in FINAL
+    // position rather than initial. The gate calls them spurious, and for a question BUDGET they
+    // were: they cost a slot and the answer was predictable.
+    //
+    // For a training corpus they are the most valuable pairs there are. Both are almost certainly
+    // `different` — two Everards, two halls — and `different` is the class the persisted corpus is
+    // starved of: 3 of 35 verdicts across 1,162 messages of play, because every branch above only
+    // fires on names that already look alike. A resolver cannot learn a distinction from a corpus
+    // that only contains one side of it, and no featurizer or metric repairs that
+    // (`AdaptRetrievalLever.the_metric_is_not_the_lever`).
+    //
+    // Kept as its own `why` so `identityPairs` can order it AFTER the two established branches:
+    // `MAX_QUESTIONS` is a queue, not a data cap (`review-table.js:70-104` — "nothing is lost when
+    // a question does not fit"), so a variant pair asked in a leftover slot delays no subset or
+    // substitution question, and the risk the ceiling exists against — a wall of interrogation that
+    // gets rubber-stamped — is bounded by the same eight.
+    // The size floor is load-bearing, and it is what the head gate was silently providing. For two
+    // ONE-token names the sets are size 1 and differ in their only member, so "one substitution"
+    // matches every distinct pair of bare names: measured over the live tables, dropping the head
+    // gate without this floor raised 352 pairs instead of 15 — `Sol` ~ `Zareena`, `Sol` ~ `Dietrich`,
+    // the whole cast crossed with itself. Requiring two tokens means the substitution happens INSIDE
+    // a name whose remainder agrees, which is what makes the question worth an answer.
+    if (small.size === large.size && small.size >= 2) {
+        const missing = [...small].filter(token => !large.has(token));
+        if (missing.length === 1) {
+            return 'variant';
+        }
+    }
     return null;
 }
 
@@ -1001,6 +1032,12 @@ export function nearIdentity(a, b) {
  * Returned rather than stored as a merge: the answer is the model's or the reader's (§2), and this
  * phase only supplies the question. Quadratic in the table size, which is fine at MAX_THREADS = 24
  * and is checked nowhere hotter than a migration and a panel repaint.
+ *
+ * Ordered `subset` and `substitution` first, `variant` last. The established two branches fire on
+ * the duplicates that actually cost the reader something — a dial counted twice, a stake opened
+ * under two wordings — and they keep their slots. A `variant` pair is asked for what its ANSWER is
+ * worth rather than what the merge is worth, so it takes only a slot the others left, which is
+ * exactly what `MAX_QUESTIONS` being a queue rather than a cap makes free (`review-table.js:70-104`).
  *
  * @param {Array<{key: string, name: string}>} records Records with names.
  * @returns {Array<{a: string, b: string, why: string}>} Pairs, by key.
@@ -1016,7 +1053,9 @@ export function identityPairs(records) {
             }
         }
     }
-    return pairs;
+    // A stable partition, not a sort: within each class the table's own order survives, so the two
+    // pairs Phase C's gate names stay the first two identity questions at any ceiling above two.
+    return [...pairs.filter(pair => pair.why !== 'variant'), ...pairs.filter(pair => pair.why === 'variant')];
 }
 
 /**

@@ -257,13 +257,22 @@ describe('nearIdentity — a trigger for a question, never a decision', () => {
         expect(nearIdentity('Kang', 'Kang Min-seo')).toBe('subset');
     });
 
-    test('a shared surname is a family, not a person', () => {
-        // Measured on Evil Hero Party: accepting a final-position head for the SUBSTITUTION branch
-        // asks whether Lord Everard is Lillian Everard. Only a shared first token licenses that
-        // question. "the dining hall" and "the great hall" now SHARE a first token ("the" is no
-        // longer stripped by an English stopword list), so the detector raises the question and the
-        // model answers "different" — a detector that asks costs a question slot, never a merge.
-        expect(nearIdentity('Lord Everard', 'Lillian Everard')).toBeNull();
+    test('a shared surname is a family, not a person — and that answer is the point', () => {
+        // This assertion was `toBeNull()` until the head gate was dropped. The gate existed to keep
+        // "is Lord Everard Lillian Everard?" out of a scarce question budget, on the reading that a
+        // predictable `different` wastes a slot.
+        //
+        // It is the class the corpus is starved of. Three `different` verdicts in 35, across 1,162
+        // messages of play, because every other branch fires only on names that already look alike —
+        // and a resolver cannot learn a distinction from a corpus holding one side of it.
+        //
+        // The gate was also fold deciding, on a structural proxy, which questions deserve asking:
+        // `Lord Everard`/`Lillian Everard` and `a weapon`/`the weapon` are the SAME shape — equal
+        // size, differing in head position, agreeing in the tail — and nothing language-neutral
+        // separates a surname from an article. Under RULE 1 that decision is the model's. The
+        // detector raises it as `variant`, ordered last, and costs a slot rather than a merge.
+        expect(nearIdentity('Lord Everard', 'Lillian Everard')).toBe('variant');
+        // Unchanged: these share a first token, so the established branch still claims them.
         expect(nearIdentity('the dining hall', 'the great hall')).toBe('substitution');
     });
 
@@ -287,8 +296,30 @@ describe('nearIdentity — a trigger for a question, never a decision', () => {
         // subset of "the cellar" and the detector raises the question — the model answers "same".
         // The old rule silently decided "the" carried no identity in exactly one language.
         expect(nearIdentity('the cellar', 'cellar')).toBe('subset');
-        // Two different articles do not share a first token, so no substitution question is raised.
-        expect(nearIdentity('a weapon', 'the weapon')).toBeNull();
+        // Two different articles now raise a `variant` question, and the honest cost is stated here
+        // rather than hidden: the model will answer `same`, which is the class the corpus already
+        // has 32 of. Dropping the head gate widens BOTH ways, because `a`/`the` and `Lord`/`Lillian`
+        // are indistinguishable to any structural rule. The slot is a queue entry, never a merge.
+        expect(nearIdentity('a weapon', 'the weapon')).toBe('variant');
+    });
+
+    test('variant pairs are asked last, so the established branches keep their slots', () => {
+        // `MAX_QUESTIONS` is a queue rather than a data cap (`review-table.js:70-104`), so an
+        // unasked question returns on the next pass unchanged. That makes a widened detector free
+        // ONLY if the new pairs cannot displace the old ones — the duplicates that cost a reader a
+        // double-counted dial still go first.
+        const rows = [
+            { key: 'a', name: 'Lord Everard' },
+            { key: 'b', name: 'Lillian Everard' },
+            { key: 'c', name: 'broker' },
+            { key: 'd', name: 'scarred broker' },
+        ];
+        const pairs = identityPairs(rows);
+        const whys = pairs.map(p => p.why);
+        expect(whys).toContain('subset');
+        expect(whys).toContain('variant');
+        // Every non-variant precedes every variant.
+        expect(whys.indexOf('variant')).toBeGreaterThan(whys.lastIndexOf('subset'));
     });
 
     test('two substitutions is too far', () => {
