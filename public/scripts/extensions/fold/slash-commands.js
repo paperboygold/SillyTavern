@@ -23,6 +23,8 @@ import * as entities from './entities.js';
 import * as observe from './observe.js';
 import * as state from './state.js';
 import * as trace from './trace.js';
+import * as extract from './extract.js';
+import * as store from './store.js';
 import { requestSteer } from './steer.js';
 
 async function steerCallback(args, instruction) {
@@ -258,6 +260,56 @@ export function registerFoldSlashCommands() {
         </div>
         <div>
             ${t`fold carries twenty-two numeric constants and every one of them was chosen rather than measured. A rule that never fires is decoration and should be deleted; a rule that fires constantly is set wrong. This is how you tell which is which.`}
+        </div>
+    `,
+    }));
+
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'fold-replay',
+        callback: replayCallback,
+        returns: 'the number of extraction passes run',
+        namedArgumentList: [
+            new SlashCommandNamedArgument(
+                'dry',
+                t`Count the passes without calling the model`,
+                [ARGUMENT_TYPE.BOOLEAN],
+                false,
+                false,
+                'false',
+            ),
+            new SlashCommandNamedArgument(
+                'limit',
+                t`Stop after this many passes`,
+                [ARGUMENT_TYPE.NUMBER],
+                false,
+                false,
+            ),
+            new SlashCommandNamedArgument(
+                'step',
+                t`Messages advanced per pass (default 2, the observed live cadence)`,
+                [ARGUMENT_TYPE.NUMBER],
+                false,
+                false,
+                '2',
+            ),
+        ],
+        helpString: `
+        <div>
+            ${t`Re-runs extraction over this chat from the beginning, recording a trace for every pass. The chat's own tracked state is snapshotted first and restored afterwards, so nothing you are playing is changed — only the trace is kept.`}
+        </div>
+        <div>
+            ${t`This is how a chat played before the trace existed gets its prompt→answer record: the identity questions the review asks are re-asked against a ledger rebuilt the same way, and this time the prompt that produced each answer is written down.`}
+        </div>
+        <div>
+            <strong>${t`Usage:`}</strong>
+            <ul>
+                <li><pre><code class="language-stscript">/fold-replay dry=true</code></pre> ${t`how many passes, and therefore how many model calls, without spending any`}</li>
+                <li><pre><code class="language-stscript">/fold-replay limit=10</code></pre> ${t`prove the driver on ten passes first`}</li>
+                <li><pre><code class="language-stscript">/fold-replay</code></pre> ${t`the whole chat`}</li>
+            </ul>
+        </div>
+        <div>
+            ${t`Every pass is one extraction call against your configured profile, so a long chat costs real money. Run it dry first.`}
         </div>
     `,
     }));
@@ -531,6 +583,102 @@ function calibrationReport() {
  * @param {boolean} _args.download Save the whole trace file for this chat.
  * @returns {string} A short report.
  */
+/**
+ * How many message indices one replay step advances by.
+ *
+ * Not a guess: the Wuxia chat's trace holds 140 passes over 277 messages, so the live trigger
+ * cadence averaged just under two messages per pass. Stepping by one would produce roughly twice
+ * the passes the chat really ran — a different corpus, and twice the cost, for no extra fidelity.
+ */
+const REPLAY_STEP = 2;
+
+/**
+ * Re-run extraction over this chat from turn zero, recording a trace for every pass.
+ *
+ * ── Why this exists ──
+ *
+ * The trace (`trace.js`) records the exact prompt and reply of every extraction pass, and it landed
+ * after most of these chats were played. So the identity verdicts those chats persisted have labels
+ * and no context: `state.answers` keeps `{answer, at}` and nothing about the ledger the model was
+ * looking at when it answered. A resolver trained on the label alone cannot work — the two names do
+ * not contain their own answer, and no metric over them repairs that
+ * (`AdaptRetrievalLever.the_metric_is_not_the_lever`, sanguine). The only lever is more information
+ * in the features, and the only place that information exists is the prompt.
+ *
+ * Replaying regenerates it: the pass reads the same window the live pass read, against a ledger
+ * rebuilt the same way, and writes a trace.
+ *
+ * ── Why it is safe to run on a chat you are playing ──
+ *
+ * Two hazards, both closed rather than warned about. The pass can only read the chat's TAIL
+ * (`extract-table.js` `splitWindow` slices `-size`), so re-running history needs the visible chat
+ * restricted — and the obvious way, splicing the live `chat` array, is unsafe because SillyTavern
+ * persists that array to the chat file on its own events, so a driver that truncated it could
+ * truncate the transcript on disk. `runExtraction({ source })` takes an explicit slice instead and
+ * the live array is never touched. Second, the replay rebuilds `chat_metadata.fold` from nothing,
+ * which would otherwise destroy the ledger of a live chat; `snapshotFold`/`restoreFold` bracket the
+ * whole run in a `finally`, so an abort, a thrown pass or a closed tab restores what was there.
+ *
+ * The trace is written server-side per chat and is NOT part of the snapshot, so it survives the
+ * restore. That asymmetry is the point: the state goes back, the evidence stays.
+ *
+ * @param {object} args Named arguments.
+ * @param {string} [args.limit] Cap the number of passes. Default: no cap.
+ * @param {string} [args.step] Message indices per pass. Default `REPLAY_STEP`.
+ * @param {string} [args.dry] Count the passes and the cost without calling the model.
+ * @returns {Promise<string>} The number of passes run (or planned, under `dry`).
+ */
+async function replayCallback(args) {
+    const step = Math.max(1, Number(args?.step) || REPLAY_STEP);
+    const cap = Number(args?.limit) > 0 ? Number(args.limit) : Infinity;
+    const dry = isTrueBoolean(args?.dry);
+
+    const live = (chat ?? []).filter(m => m?.mes && !m.is_system).length;
+    if (!live) {
+        toastr.warning(t`/fold-replay needs a chat with messages in it.`);
+        return '0';
+    }
+    // The stops are the message counts a pass would have seen: every `step`th message, and always
+    // the last one, so the tail is never dropped by an uneven division.
+    const stops = [];
+    for (let n = step; n < chat.length; n += step) {
+        stops.push(n);
+    }
+    stops.push(chat.length);
+    const planned = Math.min(stops.length, cap);
+
+    if (dry) {
+        toastr.info(t`/fold-replay would run ${planned} passes over ${live} messages (step ${step}). Each is one extraction call.`);
+        return `${planned}`;
+    }
+
+    const snapshot = store.snapshotFold();
+    let ran = 0;
+    let ok = 0;
+    try {
+        store.clearFold();
+        for (const stop of stops.slice(0, cap)) {
+            // `source` is the chat as it stood at that point. `runExtraction` declines with
+            // `nothing-new` when the mark already covers the slice, which costs no model call — so
+            // a step that lands inside an already-read window is cheap rather than wasteful.
+            const result = await extract.runExtraction({ source: chat.slice(0, stop), why: 'replay' });
+            ran += 1;
+            if (result?.ok) {
+                ok += 1;
+            }
+            if (ran % 10 === 0) {
+                console.debug(`[fold] replay ${ran}/${planned} passes (${ok} ok)`);
+            }
+        }
+    } finally {
+        // Unconditional: an aborted or thrown replay must not leave a rebuilt ledger in place of
+        // the one the chat was playing with.
+        store.restoreFold(snapshot);
+    }
+    toastr.success(t`Replay complete: ${ran} passes, ${ok} produced a fragment. The trace kept every one; this chat's own state is unchanged.`);
+    return `${ran}`;
+}
+
 async function traceCallback(_args, _text) {
     const records = await trace.load();
     if (!records.length) {

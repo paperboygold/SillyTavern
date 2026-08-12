@@ -114,13 +114,21 @@ function buildSchema() {
  * The reading of the chat lives here; the splitting rule lives in `extract-table.js`, where it is
  * pure and testable and carries the argument for itself.
  *
+ * `source` exists for the replay driver (`slash-commands.js` `/fold-replay`) and nothing else.
+ * `splitWindow` takes the LAST `size` messages, so a pass can only ever read the chat's tail —
+ * which means re-running history requires restricting what the pass can see. The alternative was
+ * splicing the live `chat` array, and SillyTavern persists that array to the chat file on its own
+ * events: a driver that truncated it could truncate the user's transcript on disk. An explicit
+ * source is the same restriction with none of that reach.
+ *
  * @param {number} size How many trailing messages to include.
  * @param {{mid: number, key: string}} [mark] The persisted high-water mark.
+ * @param {Array<object>|null} [source] Messages to read instead of the live chat. `null` = live.
  * @returns {{text: string, newText: string, sources: Array<{key: string, mid: number}>,
  *   context: number, mark: number|null}} The window.
  */
-export function buildWindow(size, mark = {}) {
-    const messages = (chat ?? [])
+export function buildWindow(size, mark = {}, source = null) {
+    const messages = (source ?? chat ?? [])
         .map((message, mid) => ({ message, mid }))
         .filter(({ message }) => message?.mes && !message.is_system)
         .map(({ message, mid }) => ({
@@ -278,7 +286,7 @@ async function requestExtraction({ prompt, responseLength, schema, profileId, re
  * @param {string} [options.why] The reason this pass ran — arms the world fragment on a time skip.
  * @returns {Promise<{ok: boolean, reason?: string, results?: object}>} Outcome.
  */
-export async function runExtraction({ windowSize = 6, responseLength = 800, profileId = '', why = '', reasoning = false } = {}) {
+export async function runExtraction({ windowSize = 6, responseLength = 800, profileId = '', why = '', reasoning = false, source = null } = {}) {
     // ── Every outcome is recorded, including the ones that are not errors ──
     //
     // A chat ran to 74 turns with zero extracted events and NOTHING in the data said why. The pass
@@ -310,7 +318,7 @@ export async function runExtraction({ windowSize = 6, responseLength = 800, prof
     // fires a duplicate automatic pass. The auto path already stamps before calling, so this is a
     // no-op there; it is the missing half for every other caller.
     noteExtracted();
-    const window = buildWindow(windowSize, extractMark());
+    const window = buildWindow(windowSize, extractMark(), source);
     if (!window.sources.length) {
         // Distinct from `empty-window`, and the distinction is the whole point of the split: an
         // empty chat and a chat where nothing has been said since the last look are different

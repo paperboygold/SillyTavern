@@ -257,3 +257,40 @@ export function clearFold() {
     delete chat_metadata[FOLD_METADATA_KEY];
     saveMetadataDebounced();
 }
+
+/**
+ * A deep copy of the current chat's fold blob, or `null` when there is none.
+ *
+ * Exists for `/fold-replay`, which rebuilds the ledger from turn zero over a chat somebody is
+ * actually playing. A structural copy rather than a reference: the replay mutates the live blob in
+ * place through every normal write path, so a reference would be the same object it is trying to
+ * preserve and "restore" would restore the damage.
+ *
+ * @returns {object|null} The copy.
+ */
+export function snapshotFold() {
+    const fold = chat_metadata[FOLD_METADATA_KEY];
+    if (!fold || typeof fold !== 'object') {
+        return null;
+    }
+    return structuredClone(fold);
+}
+
+/**
+ * Put a snapshot back, discarding whatever is there now.
+ *
+ * The other half of `snapshotFold`. `null` restores "no fold state at all", which is a real state a
+ * chat can be in and is distinct from an empty blob — a chat that fold has never touched must not
+ * come back from a replay looking like one it touched and found nothing in.
+ *
+ * @param {object|null} snapshot A blob from `snapshotFold`.
+ * @returns {void}
+ */
+export function restoreFold(snapshot) {
+    if (snapshot === null || snapshot === undefined) {
+        delete chat_metadata[FOLD_METADATA_KEY];
+    } else {
+        chat_metadata[FOLD_METADATA_KEY] = structuredClone(snapshot);
+    }
+    saveMetadataDebounced();
+}
