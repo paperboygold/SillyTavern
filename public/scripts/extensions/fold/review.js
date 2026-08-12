@@ -20,7 +20,7 @@ import * as chronicle from './chronicle.js';
 import * as clocks from './clocks.js';
 import * as entities from './entities.js';
 import * as observe from './observe.js';
-import { MONEY, splitItemKey } from './state-table.js';
+import { itemKey, MONEY, splitItemKey } from './state-table.js';
 import { DIFFERENT, SAME, describePlan, outstanding, pairKey, planReview } from './review-table.js';
 import { commit, loadTable, loadValue, commitValue } from './store.js';
 
@@ -304,6 +304,32 @@ export function applyExtraction(fragment, {
     // guessing (`entity-table.js`, the three-valued note): a place on the row is a place the
     // presence predicate can compare, so the next render puts them in the room or out of it on
     // evidence rather than on a default.
+    // ── The currency reading, remembered as an item verdict ──
+    //
+    // `plan.currency` is the model's answer to the one identity question fold cannot raise for
+    // itself: it read the pinned Money block and named two lines as one currency. Recorded under
+    // the same keys the ledger uses, so a crosswalk can apply it once one exists, and counted so
+    // `/fold-calibrate` can say whether the field ever fires.
+    //
+    // Deliberately NOT applied: see the item branch of the merge loop above. A verdict with nowhere
+    // to go is still a label, and this one costs no question slot at all — unlike every other
+    // identity answer, it was volunteered rather than asked.
+    for (const pair of plan.currency ?? []) {
+        // The block renders "20 silver wen", so the model quoting it "exactly as written" hands
+        // back the amount too — measured on the first run, where a one-entry block produced the
+        // self-pair `20 silver wen` / `silver wen`. Stripping a leading count is number parsing,
+        // which is STRUCTURE and means the same thing in every language; the instruction now asks
+        // for the name alone as well, and this is the belt to that brace.
+        const bare = (name) => String(name ?? '').trim().replace(/^[0-9.,\s]+/, '').trim().toLowerCase();
+        const a = itemKey(bare(pair.a), MONEY);
+        const b = itemKey(bare(pair.b), MONEY);
+        if (a === b || !bare(pair.a) || !bare(pair.b)) {
+            continue;
+        }
+        remember(a, b, SAME);
+        observe.note('review:currency-same');
+    }
+
     for (const placement of plan.places) {
         if (entities.setPlace(placement.key, placement.place, turn)) {
             observe.note('review:placed');

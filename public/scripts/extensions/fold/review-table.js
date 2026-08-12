@@ -369,8 +369,33 @@ export function reviewSchema() {
                     additionalProperties: false,
                 },
             },
+            same_currency: {
+                type: 'array',
+                // ── The one identity question fold cannot raise for itself ──
+                //
+                // Threads and cast have tables a detector walks. Inventory is a fold over the
+                // chronicle, so there is no table — and the structural substitutes are
+                // script-dependent: a token overlap finds `silver wen` against `silver` and misses
+                // `二十银两` against `银两`, because Han does not space its words. Arithmetic finds a
+                // split only after it has already overdrawn a balance.
+                //
+                // The model has no such problem. The Money block is pinned in every prompt, it
+                // reads it in whatever language it was written, and naming two lines as one
+                // currency is a reading — which is what RULE 1 says to ask for rather than derive.
+                // This is a field on the pass that already runs, never a new request.
+                description: 'Look at the Money block above. If two of its entries are the same currency written two ways — "silver" and "silver wen", "copper" and "copper coins" — list the pair. Give the CURRENCY NAME only, without the amount: for "20 silver wen · 30 silver" that is "silver wen" and "silver". Never pair an entry with itself. Empty when every entry is a distinct currency, which is the usual case and the usual answer.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        a: { type: 'string', description: 'One money line, exactly as the block writes it.' },
+                        b: { type: 'string', description: 'The other line naming the same currency.' },
+                    },
+                    required: ['a', 'b'],
+                    additionalProperties: false,
+                },
+            },
         },
-        required: ['lines', 'answers'],
+        required: ['lines', 'answers', 'same_currency'],
         additionalProperties: false,
     };
 }
@@ -389,6 +414,7 @@ export function reviewInstruction() {
         `An A line is somebody dangerous: ${SETTLED} once beaten, ${MOOT} once the fight stopped being a fight, ${OPEN} while it continues.`,
         'The questions were asked because something is ambiguous in the record, not in the fiction.',
         'Never answer a question the excerpt and your reading cannot settle. An omitted answer is asked again; a wrong one is acted on.',
+        'One more, and it is about the Money block rather than the excerpt: if two of its entries are the same currency written two ways, list the pair in "same_currency" by currency name, without the amounts. Leave it empty when they are genuinely different currencies, or when the block has only one entry. This is the one thing here you read from the record rather than from the story.',
     ].join(' ');
 }
 
@@ -406,7 +432,7 @@ export function reviewInstruction() {
 export function planReview(fragment, index) {
     const plan = {
         closures: [], advanced: [], kept: 0,
-        places: [], merges: [], different: [], polarity: [], locks: [], money: null,
+        places: [], merges: [], different: [], polarity: [], locks: [], money: null, currency: [],
         cleared: [], disarmed: [],
         rejected: [],
     };
@@ -547,6 +573,28 @@ export function planReview(fragment, index) {
             default:
                 plan.rejected.push({ item: question.id, reason: 'review-wrong-shape' });
         }
+    }
+
+    // ── The model's currency reading, taken as a PAIR and not as a merge ──
+    //
+    // Same discipline as every other identity answer: this names two lines it believes are one
+    // currency, and fold turns it into a question-shaped record. It is not applied here — inventory
+    // is a fold over the chronicle, so merging two keys means relabelling the event stream, which
+    // wants a persisted crosswalk (`KeyResolution.relabel`, sound by `accum_append` because
+    // quantities sum). What it does now is become a witness, which is what the resolver is short of.
+    //
+    // Self-pairs are dropped: a model naming one line twice has said nothing.
+    for (const raw of Array.isArray(fragment?.same_currency) ? fragment.same_currency : []) {
+        const a = String(raw?.a ?? '').trim();
+        const b = String(raw?.b ?? '').trim();
+        if (!a || !b) {
+            plan.rejected.push({ item: `${a}${b}`, reason: 'review-wrong-shape' });
+            continue;
+        }
+        if (a.toLowerCase() === b.toLowerCase()) {
+            continue;
+        }
+        plan.currency.push({ a, b });
     }
 
     return plan;
