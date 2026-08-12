@@ -50,8 +50,11 @@ import { coveredCast, coveredThreads } from './coverage.js';
 import { commit, loadTable, loadValue } from './store.js';
 import * as log from './log.js';
 import { renderWorldEvents, revealContract } from './world-table.js';
+import { checkInvariants } from './invariant-table.js';
 
 const REJECTS_PATH = 'state.rejects';
+// `review.js` owns this table; read here for the partition-consistency check only, never written.
+const REVIEW_ANSWERS_PATH = 'state.answers';
 const CONTEXT_PATH = 'state.context';
 const CLOCK_PATH = 'state.clock';
 const LOCKS_PATH = 'state.locks';
@@ -644,6 +647,32 @@ export function derive() {
     });
 }
 
+/**
+ * Run the self-consistency checks over the derived ledger, log what they prove, and hand back the
+ * questions they raise.
+ *
+ * Logged, never surfaced. A negative balance is fold's defect, not something the player did, and a
+ * panel warning about it would be an apology interrupting a story — the diagnostics log is where a
+ * defect belongs and `/fold-calibrate` is where somebody goes looking.
+ *
+ * Suspected splits are NOT logged as rejections, because they are not defects: three of the five
+ * raised on the live chats are a silver ring and a silver moon locket sharing a token with the
+ * balance. They leave as witnesses instead.
+ *
+ * @returns {Array<{a: string, b: string, of: string, why: string}>} Identity questions raised.
+ */
+export function auditLedger() {
+    const { violations, witnesses } = checkInvariants({ inv: derive().inv, answers: loadTable(REVIEW_ANSWERS_PATH) });
+    if (violations.length) {
+        noteRejections(violations.map(v => ({
+            item: v.kind === 'partition-contradiction' ? `${v.a} ~ ${v.b}` : v.name,
+            reason: `invariant:${v.kind}`,
+            detail: v.kind === 'negative-quantity' ? `${v.place} holds ${v.qty}` : '',
+        })));
+    }
+    return witnesses;
+}
+
 /** @returns {string} The point-of-view character's name, or ''. */
 export function pov() {
     return lookup(loadContext(), 'pov', { v: '' }).v;
@@ -953,7 +982,9 @@ export function ledgerBlock({ windowText = '' } = {}) {
     // longest paragraph on. Measured on the pre-repair2 Solo Leveling header before this line
     // changed: 30 lines and 6,173 characters, of which the whole `Threads:` line was a restatement
     // of T1–T15 below it. §12's second open question is exactly this block's size discipline.
-    const questions = review.pending();
+    // Item identity questions come from the conservation audit rather than a detector, because
+    // inventory has no table for a detector to walk. `auditLedger` also logs what it can prove.
+    const questions = review.pending({ itemQuestions: auditLedger() });
     // ── Presence, the cast-starvation fix ──
     //
     // The cast freezes because the pinned header says "report only CHANGES" while the entities

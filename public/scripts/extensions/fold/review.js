@@ -20,7 +20,7 @@ import * as chronicle from './chronicle.js';
 import * as clocks from './clocks.js';
 import * as entities from './entities.js';
 import * as observe from './observe.js';
-import { MONEY } from './state-table.js';
+import { MONEY, splitItemKey } from './state-table.js';
 import { DIFFERENT, SAME, describePlan, outstanding, pairKey, planReview } from './review-table.js';
 import { commit, loadTable, loadValue, commitValue } from './store.js';
 
@@ -106,7 +106,22 @@ export function clearOwed() {
  *
  * @returns {{identity: object[], polarity: object[], owed: object|null}} Outstanding questions.
  */
-export function pending() {
+/**
+ * A readable name for an inventory key, for the question text.
+ *
+ * The key carries the place ("money", "carried") and the place is what makes the question
+ * answerable — "are money/silver and carried/silver wen the same?" is a different question from
+ * "are silver and silver wen the same?", and the model needs the first one.
+ *
+ * @param {string} key An inventory key.
+ * @returns {string} The label.
+ */
+function itemLabel(key) {
+    const { place, name } = splitItemKey(String(key ?? ''));
+    return place && place !== 'carried' ? `${name} (${place})` : name;
+}
+
+export function pending({ itemQuestions = [] } = {}) {
     const settled = answers();
     const cast = new Map(table_entries(entities.load()));
     const threadRows = new Map(table_entries(clocks.load()));
@@ -114,6 +129,18 @@ export function pending() {
     const identity = outstanding([
         ...entities.questions().map(pair => ({ ...pair, of: 'cast' })),
         ...clocks.questions().map(pair => ({ ...pair, of: 'thread' })),
+        // ── Item questions, and the only source that costs nothing to find ──
+        //
+        // Threads and cast raise identity pairs from a detector walking their tables. Inventory has
+        // no table to walk — it is a fold over the chronicle (`state.deriveState`) — so items were
+        // never asked about at all, which is why `money silver` and `carried silver wen` can sit as
+        // two rows of one currency for 277 messages with nothing ever questioning it.
+        //
+        // `state.auditLedger()` supplies them from the conservation check instead: a token overlap
+        // between a money row and another row is a QUESTION, raised for free during play. Answered
+        // `same` it names the split; answered `different` it is a minority label, which is the class
+        // the resolver's witness set has three of in seventy-six.
+        ...itemQuestions.map(pair => ({ ...pair, of: 'item' })),
         // Migration's questions, including the cross-table one the §2 detector provably cannot
         // reach — `{hunter, residency, twenty, d-rank, raids}` against `{residency, window, closes}`
         // is neither a subset nor one substitution, because two tables that were never keyed
@@ -121,13 +148,20 @@ export function pending() {
         ...migrated().identity.map(pair => ({ ...pair, of: pair.kind === 'cast' ? 'cast' : 'thread' })),
     ], {
         answers: settled,
-        exists: (pair, side) => (pair.of === 'cast' ? cast : threadRows).has(pair[side]),
+        // Item pairs are inventory KEYS, and inventory is derived rather than stored, so there is no
+        // table to test membership against. The audit only raises pairs it just read off the
+        // derived ledger, so they exist by construction.
+        exists: (pair, side) => (pair.of === 'item'
+            ? true
+            : (pair.of === 'cast' ? cast : threadRows).has(pair[side])),
     })
         .map(pair => ({
             ...pair,
-            names: pair.of === 'cast'
-                ? [cast.get(pair.a)?.name ?? pair.a, cast.get(pair.b)?.name ?? pair.b]
-                : [threadRows.get(pair.a)?.name ?? pair.a, threadRows.get(pair.b)?.name ?? pair.b],
+            names: pair.of === 'item'
+                ? [itemLabel(pair.a), itemLabel(pair.b)]
+                : pair.of === 'cast'
+                    ? [cast.get(pair.a)?.name ?? pair.a, cast.get(pair.b)?.name ?? pair.b]
+                    : [threadRows.get(pair.a)?.name ?? pair.a, threadRows.get(pair.b)?.name ?? pair.b],
         }));
 
     const polarity = migrated().polarity
@@ -225,6 +259,22 @@ export function applyExtraction(fragment, {
     let merged = 0;
     const castTable = entities.load();
     for (const merge of plan.merges) {
+        // ── An item `same` is REMEMBERED and not yet applied ──
+        //
+        // Cast and thread merges rewrite a stored table. Inventory has none: it is a fold over the
+        // chronicle, so merging two item keys means relabelling the event stream, which is
+        // `KeyResolution.relabel` and wants a persisted crosswalk applied at derive time
+        // (`accum_append` makes that sound, because quantities sum). That is not built.
+        //
+        // The answer is still worth having now: `remember` puts it in `state.answers`, which is the
+        // resolver's witness set, so an item verdict trains the thing that will eventually apply it.
+        // Falling through to `clocks.merge` with an inventory key would look up a thread that does
+        // not exist and quietly do nothing, which is the same outcome without the record of why.
+        if (merge.of === 'item') {
+            remember(merge.a, merge.b, SAME);
+            observe.note('review:item-same-deferred');
+            continue;
+        }
         const done = merge.of === 'cast'
             ? entities.merge(merge.a, merge.b)
             : clocks.merge(merge.a, merge.b);
