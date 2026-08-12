@@ -485,6 +485,68 @@ describe('mergeThreads — the answer to a thread identity question', () => {
         expect(table.size).toBe(1);
     });
 
+    test('with no dial on either side the fresher row carries the reading, not the longer name', () => {
+        // `KeyResolution.the_resolution_law` (sanguine
+        // `proof/Substrate/Algebra/Security/KeyResolution.lean:149`): late resolution is sound
+        // where the merge is a commutative monoid, and last-write is where it fails — the named
+        // repair being a VERSIONED last-write (`resolution_max_converges`, `:141`). `merge_thread`
+        // already orders by `turn` before its field-wise last-write; this path did not, and picked
+        // the LONGER NAME, so a stake last touched at turn 3 kept its reading over the same
+        // stake's turn-40 one. `turn` was then maxed to 40, stamping the survivor as current while
+        // its text was stale.
+        const table = new Map();
+        table.set('a', {
+            name: 'the monastery letter affair', open: 'the letter has not been read',
+            first: 3, turn: 3, status: 'open', seen: 'open',
+        });
+        table.set('b', {
+            name: 'monastery raid', open: 'the raid is under way, three dead',
+            first: 3, turn: 40, status: 'open', seen: 'open',
+        });
+        const done = mergeThreads(table, 'a', 'b');
+        const row = table.get(done.key);
+        expect(row.open).toBe('the raid is under way, three dead');
+        expect(row.name).toBe('monastery raid');
+        expect(row.turn).toBe(40);
+    });
+
+    test('the merge is still gauge invariant — the version is content, not position', () => {
+        // `resolution_preserves_gauge` (`KeyResolution.lean:115`): relabelling must leave the build
+        // permutation-invariant. Choosing the keeper by `turn` reads a field, never an argument
+        // position, so the two orderings agree.
+        const rows = () => [
+            { name: 'the monastery letter affair', open: 'the letter has not been read', first: 3, turn: 3 },
+            { name: 'monastery raid', open: 'the raid is under way, three dead', first: 3, turn: 40 },
+        ];
+        const run = (first, second) => {
+            const table = new Map();
+            const [stale, fresh] = rows();
+            table.set('a', first === 'stale' ? stale : fresh);
+            table.set('b', second === 'stale' ? stale : fresh);
+            const done = mergeThreads(table, 'a', 'b');
+            const row = table.get(done.key);
+            return { name: row.name, open: row.open, turn: row.turn };
+        };
+        expect(run('stale', 'fresh')).toEqual(run('fresh', 'stale'));
+    });
+
+    test('a dial still outranks the version — a measurable position beats a later mention', () => {
+        // The version repairs the NON-dial case only. `mergeThreads`' docblock defends the dial
+        // rule with a measured regression (the Karr clock moving backwards), so the fill stays
+        // ahead of `turn` in the precedence.
+        const table = new Map();
+        table.set('a', {
+            name: 'the siege holds', open: 'four assaults to come',
+            first: 1, turn: 2, kind: DOOM, filled: 6, size: 8,
+        });
+        table.set('b', { name: 'the siege', open: 'nobody has said', first: 1, turn: 40 });
+        const done = mergeThreads(table, 'a', 'b');
+        const row = table.get(done.key);
+        expect(row.filled).toBe(6);
+        expect(row.size).toBe(8);
+        expect(row.name).toBe('the siege holds');
+    });
+
     test('nothing merges when a key is missing or the two are the same row', () => {
         const table = new Map();
         foldThreads(table, [{ name: 'the cellar', open: 'nobody has searched it' }], { turn: 1 });

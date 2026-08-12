@@ -1258,8 +1258,36 @@ export function overlayClosures(table, closures) {
  * against the size it was measured on — and if both bear dials the keeper's wins, with the loser's
  * name preserved in `aka` so a hand correction can find it.
  *
- * The keeper is the dial-bearing row when exactly one bears a dial, since a measurable position is
- * strictly more than none; otherwise the longer name, for `mergeEntities`' reason.
+ * ── The keeper is chosen by version, and only then by name ──
+ *
+ * `KeyResolution.the_resolution_law` (sanguine `proof/Substrate/Algebra/Security/KeyResolution.lean:149`)
+ * states the dichotomy this function lives on: late resolution — discovering two keys are one
+ * AFTER both have been written — is sound exactly where the merge is a commutative monoid
+ * (`accum_append`, `:104`), and last-write is where it fails. Not because order already mattered,
+ * but because collapsing two keys converts independent writes into competing ones
+ * (`resolution_breaks_key_independence`, `:128`). The named repair is a **versioned** last-write:
+ * a value carrying its own order, so `max` on that order is a commutative monoid and resolves
+ * soundly whenever the alias turns up (`resolution_max_converges`, `:141`).
+ *
+ * fold already carries that version — `turn` — and `merge_thread` (above) already uses it: it
+ * orders `nu` against `old` by `turn` BEFORE applying field-wise last-write. The write path is
+ * therefore the proven-safe form. This path was not: with neither row bearing a dial the keeper
+ * was whichever name was LONGER, which is a function of content but not of time, so a stake last
+ * touched at turn 3 could keep its `open` over the same stake's turn-40 reading purely for having
+ * been named at greater length. `merged.turn` is then `Math.max` of the two, which stamps the
+ * survivor as current while its text is stale — the staleness stops being visible to anything that
+ * reads `turn`, including `THREAD_STALE`.
+ *
+ * Measured on the live shape: `monastery letter` at turn 3 against `monastery raid` at turn 40 —
+ * a pair the Royal Succession review answered `same` — kept "the letter has not been read" and
+ * discarded "the raid is under way", then reported itself as turn 40.
+ *
+ * So the order of precedence is version-first, name-last:
+ *   1. exactly one bears a dial — that row, since a measurable position is strictly more than none;
+ *   2. both bear dials — the fuller, since that is the position the story has actually reached;
+ *   3. neither — the greater `turn`, the versioned last-write the proof names;
+ *   4. equal turns — the longer name, for `mergeEntities`' reason, now a true tie-break rather
+ *      than the deciding rule.
  *
  * @param {Map<string, object>} table Thread table, mutated.
  * @param {string} left One table key.
@@ -1287,8 +1315,13 @@ export function mergeThreads(table, left, right) {
         : hasDial(a)
             ? [normalizeSize(a.size, a.kind) - (a.filled ?? 0) <= normalizeSize(b.size, b.kind) - (b.filled ?? 0) ? left : right]
             : [null];
+    // The versioned last-write (`resolution_max_converges`): whichever row the story touched more
+    // recently carries the reading, and the name only breaks a genuine tie.
     const longer = String(a.name ?? '').length >= String(b.name ?? '').length ? left : right;
-    const keepKey = dialled ?? longer;
+    const fresher = (a.turn ?? 0) === (b.turn ?? 0)
+        ? longer
+        : ((a.turn ?? 0) > (b.turn ?? 0) ? left : right);
+    const keepKey = dialled ?? fresher;
     const dropKey = keepKey === left ? right : left;
     const keep = lookup(table, keepKey, {});
     const drop = lookup(table, dropKey, {});
