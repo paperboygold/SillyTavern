@@ -51,6 +51,7 @@ module.exports = {
             files: [
                 'public/scripts/extensions/fold/harvest.js',
                 'public/scripts/extensions/fold/evaluate.js',
+                'public/scripts/extensions/fold/compare.js',
             ],
             env: {
                 node: true,

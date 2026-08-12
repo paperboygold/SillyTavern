@@ -285,6 +285,21 @@ export function registerFoldSlashCommands() {
                 false,
             ),
             new SlashCommandNamedArgument(
+                'label',
+                t`Name this arm in the trace, so two runs of the SAME prompt can be compared`,
+                [ARGUMENT_TYPE.STRING],
+                false,
+                false,
+            ),
+            new SlashCommandNamedArgument(
+                'staticfirst',
+                t`Put the instructions ahead of the transcript, so a prefix cache can reach them`,
+                [ARGUMENT_TYPE.BOOLEAN],
+                false,
+                false,
+                'false',
+            ),
+            new SlashCommandNamedArgument(
                 'step',
                 t`Messages advanced per pass (default 2, the observed live cadence)`,
                 [ARGUMENT_TYPE.NUMBER],
@@ -632,6 +647,7 @@ async function replayCallback(args) {
     const step = Math.max(1, Number(args?.step) || REPLAY_STEP);
     const cap = Number(args?.limit) > 0 ? Number(args.limit) : Infinity;
     const dry = isTrueBoolean(args?.dry);
+    const staticFirst = isTrueBoolean(args?.staticfirst);
 
     const live = (chat ?? []).filter(m => m?.mes && !m.is_system).length;
     if (!live) {
@@ -661,7 +677,11 @@ async function replayCallback(args) {
             // `source` is the chat as it stood at that point. `runExtraction` declines with
             // `nothing-new` when the mark already covers the slice, which costs no model call — so
             // a step that lands inside an already-read window is cheap rather than wasteful.
-            const result = await extract.runExtraction({ source: chat.slice(0, stop), why: 'replay' });
+            const result = await extract.runExtraction({
+                source: chat.slice(0, stop),
+                why: String(args?.label ?? '').trim() || (staticFirst ? 'replay-staticfirst' : 'replay'),
+                staticFirst,
+            });
             ran += 1;
             if (result?.ok) {
                 ok += 1;

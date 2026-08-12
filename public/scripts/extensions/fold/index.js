@@ -939,6 +939,8 @@ export async function init() {
         schemaKey: 'scene',
         schema: () => scene.schema(),
         instruction: () => scene.instruction({ player: personaFields().name }),
+        // Per-pass state, below the cache breakpoint — see `scene.context`.
+        context: () => scene.context(),
         // Takes the pass context now: the probe's `conditions` answer becomes marks on the pov's
         // row, and a mark is an event, so it needs the window (for the gate) and the newest live
         // source (for the anchor that makes a swipe retract it) — `scene.js` applyExtraction.

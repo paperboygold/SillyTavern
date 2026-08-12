@@ -160,20 +160,11 @@ export function instruction({ player = '' } = {}) {
     const pov = player
         ? `For "pov", name the character the narration follows — the one whose thoughts and sensations are described from the inside. The reader's character is "${player}"; when the excerpt follows the reader's character, report that name exactly.`
         : 'For "pov", name the character the narration follows — the one whose thoughts and sensations are described from the inside.';
-    // The clock already on record — frame elapsed as ADVANCE beyond it, so a pass that re-reads
-    // "the next morning" in context does not re-count the same night as a fresh day. Measured in
-    // the Wuxia RP: one overnight sleep was reported as `elapsed_days: 1` on three consecutive
-    // turns (17, 18, 19), rolling day 1 -> 2 -> 3 for a single night, because the model had no
-    // anchor for "previous scene" other than the window's own phrasing.
-    const clockNow = loadClock();
-    const clockRead = Number.isFinite(clockNow?.minutes)
-        ? ` The clock already reads day ${clockNow.day} at ${formatClock(clockNow.minutes)} — count elapsed time BEYOND that, never the passage that is already on record.`
-        : '';
     return [
         'The scene as it stands at the END of the excerpt, not as it was at the start.',
         'Only what the excerpt establishes. Leave a field empty rather than carrying one forward or guessing.',
         pov,
-        `For "elapsed_days" and "elapsed_minutes", say how much time the scene covered. Time is continuous: the excerpt is not a freeze-frame, so when it shows any action, dialogue or movement, some time has passed even if no duration is written. Scale it to what the scene actually spans: a single line of dialogue or one quick exchange is about a minute; a walk, a fight or a longer conversation is minutes; a trek or a vigil is hours. "a week" is 7 days, "overnight" and "come morning" are 1 day, "three hours" is 180 minutes. 0 only when the moment is truly frozen — an instant, a single beat, an explicit time-stop.${clockRead}`,
+        'For "elapsed_days" and "elapsed_minutes", say how much time the scene covered. Time is continuous: the excerpt is not a freeze-frame, so when it shows any action, dialogue or movement, some time has passed even if no duration is written. Scale it to what the scene actually spans: a single line of dialogue or one quick exchange is about a minute; a walk, a fight or a longer conversation is minutes; a trek or a vigil is hours. "a week" is 7 days, "overnight" and "come morning" are 1 day, "three hours" is 180 minutes. 0 only when the moment is truly frozen — an instant, a single beat, an explicit time-stop.',
         'For "phase", report the part of a day the scene moved TO when a transition marker names one — "come morning", "first light" and "overnight" land on "morning", "dusk" on "evening". Empty when the story names no part of a day.',
         'For "clock_hour" and "clock_minute", report the clock as the narrative reads it now when it states one — "3:15 PM" is hour 15 minute 15. -1 when the narrative states no clock time.',
         'For "date", name the day only when the narrative states a new one outright — "the next morning" belongs in "elapsed_days", a named day ("Wednesday", "the 3rd") belongs here, and "date_changed" is true then.',
@@ -181,6 +172,31 @@ export function instruction({ player = '' } = {}) {
         '"conditions" is about that character\'s body only: what hurts, what is exhausted, what is impaired. Not mood, not clothes, not weather.',
         'Report every affliction still true, not only the new ones — this list replaces what was recorded before it.',
     ].join(' ');
+}
+
+/**
+ * The scene probe's PER-PASS state, kept out of `instruction()` so the instruction block can be
+ * cached.
+ *
+ * The clock already on record — frame elapsed as ADVANCE beyond it, so a pass that re-reads
+ * "the next morning" in context does not re-count the same night as a fresh day. Measured in
+ * the Wuxia RP: one overnight sleep was reported as `elapsed_days: 1` on three consecutive
+ * turns (17, 18, 19), rolling day 1 -> 2 -> 3 for a single night, because the model had no
+ * anchor for "previous scene" other than the window's own phrasing.
+ *
+ * This clause used to live inside `instruction()`, where it was the ONLY thing that moved between
+ * consecutive passes — and by moving it made the whole 2700-token instruction block differ every
+ * pass, so 70% of consecutive passes shared no cacheable prefix at all (measured over 563 traces).
+ * Same words, same position in the prompt relative to the data; only the side of the cache
+ * breakpoint changed.
+ *
+ * @returns {string} The per-pass clock line, or empty when no clock is set.
+ */
+export function context() {
+    const clockNow = loadClock();
+    return Number.isFinite(clockNow?.minutes)
+        ? `The clock already reads day ${clockNow.day} at ${formatClock(clockNow.minutes)} — count elapsed time BEYOND that, never the passage that is already on record.`
+        : '';
 }
 
 /**

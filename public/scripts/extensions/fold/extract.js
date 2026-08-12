@@ -59,10 +59,21 @@ let busy = false;
 
 /**
  * Register a probe in the shared extraction call.
+ *
+ * `instruction()` is the probe's STATIC guidance and `context()` is its per-pass state, and the
+ * split is the whole reason the second hook exists. Measured over 563 traced passes: the
+ * instruction blocks are 90% byte-identical sentence mass (2449 of 2727 tokens), yet only 30% of
+ * consecutive passes produced an IDENTICAL block — and the entire difference was one interpolated
+ * clause, the scene probe's "The clock already reads day 3 at 12:00". A prefix cache is
+ * all-or-nothing up to its breakpoint, so one moving clause in a 2700-token block costs the whole
+ * block every pass. Anything a probe interpolates per pass belongs in `context()`, below the
+ * breakpoint, where it costs only itself.
+ *
  * @param {object} probe The probe.
  * @param {string} probe.schemaKey Property name for this probe's fragment.
  * @param {() => object} probe.schema Returns a JSON Schema fragment.
- * @param {() => string} probe.instruction Returns prompt guidance for this probe.
+ * @param {() => string} probe.instruction Returns STATIC prompt guidance — no per-pass state.
+ * @param {() => string} [probe.context] Returns per-pass state, if the probe has any.
  * @param {(fragment: any, context: object) => any} probe.apply Applies the fragment.
  */
 export function registerProbe(probe) {
@@ -286,7 +297,7 @@ async function requestExtraction({ prompt, responseLength, schema, profileId, re
  * @param {string} [options.why] The reason this pass ran — arms the world fragment on a time skip.
  * @returns {Promise<{ok: boolean, reason?: string, results?: object}>} Outcome.
  */
-export async function runExtraction({ windowSize = 6, responseLength = 800, profileId = '', why = '', reasoning = false, source = null } = {}) {
+export async function runExtraction({ windowSize = 6, responseLength = 800, profileId = '', why = '', reasoning = false, source = null, staticFirst = false } = {}) {
     // ── Every outcome is recorded, including the ones that are not errors ──
     //
     // A chat ran to 74 turns with zero extracted events and NOTHING in the data said why. The pass
@@ -347,19 +358,41 @@ export async function runExtraction({ windowSize = 6, responseLength = 800, prof
         // as a delta. This is the loop §6 closes: the concrete cost the judge imposed no longer has
         // to happen to survive the narrator's prose into re-extraction.
         const pendingCost = peekPendingCost();
-        const prompt = [
+        const probeContext = probes
+            .map(p => (typeof p.context === 'function' ? String(p.context() ?? '').trim() : ''))
+            .filter(Boolean)
+            .join('\n');
+        // ── Static first, or transcript first ──
+        //
+        // The two orderings carry the same content; they differ only in what a prefix cache can
+        // reach. Measured over 563 traced passes, an extraction sends ~9.4k tokens in, of which the
+        // schema (~4.8k, three distinct values across every pass) and the instruction block (~2.7k,
+        // 90% static sentence mass) are protocol that barely moves — 80% of the payload. The
+        // transcript and ledger that the pass is actually ABOUT are ~1.9k.
+        //
+        // A prefix cache keys on a common LEADING prefix, so with the transcript first every pass
+        // differs from byte zero and the stable 80% sits behind the moving 20% where it is worth
+        // nothing. `staticFirst` puts the instructions ahead of the data so the breakpoint has
+        // something to bite on. It is an option rather than the default because instructions-first
+        // and data-first are not the same prompt to a model, and this one has measured reasoning
+        // behind its current shape — `/fold-replay staticfirst=true` against the existing traces is
+        // how the difference gets decided rather than assumed.
+        const transcript = [
             'Transcript excerpt:',
             '---',
             window.text,
             '---',
             '',
             ...(ledger.text ? ['Already recorded — report only CHANGES to this, never restate it:', ledger.text, ''] : []),
-            'Extract the following:',
-            instructions,
-            ...(pendingCost ? ['', `Note: the last attempt succeeded at a cost — ${pendingCost}. Record what it cost as a delta (money, an item, a mark) in the events below.`] : []),
-            '',
-            'Respond with JSON only.',
-        ].join('\n');
+        ];
+        const perPass = [
+            ...(probeContext ? [probeContext, ''] : []),
+            ...(pendingCost ? [`Note: the last attempt succeeded at a cost — ${pendingCost}. Record what it cost as a delta (money, an item, a mark) in the events below.`, ''] : []),
+        ];
+        const prompt = (staticFirst
+            ? ['Extract the following:', instructions, '', ...transcript, ...perPass, 'Respond with JSON only.']
+            : [...transcript, 'Extract the following:', instructions, ...perPass.length ? ['', ...perPass] : [''], 'Respond with JSON only.']
+        ).join('\n');
 
         const schema = buildSchema();
 
