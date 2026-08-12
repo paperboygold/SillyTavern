@@ -378,14 +378,58 @@ describe('validateVitals', () => {
 });
 
 describe('validateStatus', () => {
-    test('accepts a mentioned flag and rejects an invented one', () => {
+    test('a condition the prose describes but does not name is KEPT', () => {
+        // This assertion used to be the opposite, and the opposite cost six campaigns their
+        // injuries. The gate read `mentioned.has(flag) || isMentioned(flag, windowText)` — it
+        // required the model's READING to appear verbatim in the text it was read from. A flag is a
+        // conclusion, not a quote, so it almost never does.
+        //
+        // Measured over every chat on disk: 25 marks rejected `not-mentioned`, and NONE was a
+        // hallucination. "bisected from shoulder to hip" (Mr. Park), "leg chopped off" (Jin-Woo,
+        // twice), "blinded in both eyes" (Vesk), "paralyzed by trauma" (Lee Joo-hee), "cut palm"
+        // (Elizabeth, four times), "lightheaded from qi recoil" (pov). A 0% true-positive rate
+        // against 25 destroyed state changes.
         const result = validateStatus({
             status: new Map(),
-            deltas: [{ flag: 'poisoned', on: true }, { flag: 'cursed', on: true }],
-            windowText: 'the venom left her poisoned',
+            deltas: [{ flag: 'lightheaded from qi recoil', on: true }],
+            windowText: 'the world tilts and his ears ring as the technique recoils through him',
         });
-        expect(result.accepted).toEqual([{ who: '', flag: 'poisoned', on: true, severity: 'moderate', turns: 0 }]);
+        expect(result.rejected).toEqual([]);
+        expect(result.accepted[0].flag).toBe('lightheaded from qi recoil');
+    });
+
+    test('a condition on somebody the window never names is still refused', () => {
+        // The protection the gate was written for survives — it just asks about the PERSON, which
+        // is a name the prose quotes, rather than the flag, which is the model's own wording.
+        const cast = new Map([
+            ['person\u0000bandit', { kind: 'person', name: 'Bandit' }],
+        ]);
+        const result = validateStatus({
+            status: new Map(),
+            deltas: [{ who: 'Bandit', flag: 'wounded', on: true }],
+            windowText: 'Elizabeth walks alone through the empty temple',
+            cast,
+            pov: 'Elizabeth',
+        });
+        expect(result.accepted).toEqual([]);
         expect(result.rejected[0].reason).toBe('not-mentioned');
+    });
+
+    test('a named owner the window DOES name is kept, however the flag is worded', () => {
+        const cast = new Map([
+            ['person\u0000ms. tanaka', { kind: 'person', name: 'Ms. Tanaka' }],
+        ]);
+        const result = validateStatus({
+            status: new Map(),
+            deltas: [{ who: 'Ms. Tanaka', flag: 'dead', on: true }],
+            // The live Isekai turn 1: two people are unmistakably killed and the word "dead" is
+            // nowhere in the window.
+            windowText: 'The teacher and bus driver vanished along with it, blood spattering across the first few rows. Ms. Tanaka was at the front.',
+            cast,
+            pov: 'Sol',
+        });
+        expect(result.rejected).toEqual([]);
+        expect(result.accepted[0].flag).toBe('dead');
     });
 });
 
