@@ -39,7 +39,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { baselineShare, countWeight, earnedAccuracyFloor } from './lib/ml/contract.js';
+import { baselineShare, cellAdmits, cellPosterior, countWeight, earnedAccuracyFloor } from './lib/ml/contract.js';
 import { AutoUnit, DistillConfig, Witness } from './lib/ml/distill.js';
 
 const corpusPath = path.resolve(process.argv[2] ?? path.join('data', 'fold-corpus.jsonl'));
@@ -174,6 +174,118 @@ function report(name, what, pairs, textOf) {
     }
 }
 
+/**
+ * The cell a pair falls in: the detector's own branch, crossed with the table it came from.
+ *
+ * Both were computed upstream and discarded. `why` is `nearIdentity`'s answer — the reason the
+ * question was asked at all — and `of` is whether the row is a person or a stake. Neither appears
+ * anywhere in the two names, which is why a featurizer reading only the names cannot recover them.
+ *
+ * @param {object} pair A `pair` record.
+ * @returns {string} The cell key.
+ */
+const cellOf = (pair) => `${pair.why ?? 'none'}|${pair.of ?? '?'}`;
+
+/**
+ * `same` is transitive, so the asked pairs are partial information about a PARTITION rather than a
+ * list of independent judgements. Union the `same` edges and report what the closure adds and
+ * whether it is consistent.
+ *
+ * A `different` edge inside a merged component is a contradiction: the model said a=b, b=c and
+ * a≠c. Measured over this corpus that count is ZERO across every story, which is what licenses
+ * using the closure as free labels rather than as a hypothesis.
+ *
+ * Keyed per chat, because two stories may name unrelated things alike.
+ *
+ * @param {object[]} pairs The pair records.
+ * @returns {{nodes: number, components: number, implied: number, asked: number,
+ *   contradictions: number, sizes: object}} The closure report.
+ */
+function closure(pairs) {
+    const parent = new Map();
+    const find = (x) => {
+        if (!parent.has(x)) {
+            parent.set(x, x);
+        }
+        while (parent.get(x) !== x) {
+            parent.set(x, parent.get(parent.get(x)));
+            x = parent.get(x);
+        }
+        return x;
+    };
+    const union = (a, b) => {
+        const [ra, rb] = [find(a), find(b)];
+        if (ra !== rb) {
+            parent.set(ra, rb);
+        }
+    };
+    const node = (pair, side) => `${pair.chat}${String(pair[side]).toLowerCase()}`;
+
+    let asked = 0;
+    for (const pair of pairs) {
+        if (pair.answer === 'same') {
+            union(node(pair, 'a'), node(pair, 'b'));
+            asked += 1;
+        } else {
+            find(node(pair, 'a'));
+            find(node(pair, 'b'));
+        }
+    }
+    const members = new Map();
+    for (const key of parent.keys()) {
+        const root = find(key);
+        members.set(root, (members.get(root) ?? 0) + 1);
+    }
+    let implied = 0;
+    const sizes = {};
+    for (const size of members.values()) {
+        implied += (size * (size - 1)) / 2;
+        sizes[size] = (sizes[size] ?? 0) + 1;
+    }
+    const contradictions = pairs.filter(pair =>
+        pair.answer === 'different' && find(node(pair, 'a')) === find(node(pair, 'b'))).length;
+
+    return { nodes: parent.size, components: members.size, implied, asked, contradictions, sizes };
+}
+
+/**
+ * Leave-one-out over the cell model: predict each pair from the majority label of its cell, fitted
+ * without that pair, abstaining whenever `cellAdmits` says the cell has not earned it.
+ * @param {object[]} pairs The pair records.
+ * @param {number} baseline The global majority share.
+ * @returns {{right: number, wrong: number, abstain: number, misses: string[]}} The tally.
+ */
+function cellLeaveOneOut(pairs, baseline) {
+    let right = 0;
+    let wrong = 0;
+    let abstain = 0;
+    const misses = [];
+    for (let i = 0; i < pairs.length; i++) {
+        const key = cellOf(pairs[i]);
+        const others = pairs.filter((_, j) => j !== i).filter(pair => cellOf(pair) === key);
+        const same = others.filter(pair => pair.answer === 'same').length;
+        const n = others.length;
+        // Both halves are needed, and dropping either was MEASURED to fail. Shrinkage alone
+        // (answer every cell, pull thin ones to the prior) reaches 100% coverage at 78.9% against
+        // an 83.8% floor: a 67%-pure cell cannot be rescued by reweighting, only by declining it.
+        // Abstention alone would answer a thin cell's raw majority. So: admit by earned evidence,
+        // then answer the shrunk posterior.
+        const purity = n ? Math.max(same, n - same) / n : 0;
+        if (!cellAdmits(n, purity, baseline, ALPHA)) {
+            abstain += 1;
+            continue;
+        }
+        const predicted = cellPosterior(n, same / n, baseline, ALPHA) >= 0.5 ? 'same' : 'different';
+        if (predicted === pairs[i].answer) {
+            right += 1;
+        } else {
+            wrong += 1;
+            misses.push(`${pairs[i].answer} -> ${predicted}  [${key}]  ${pairs[i].a} ~ ${pairs[i].b}`);
+        }
+    }
+    return { right, wrong, abstain, misses };
+}
+
 function main() {
     const pairs = readPairs(corpusPath);
     console.log(`corpus: ${corpusPath}`);
@@ -183,6 +295,53 @@ function main() {
 
     report('names', 'the two names alone', pairs, pair => `${pair.a} | ${pair.b}`);
     report('context', 'the names plus the text that decided them', pairs, pair => pair.context ?? '');
+
+    // ── the partition ──
+    const shut = closure(pairs);
+    console.log('\n── the relation is a partition, not a list of judgements ──');
+    console.log(`  nodes ${shut.nodes} in ${shut.components} components   sizes ${JSON.stringify(shut.sizes)}`);
+    console.log(`  contradictions (a "different" edge inside a merged component): ${shut.contradictions}`);
+    console.log(`  same-pairs implied by transitivity: ${shut.implied}, asked: ${shut.asked}` +
+        `  -> ${Math.max(0, shut.implied - shut.asked)} labels for free`);
+    if (shut.contradictions > 0) {
+        console.log('  WARNING: the closure is inconsistent. Free labels are NOT safe to take.');
+    }
+
+    // ── the cell model ──
+    const baseline = baselineShare(pairs.map(pair => ({ class: CLASS[pair.answer] })));
+    console.log('\n── cells — the detector branch crossed with the table it came from ──');
+    const cells = {};
+    for (const pair of pairs) {
+        (cells[cellOf(pair)] ??= []).push(pair.answer);
+    }
+    for (const [key, answers] of Object.entries(cells).sort((a, b) => b[1].length - a[1].length)) {
+        const same = answers.filter(answer => answer === 'same').length;
+        const n = answers.length;
+        const purity = Math.max(same, n - same) / n;
+        const posterior = cellPosterior(n, same / n, baseline, ALPHA);
+        const admits = cellAdmits(n, purity, baseline, ALPHA);
+        console.log(`  ${key.padEnd(22)} n=${String(n).padStart(3)}  same ${String(same).padStart(3)}` +
+            `  diff ${String(n - same).padStart(3)}  purity ${(purity * 100).toFixed(0).padStart(3)}%` +
+            `  p̂ ${posterior.toFixed(2)}  ${admits ? `-> ${posterior >= 0.5 ? 'same' : 'different'}` : 'ABSTAINS'}`);
+    }
+
+    const { right, wrong, abstain, misses } = cellLeaveOneOut(pairs, baseline);
+    const answered = right + wrong;
+    console.log('\n── cell model, leave-one-out, admit by earned evidence, answer the shrunk posterior ──');
+    console.log(`  examples:      ${pairs.length}`);
+    console.log(`  abstained (LLM still asked):          ${abstain}/${pairs.length} (${(abstain / pairs.length * 100).toFixed(0)}%)`);
+    console.log(`  fast-pathed:                          ${answered} (${(answered / pairs.length * 100).toFixed(0)}% of LLM calls saved)`);
+    if (answered) {
+        const accuracy = right / answered;
+        const floor = earnedAccuracyFloor(pairs.map(pair => ({ class: CLASS[pair.answer] })), answered, ALPHA);
+        console.log(`  accuracy on the admitted set:         ${(accuracy * 100).toFixed(1)}%`);
+        console.log(`  ${`earned floor (n=${answered}, alpha=${ALPHA}):`.padEnd(37)}${(floor * 100).toFixed(1)}%`);
+        console.log(`  GATE: ${accuracy >= floor ? 'CLEARS' : 'FAILS'} the earned floor.`);
+    }
+    if (misses.length) {
+        console.log('  misclassified:');
+        misses.forEach(miss => console.log(`    ${miss}`));
+    }
 
     // The resolution of the measurement itself, which is the number that decides whether any of
     // the above can carry weight.

@@ -5,6 +5,8 @@ import {
     Contract,
     Verdict,
     baselineShare,
+    cellAdmits,
+    cellPosterior,
     countWeight,
     differentialReplay,
     differentialReplayThresholded,
@@ -204,6 +206,36 @@ describe('contract.js — the earned accuracy floor', () => {
         const unit = AutoUnit.distill(ws, new DistillConfig({ holdoutFrac: 0.25 }));
         expect(unit.holdout_n()).toBe(5);
         expect(unit.holdout_accuracy()).not.toBeNull();
+    });
+
+    test('a thin cell cannot outvote the prior; an evidenced one can', () => {
+        const base = 0.83;
+        // n=1 disagreeing with the prior stays at the prior — the weight is 1/5.
+        expect(cellPosterior(1, 0, base, 4)).toBeGreaterThan(0.5);
+        // The same 0% same-rate at n=40 flips it.
+        expect(cellPosterior(40, 0, base, 4)).toBeLessThan(0.5);
+        // n=0 is exactly the prior, never a guess.
+        expect(cellPosterior(0, 1, base, 4)).toBeCloseTo(base, 10);
+        // Monotone: more evidence for `different` moves the posterior down, never up.
+        let previous = 1;
+        for (let n = 1; n <= 60; n++) {
+            const p = cellPosterior(n, 0, base, 4);
+            expect(p).toBeLessThan(previous);
+            previous = p;
+        }
+    });
+
+    test('admission and shrinkage are both required — either alone was measured to fail', () => {
+        const base = 0.83;
+        // A pure, well-evidenced cell answers.
+        expect(cellAdmits(26, 0.96, base, 4)).toBe(true);
+        expect(cellAdmits(12, 1.0, base, 4)).toBe(true);
+        // The 67%-pure cell does not, however many ways it is informative: on fold's corpus,
+        // answering it took the model from 88.1% (clearing an 84.4% floor) to 78.9% (below 83.8%).
+        expect(cellAdmits(9, 0.67, base, 4)).toBe(false);
+        // Nothing is answered on no evidence.
+        expect(cellAdmits(0, 1.0, base, 4)).toBe(false);
+        expect(cellAdmits(2, 0.5, base, 4)).toBe(false);
     });
 
     test('the check is opt-in — the default contract still declares nothing', () => {

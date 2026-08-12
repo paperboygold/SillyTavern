@@ -52,6 +52,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { nearIdentity } from './thread-table.js';
+
 const dataRoot = path.resolve(process.argv[2] ?? 'data');
 const outputPath = path.resolve(process.argv[3] ?? path.join(dataRoot, 'fold-corpus.jsonl'));
 
@@ -294,6 +296,7 @@ function main() {
                         a: ask.a,
                         b: ask.b,
                         of: ask.of,
+                        why: nearIdentity(ask.a, ask.b),
                         answer: ask.answer,
                         source: 'trace',
                         turn: Number.isFinite(record?.turn) ? record.turn : null,
@@ -337,6 +340,7 @@ function main() {
                     a: bare[0],
                     b: bare[1],
                     of: String(a).includes(KIND_SEP) ? 'cast' : 'thread',
+                    why: nearIdentity(bare[0], bare[1]),
                     answer,
                     source: 'chat',
                     turn: null,

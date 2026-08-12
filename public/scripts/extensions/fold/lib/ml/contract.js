@@ -237,6 +237,81 @@ export const earnedAccuracyFloor = (witnesses, n, alpha) =>
     1 - countWeight(alpha, n) * (1 - baselineShare(witnesses));
 
 /**
+ * Should a CELL answer, or abstain?
+ *
+ * A cell is a group of witnesses sharing a discrete key — for fold's resolver, the pair's detector
+ * branch crossed with the table it came from (`subset|cast`, `substitution|thread`, …). Each cell
+ * has its own majority label and its own purity, and the question is whether that local majority
+ * has earned the right to override the global one.
+ *
+ * The same shrinkage the accuracy floor uses, applied to the cell instead of the unit. The cell's
+ * shrunk purity is the BLUP posterior mean — `blup_is_the_accumulator_merge`
+ * (sanguine `proof/Substrate/Algebra/Security/HashTrinityCore.lean:317`) is the identity that fusing
+ * the prior with the cell mean IS the accumulator merge:
+ *
+ *     p̂ = w·purity + (1 − w)·baseline,   w = countWeight(α, n)
+ *
+ * and it must clear the floor that same `n` earns (`earnedAccuracyFloor`). At `n = 0` the weight is
+ * zero, `p̂` collapses to the baseline and the floor is 1, so a cell with no evidence always
+ * abstains. As `n` grows the two converge and the test becomes "is this cell purer than the global
+ * prior" — which is the right question once the evidence supports asking it.
+ *
+ * This replaces a dialed pair of thresholds (`n >= 4`, `purity >= 0.75`) that were chosen by
+ * reading a table. One parameter with a proven meaning, in place of two with none.
+ *
+ * @param {number} n How many witnesses fall in this cell.
+ * @param {number} purity The cell's majority share, in `[0, 1]`.
+ * @param {number} baseline The global majority share, in `[0, 1]`.
+ * @param {number} alpha The BLUP parameter.
+ * @returns {boolean} True when the cell may answer.
+ */
+export const cellAdmits = (n, purity, baseline, alpha) => {
+    if (!(n > 0)) {
+        return false;
+    }
+    const weight = countWeight(alpha, n);
+    const shrunk = weight * purity + (1 - weight) * baseline;
+    return shrunk >= 1 - weight * (1 - baseline);
+};
+
+/**
+ * The cell's answer, shrunk toward the global prior — and the reason no abstention threshold is
+ * needed at all.
+ *
+ * `cellAdmits` above asks whether a cell has earned the right to speak, which turned out to be the
+ * wrong question and is kept only because it is what a purity gate looks like when written down
+ * honestly. Measured on fold's identity corpus it ABSTAINS on `substitution|cast` — the one cell
+ * whose majority FLIPS the global prior (3 same / 6 different against a 0.83 same baseline), and
+ * therefore the only cell carrying information the baseline does not already have. A gate that
+ * silences exactly the informative cell is inverted.
+ *
+ * The shrinkage does the job the gate was reaching for, without a threshold. Take the cell's own
+ * rate, pull it toward the prior with the weight its count has earned:
+ *
+ *     p̂(same) = w·(same/n) + (1 − w)·baseline,   w = countWeight(α, n)
+ *
+ * and answer `same` when `p̂ ≥ ½`. This is `blup_is_the_accumulator_merge`
+ * (sanguine `proof/Substrate/Algebra/Security/HashTrinityCore.lean:317`) used as intended: fusing
+ * the prior with the cell mean IS the accumulator merge, and `blup_is_the_unique_minimiser` (`:392`)
+ * says that posterior is the unique risk-minimising weight — every other weighting is strictly
+ * worse by `(τ²+c)·(w − w*)²`.
+ *
+ * A thin cell cannot flip, because `w` is small and the prior dominates. A cell with enough
+ * evidence flips on its own. Nothing is dialed and nothing abstains: `n = 1` at odds with the prior
+ * simply returns the prior.
+ *
+ * @param {number} n How many witnesses fall in this cell.
+ * @param {number} sameRate The cell's share of the majority-class label, in `[0, 1]`.
+ * @param {number} baseline The global share of that same label, in `[0, 1]`.
+ * @param {number} alpha The BLUP parameter.
+ * @returns {number} The shrunk posterior for the majority class.
+ */
+export const cellPosterior = (n, sameRate, baseline, alpha) => {
+    const weight = countWeight(alpha, Math.max(0, n));
+    return weight * sameRate + (1 - weight) * baseline;
+};
+
+/**
  * The earned-floor check: does the unit's held-out accuracy clear the floor its own witness set
  * earns it?
  *
