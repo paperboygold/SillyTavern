@@ -161,10 +161,119 @@ export const regexScopeCheck = (witnesses, klass, pattern) => {
     return reasons.length === 0 ? new Verdict('Pass') : new Verdict('Fail', { reasons });
 };
 
+// ───────── the earned floor — NOT part of the auto port; derived from sanguine's shrinkage ─────────
+
+/**
+ * The BLUP / count-confidence weight `w = n/(n+α)` — how much a measurement made on `n`
+ * observations is worth against the prior.
+ *
+ * Not a heuristic and not asymptotic: `blup_is_countWeight`
+ * (sanguine `proof/Substrate/Algebra/Security/HashTrinityCore.lean:298`) proves `n/(n+α)` at
+ * `α = σ²/τ²` IS the posterior weight of the one-way random-effects model, for every `n ≥ 0` and
+ * every `τ², σ² > 0` — an identity, the same object read twice. `optimal_weight_is_countWeight`
+ * (`:411`) is the same identity on the risk side, where `blup_is_the_unique_minimiser` (`:392`)
+ * shows the vertex is the unique minimiser with no tie and no flat region. `countWeight_strict_mono`
+ * (`:335`) is what makes it usable as a schedule: strictly increasing in the count, so more
+ * evidence always means strictly more trust.
+ *
+ * @param {number} alpha The one parameter, `σ²/τ²` — measurement noise over prior spread.
+ * @param {number} n The number of observations.
+ * @returns {number} The weight in `[0, 1)`.
+ */
+export const countWeight = (alpha, n) => (n + alpha === 0 ? 0 : n / (n + alpha));
+
+/**
+ * The majority-class share of a witness set — the accuracy of answering with the commonest label
+ * every time, and therefore the only baseline a learned unit has to beat to be worth anything.
+ * @param {Witness[]} witnesses The recorded witnesses.
+ * @returns {number} The share in `[0, 1]`, or 0 for an empty set.
+ */
+export const baselineShare = (witnesses) => {
+    if (witnesses.length === 0) {
+        return 0;
+    }
+    const counts = new Map();
+    for (const w of witnesses) {
+        counts.set(w.class, (counts.get(w.class) ?? 0) + 1);
+    }
+    return Math.max(...counts.values()) / witnesses.length;
+};
+
+/**
+ * The accuracy floor a unit must clear, DERIVED from its own witness set rather than declared as a
+ * number.
+ *
+ *     floor = 1 − w·(1 − baseline),   w = countWeight(α, n)
+ *
+ * Read it as: **a unit may err at most as often as the constant answer does, scaled by how much
+ * evidence it has earned.** At `n = 0` the weight is 0 and the floor is 1 — with no evidence,
+ * nothing short of perfection is admissible. As `n` grows the weight goes to 1 and the floor falls
+ * to the baseline itself — asymptotically, just beat the constant. In between it is the BLUP
+ * interpolation, strictly monotone by `countWeight_strict_mono`.
+ *
+ * ── Why a floor at all, and why not a dialed one ──
+ *
+ * `Contract`'s `minHoldoutAccuracy` is an absolute number, and an absolute number cannot see the
+ * thing that actually goes wrong. Measured on fold's real identity corpus (35 verdicts, 32 `same`
+ * / 3 `different`), the distilled unit scored 81.3% by leave-one-out against a 91.4% majority
+ * baseline — a unit that is worse than a constant while clearing any absolute floor below 0.81.
+ * The default `Contract` (all checks zero) passes it. This check is the one that does not.
+ *
+ * ── What α is, honestly ──
+ *
+ * `α = σ²/τ²` is a real parameter of the model, not a constant this can derive away; sanguine's own
+ * provenance note measures at `α ∈ {0.5, 8, 50}`. What the theorems buy is that it is ONE parameter
+ * with a proven meaning — measurement noise over prior spread — rather than an arbitrary accuracy.
+ * The default below is `4`, from stated assumptions: an accuracy estimate's binomial noise is at
+ * worst `σ² = 0.25`, and taking the plausible spread of resolver accuracies as `±0.25` gives
+ * `τ² = 0.0625`, so `α = 0.25/0.0625 = 4`. State the assumptions, not a folk number.
+ *
+ * @param {Witness[]} witnesses The recorded witnesses.
+ * @param {number} n The observations the accuracy was measured on.
+ * @param {number} alpha The BLUP parameter.
+ * @returns {number} The floor in `[0, 1]`.
+ */
+export const earnedAccuracyFloor = (witnesses, n, alpha) =>
+    1 - countWeight(alpha, n) * (1 - baselineShare(witnesses));
+
+/**
+ * The earned-floor check: does the unit's held-out accuracy clear the floor its own witness set
+ * earns it?
+ *
+ * Held-out, never differential — a unit replaying its training data says nothing about whether it
+ * beats the constant on anything else, and `differentialReplay` already covers that axis.
+ * @param {AutoUnit} unit The distilled unit.
+ * @param {Witness[]} witnesses The recorded witnesses.
+ * @param {number} alpha The BLUP parameter.
+ * @returns {Verdict} Pass, Fail, or Inconclusive.
+ */
+export const earnedBaselineCheck = (unit, witnesses, alpha) => {
+    if (witnesses.length === 0) {
+        return new Verdict('Inconclusive', { reason: 'no witnesses to derive a baseline from' });
+    }
+    const accuracy = unit.holdout_accuracy();
+    const n = unit.holdout_n();
+    if (accuracy === null || n === null) {
+        return new Verdict('Inconclusive', {
+            reason: 'no holdout check ran during distillation — an earned floor needs a held-out measurement',
+        });
+    }
+    const baseline = baselineShare(witnesses);
+    const floor = earnedAccuracyFloor(witnesses, n, alpha);
+    if (accuracy >= floor) {
+        return new Verdict('Pass');
+    }
+    return new Verdict('Fail', {
+        reasons: [`holdout accuracy ${accuracy.toFixed(3)} on n=${n} < earned floor ${floor.toFixed(3)} ` +
+            `(majority baseline ${baseline.toFixed(3)}, weight ${countWeight(alpha, n).toFixed(3)} at alpha ${alpha})`],
+    });
+};
+
 /**
  * The declared checks an emitted AutoUnit must clear — auto's own TOML contract, narrowed to what
  * this port can actually verify: differential agreement, holdout generalization, and a per-class
- * regex scope check.
+ * regex scope check; plus the earned baseline floor, which is this tree's addition rather than
+ * auto's.
  */
 export class Contract {
     /**
@@ -175,16 +284,30 @@ export class Contract {
      *   accuracy. `0.0` disables.
      * @param {Array<[number, string]>} [o.scopePatterns=[]] Per-class scope patterns every
      *   witness of that class must match. Empty disables.
+     * @param {number|null} [o.baselineAlpha=null] The BLUP parameter for the earned accuracy floor
+     *   (`earnedAccuracyFloor`). `null` disables, like every other check here — this is a check
+     *   the caller opts into, never a silent change to what the port already did.
      */
     constructor(o = {}) {
         this.minDifferentialAgreementMilli = o.minDifferentialAgreementMilli ?? 0;
         this.minHoldoutAccuracy = o.minHoldoutAccuracy ?? 0.0;
         this.scopePatterns = o.scopePatterns ?? [];
+        this.baselineAlpha = o.baselineAlpha ?? null;
     }
 
     /** The auto-default contract: require exact differential replay, no holdout floor, no scope. */
     static exactReplay() {
         return new Contract({ minDifferentialAgreementMilli: 1000 });
+    }
+
+    /**
+     * The contract fold's identity resolver needs: the unit must beat the constant answer by the
+     * margin its evidence has earned. See `earnedAccuracyFloor` for where `4` comes from.
+     * @param {number} [alpha=4] The BLUP parameter, `σ²/τ²`.
+     * @returns {Contract} The contract.
+     */
+    static earnedBaseline(alpha = 4) {
+        return new Contract({ baselineAlpha: alpha });
     }
 
     /**
@@ -210,6 +333,9 @@ export class Contract {
                     reasons: [`holdout accuracy ${acc.toFixed(3)} < declared floor ${this.minHoldoutAccuracy.toFixed(3)}`],
                 }));
             }
+        }
+        if (this.baselineAlpha !== null) {
+            verdicts.push(earnedBaselineCheck(unit, witnesses, this.baselineAlpha));
         }
         for (const [klass, pattern] of this.scopePatterns) {
             verdicts.push(regexScopeCheck(witnesses, klass, pattern));

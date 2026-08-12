@@ -171,13 +171,19 @@ export class AutoUnit {
      * @param {number[][]} edges Per-feature quantile edges.
      * @param {number} nBuckets The bucket count.
      * @param {number|null} holdoutAccuracy The measured holdout accuracy, if a check ran.
+     * @param {number|null} [holdoutN] How many held-out examples that accuracy rests on.
      */
-    constructor(guard, classifiers, edges, nBuckets, holdoutAccuracy) {
+    constructor(guard, classifiers, edges, nBuckets, holdoutAccuracy, holdoutN = null) {
         this.guard = guard;
         this.classifiers = classifiers;
         this.edges = edges;
         this.nBuckets = nBuckets;
         this.holdoutAccuracy = holdoutAccuracy;
+        // The sample size the accuracy rests on, not just the accuracy. `DistillError` already
+        // carries `holdoutN` on the refusal path; a unit that succeeded is no less entitled to say
+        // how much evidence its number has behind it, and a caller weighing that number against a
+        // prior (`contract.js` `earnedAccuracyFloor`) cannot do so without it.
+        this.holdoutN = holdoutN;
     }
 
     /**
@@ -208,6 +214,7 @@ export class AutoUnit {
         }
 
         let holdoutAccuracy = null;
+        let holdoutN = null;
         if (cfg.holdoutFrac > 0.0) {
             const cut = Math.min(Math.max(Math.floor(witnesses.length * (1.0 - cfg.holdoutFrac)), 1), witnesses.length - 1);
             const fitSet = witnesses.slice(0, cut);
@@ -228,13 +235,14 @@ export class AutoUnit {
                 });
             }
             holdoutAccuracy = measured;
+            holdoutN = heldSet.length;
         }
 
         // The gate passed (or was skipped) — train the deployed model on every witness.
         const sketches = witnesses.map((w) => Sketch.of(w.text));
         const guard = Guard.calibrate(sketches, cfg.alphaMilli);
         const { classifiers, edges } = trainOneVsRest(witnesses, nClasses, cfg);
-        return new AutoUnit(guard, classifiers, edges, cfg.nBuckets, holdoutAccuracy);
+        return new AutoUnit(guard, classifiers, edges, cfg.nBuckets, holdoutAccuracy, holdoutN);
     }
 
     /**
@@ -258,6 +266,11 @@ export class AutoUnit {
     /** @returns {number|null} The measured holdout accuracy, if a check ran. */
     holdout_accuracy() {
         return this.holdoutAccuracy;
+    }
+
+    /** @returns {number|null} How many held-out examples that accuracy rests on, if a check ran. */
+    holdout_n() {
+        return this.holdoutN;
     }
 
     /** @returns {number} The number of classes this unit discriminates. */

@@ -4,8 +4,12 @@ import { AutoUnit, DistillConfig, Witness } from '../public/scripts/extensions/f
 import {
     Contract,
     Verdict,
+    baselineShare,
+    countWeight,
     differentialReplay,
     differentialReplayThresholded,
+    earnedAccuracyFloor,
+    earnedBaselineCheck,
     regexScopeCheck,
     self_test,
 } from '../public/scripts/extensions/fold/lib/ml/contract.js';
@@ -105,5 +109,109 @@ describe('contract.js — the recompile gate', () => {
         const verdict = differentialReplayThresholded(unit, ws, 1001);
         expect(verdict.kind).toBe('Fail');
         expect(verdict.reasons.length).toBeGreaterThan(0);
+    });
+});
+
+/**
+ * The earned floor is this tree's addition, not part of the auto port: the accuracy a unit must
+ * clear is DERIVED from its own witness set rather than declared as a number.
+ * `countWeight` is the BLUP posterior weight — `blup_is_countWeight`
+ * (sanguine `proof/Substrate/Algebra/Security/HashTrinityCore.lean:298`) proves the identity, and
+ * `countWeight_strict_mono` (`:335`) proves it strictly increasing in the count.
+ */
+describe('contract.js — the earned accuracy floor', () => {
+    /** A witness set skewed the way a real identity corpus is: mostly `same`. */
+    const skewed = (n, minority) => {
+        const ws = [];
+        for (let i = 0; i < n - minority; i++) {
+            ws.push(new Witness(`pair ${i} restated at greater length ${i}`, 0));
+        }
+        for (let i = 0; i < minority; i++) {
+            ws.push(new Witness(`unrelated thing ${i} versus another thing ${i}`, 1));
+        }
+        return ws;
+    };
+
+    test('the baseline is the majority share, which is what a constant answer scores', () => {
+        expect(baselineShare(skewed(35, 3))).toBeCloseTo(32 / 35, 10);
+        expect(baselineShare([])).toBe(0);
+    });
+
+    test('the weight is strictly increasing in the count (countWeight_strict_mono)', () => {
+        const alpha = 4;
+        expect(countWeight(alpha, 0)).toBe(0);
+        expect(countWeight(alpha, 4)).toBeCloseTo(0.5, 10);
+        for (let n = 1; n < 50; n++) {
+            expect(countWeight(alpha, n)).toBeGreaterThan(countWeight(alpha, n - 1));
+        }
+        expect(countWeight(alpha, 1e9)).toBeGreaterThan(0.999);
+    });
+
+    test('with no evidence the floor is perfection, and it falls to the baseline as evidence accrues', () => {
+        const ws = skewed(35, 3);
+        const baseline = baselineShare(ws);
+        // n = 0: nothing is earned, so nothing short of perfect is admissible.
+        expect(earnedAccuracyFloor(ws, 0, 4)).toBeCloseTo(1, 10);
+        // The floor descends monotonically toward the baseline, never below it.
+        let previous = 1;
+        for (let n = 1; n <= 500; n++) {
+            const floor = earnedAccuracyFloor(ws, n, 4);
+            expect(floor).toBeLessThan(previous);
+            expect(floor).toBeGreaterThan(baseline);
+            previous = floor;
+        }
+        expect(earnedAccuracyFloor(ws, 1e7, 4)).toBeCloseTo(baseline, 5);
+    });
+
+    test('a unit that is worse than the constant answer fails the floor', () => {
+        // The measured case this check exists for: fold's real identity corpus scored 81.3% by
+        // leave-one-out against a 91.4% majority baseline. An absolute `minHoldoutAccuracy` below
+        // 0.81 passes that unit; the earned floor does not.
+        const ws = skewed(35, 3);
+        const unit = AutoUnit.distill(ws, new DistillConfig());
+        unit.holdoutAccuracy = 0.813;
+        unit.holdoutN = 32;
+        const verdict = earnedBaselineCheck(unit, ws, 4);
+        expect(verdict.kind).toBe('Fail');
+        expect(verdict.reasons[0]).toContain('earned floor');
+    });
+
+    test('beating the constant is not enough when the evidence is thin', () => {
+        // 92.0% beats the 91.4% constant, but on n=32 the earned floor is 92.4%: the margin is
+        // smaller than this much evidence can distinguish from noise.
+        const ws = skewed(35, 3);
+        const unit = AutoUnit.distill(ws, new DistillConfig());
+        unit.holdoutAccuracy = 0.920;
+        unit.holdoutN = 32;
+        expect(earnedBaselineCheck(unit, ws, 4).kind).toBe('Fail');
+        // The same accuracy on ten times the evidence clears it — nothing changed but the count.
+        unit.holdoutN = 320;
+        expect(earnedBaselineCheck(unit, ws, 4).kind).toBe('Pass');
+    });
+
+    test('no holdout measurement is inconclusive, never a pass', () => {
+        const ws = skewed(35, 3);
+        const unit = AutoUnit.distill(ws, new DistillConfig());
+        expect(unit.holdout_accuracy()).toBeNull();
+        expect(unit.holdout_n()).toBeNull();
+        const verdict = earnedBaselineCheck(unit, ws, 4);
+        expect(verdict.kind).toBe('Inconclusive');
+        expect(verdict.blocksEmit()).toBe(true);
+    });
+
+    test('a distilled unit reports how many held-out examples its accuracy rests on', () => {
+        const ws = skewed(20, 6);
+        const unit = AutoUnit.distill(ws, new DistillConfig({ holdoutFrac: 0.25 }));
+        expect(unit.holdout_n()).toBe(5);
+        expect(unit.holdout_accuracy()).not.toBeNull();
+    });
+
+    test('the check is opt-in — the default contract still declares nothing', () => {
+        const ws = skewed(35, 3);
+        const unit = AutoUnit.distill(ws, new DistillConfig());
+        expect(new Contract().baselineAlpha).toBeNull();
+        expect(new Contract().verify(unit, ws).kind).toBe('Pass');
+        // Opting in with no holdout measurement blocks emit rather than waving it through.
+        expect(Contract.earnedBaseline().verify(unit, ws).blocksEmit()).toBe(true);
     });
 });
