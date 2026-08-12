@@ -297,7 +297,7 @@ async function requestExtraction({ prompt, responseLength, schema, profileId, re
  * @param {string} [options.why] The reason this pass ran — arms the world fragment on a time skip.
  * @returns {Promise<{ok: boolean, reason?: string, results?: object}>} Outcome.
  */
-export async function runExtraction({ windowSize = 6, responseLength = 800, profileId = '', why = '', reasoning = false, source = null, staticFirst = false } = {}) {
+export async function runExtraction({ windowSize = 6, responseLength = 800, profileId = '', why = '', reasoning = false, source = null, staticFirst = true } = {}) {
     // ── Every outcome is recorded, including the ones that are not errors ──
     //
     // A chat ran to 74 turns with zero extracted events and NOTHING in the data said why. The pass
@@ -365,18 +365,33 @@ export async function runExtraction({ windowSize = 6, responseLength = 800, prof
         // ── Static first, or transcript first ──
         //
         // The two orderings carry the same content; they differ only in what a prefix cache can
-        // reach. Measured over 563 traced passes, an extraction sends ~9.4k tokens in, of which the
-        // schema (~4.8k, three distinct values across every pass) and the instruction block (~2.7k,
-        // 90% static sentence mass) are protocol that barely moves — 80% of the payload. The
-        // transcript and ledger that the pass is actually ABOUT are ~1.9k.
+        // reach. The instruction block is ~2.7k tokens of 90% static sentence mass and the
+        // transcript and ledger the pass is actually ABOUT are ~1.9k — so with the transcript
+        // first, every pass differs from byte zero and the stable majority sits behind the moving
+        // minority where a cache is worth nothing.
         //
-        // A prefix cache keys on a common LEADING prefix, so with the transcript first every pass
-        // differs from byte zero and the stable 80% sits behind the moving 20% where it is worth
-        // nothing. `staticFirst` puts the instructions ahead of the data so the breakpoint has
-        // something to bite on. It is an option rather than the default because instructions-first
-        // and data-first are not the same prompt to a model, and this one has measured reasoning
-        // behind its current shape — `/fold-replay staticfirst=true` against the existing traces is
-        // how the difference gets decided rather than assumed.
+        // MEASURED against the provider rather than modelled. DeepSeek (the configured profile)
+        // caches automatically on the common prefix in 64-token blocks — no `cache_control` marker,
+        // no message-array change. Reading `prompt_cache_hit_tokens` back for real extraction
+        // prompts pulled from the trace:
+        //
+        //   original ordering    hit 0/4175, 0/4103, 0/4006, 0/4045   — never once, at any point
+        //   staticFirst          hit 2560/4072, 2560/4516            — 63% once the prefix is warm
+        //
+        // At DeepSeek's ~10x cache discount that is 1512 + 2560*0.1 = 1768 against 4072, ~57%
+        // cheaper per pass. This comment previously put the base at ~9.4k tokens by measuring the
+        // schema as chars/4; the provider reports ~4072 `prompt_tokens` for the same pass, so that
+        // figure was inflated and the schema's billing is simply unmeasured — corrected here rather
+        // than left standing.
+        //
+        // The quality half was settled BEFORE the cost half, with an A/A control, because exact
+        // fragment agreement between the two orderings (0-10% per probe) means nothing without
+        // knowing what the SAME prompt scores against itself: 0-16%. The metric is saturated by the
+        // model's own sampling variance, so the reorder sits inside the noise — which is "exact
+        // equality cannot see a change here", not "there is no change". `compare.js` runs both.
+        //
+        // Hence the default. `staticFirst: false` still builds the original ordering, because an
+        // A/B against the pre-change traces needs it.
         const transcript = [
             'Transcript excerpt:',
             '---',

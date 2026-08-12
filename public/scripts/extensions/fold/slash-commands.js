@@ -647,7 +647,9 @@ async function replayCallback(args) {
     const step = Math.max(1, Number(args?.step) || REPLAY_STEP);
     const cap = Number(args?.limit) > 0 ? Number(args.limit) : Infinity;
     const dry = isTrueBoolean(args?.dry);
-    const staticFirst = isTrueBoolean(args?.staticfirst);
+    // The live default is now static-first; `staticfirst=false` replays the ORIGINAL ordering, which
+    // is what an A/B against the pre-change traces needs.
+    const staticFirst = args?.staticfirst === undefined ? true : isTrueBoolean(args.staticfirst);
 
     const live = (chat ?? []).filter(m => m?.mes && !m.is_system).length;
     if (!live) {
@@ -679,7 +681,7 @@ async function replayCallback(args) {
             // a step that lands inside an already-read window is cheap rather than wasteful.
             const result = await extract.runExtraction({
                 source: chat.slice(0, stop),
-                why: String(args?.label ?? '').trim() || (staticFirst ? 'replay-staticfirst' : 'replay'),
+                why: String(args?.label ?? '').trim() || (staticFirst ? 'replay-staticfirst' : 'replay-original'),
                 staticFirst,
             });
             ran += 1;
