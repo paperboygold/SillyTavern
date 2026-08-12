@@ -774,6 +774,33 @@ export function deltaInstruction() {
         'Record the affliction, never the reassurance — "otherwise unhurt" is not a condition.',
         '"subject" is what the condition is ABOUT, not its severity or its wording: "mild hangover" and "hangover mostly eased" are both subject "hangover", "bruised left arm" is subject "left arm". This is what groups two phrasings of one condition into one.',
         'Use empty arrays when an event changed nothing.',
+        // ── The coverage proof: tried, measured, and NOT added ──
+        //
+        // `mentions` gates every delta this event proposes (`chronicle.js applyExtraction` folds the
+        // batch's `mentions` into the set `validateDelta` admits by), and this probe alone had the
+        // field in its SCHEMA with no word about it in its instruction — unlike threads and
+        // entities, which both say "this is the coverage proof" and both report well. The obvious
+        // fix was to add the same clause here, so that `isMentioned` — a substring test on the
+        // narrative, which RULE 1 forbids and names by that function's own name — could be deleted.
+        //
+        // It does not work. Replayed over Wuxia, 277 messages, ~136 passes per arm:
+        //
+        //   no instruction              report admits 93.4%   2.5 mention phrases per event
+        //   "exactly as written"                      89.5%   3.3
+        //   "both names when they differ"             87.0%   3.2
+        //
+        // n≈60 per arm, so the differences are noise — but the direction is wrong and the mechanism
+        // is visible: asking for more phrases got more phrases and NOT better coverage, because the
+        // extra ones are excerpt-wording ("the key", "the jade", "thirty silver") while the gate
+        // needs the delta's key ("bronze key", "jade trinket", "silver wen").
+        //
+        // The residual is not a coverage-reporting problem at all. Nearly every remaining miss is
+        // ONE thing: the currency. "silver wen" against "thirty silver", "a full silver piece",
+        // "forty silver". That is item identity, the same split that makes `remove-unknown` eat
+        // spends — the Wuxia ledger holds `money silver` and `carried silver wen` as two rows of
+        // one currency. Fix identity and this closes; add prompt tokens and it does not.
+        //
+        // Recorded here rather than left as a silent absence, so the next reader does not re-run it.
     ].join(' ');
 }
 
