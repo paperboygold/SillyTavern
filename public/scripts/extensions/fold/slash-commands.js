@@ -671,9 +671,10 @@ async function replayCallback(args) {
             }
         }
     } finally {
-        // Unconditional: an aborted or thrown replay must not leave a rebuilt ledger in place of
-        // the one the chat was playing with.
-        store.restoreFold(snapshot);
+        // Unconditional AND awaited. `restoreFold` performs an undebounced write and returns a
+        // promise; dropping it is the bug that cost two live chats their identity verdicts, because
+        // the caller changed chat before a debounced save could fire. See `store.restoreFold`.
+        await store.restoreFold(snapshot);
     }
     toastr.success(t`Replay complete: ${ran} passes, ${ok} produced a fragment. The trace kept every one; this chat's own state is unchanged.`);
     return `${ran}`;

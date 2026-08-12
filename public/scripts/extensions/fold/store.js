@@ -10,7 +10,7 @@
  * conversion happens, so no other module has to think about it.
  */
 
-import { chat_metadata } from '../../../script.js';
+import { chat_metadata, saveMetadata } from '../../../script.js';
 import { saveMetadataDebounced } from '../../extensions.js';
 import { table_entries } from './lib/hash.js';
 import { migrate } from './migrate.js';
@@ -283,14 +283,28 @@ export function snapshotFold() {
  * chat can be in and is distinct from an empty blob — a chat that fold has never touched must not
  * come back from a replay looking like one it touched and found nothing in.
  *
+ * ── The save is AWAITED, and the first version of this function was not ──
+ *
+ * `saveMetadataDebounced` schedules a write; it does not perform one. A caller that restores and
+ * then immediately changes chat — which is exactly what a batch replay does — leaves the debounce
+ * pending against metadata that no longer belongs to the chat it was measured from, and the
+ * restored blob never reaches disk. MEASURED, on live chats: a six-chat replay run restored every
+ * blob in memory and persisted none of them. Royal Succession went from 18 persisted identity
+ * verdicts to 10 and Elizabeth from 4 to 3 — the replay's own rebuilt state was saved by the chat
+ * change instead. The verdicts were recoverable only because they had been harvested to a corpus
+ * file first.
+ *
+ * So this returns a promise and `saveMetadata()` is the undebounced write. A caller that does not
+ * await it gets the same bug back.
+ *
  * @param {object|null} snapshot A blob from `snapshotFold`.
- * @returns {void}
+ * @returns {Promise<void>} Resolves once the restored blob is on disk.
  */
-export function restoreFold(snapshot) {
+export async function restoreFold(snapshot) {
     if (snapshot === null || snapshot === undefined) {
         delete chat_metadata[FOLD_METADATA_KEY];
     } else {
         chat_metadata[FOLD_METADATA_KEY] = structuredClone(snapshot);
     }
-    saveMetadataDebounced();
+    await saveMetadata();
 }
