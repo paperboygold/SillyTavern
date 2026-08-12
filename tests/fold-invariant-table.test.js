@@ -5,6 +5,7 @@ import {
     negativeQuantities,
     partitionContradictions,
     splitCurrency,
+    unbackedDebits,
 } from '../public/scripts/extensions/fold/invariant-table.js';
 import { itemKey, MONEY } from '../public/scripts/extensions/fold/state-table.js';
 
@@ -89,6 +90,72 @@ describe('invariant-table — contradictions provable without ground truth', () 
         expect(witnesses[0]).toMatchObject({ of: 'item', why: 'split-currency' });
         // The witness names the two KEYS, so a resolver answer can be applied to the right rows.
         expect([witnesses[0].a, witnesses[0].b].every(k => typeof k === 'string' && k.length)).toBe(true);
+    });
+
+    test('the token test is script-dependent, and this pins which scripts it fails', () => {
+        // The claim "language-neutral" was made and was wrong. Splitting on non-alphanumerics needs
+        // whitespace between words; Han, Hangul and Kana do not use it, and inflecting languages
+        // change the stem. Pinned so the limitation cannot be forgotten again.
+        const split = (a, b) => splitCurrency(new Map([
+            [itemKey(a), { qty: 21 }],
+            [itemKey(b, MONEY), { qty: 76 }],
+        ])).length > 0;
+        expect(split('silver wen', 'silver')).toBe(true);
+        expect(split('二十银两', '银两')).toBe(false);
+        expect(split('銀貨二十枚', '銀貨')).toBe(false);
+        expect(split('은화스무닢', '은화')).toBe(false);
+        expect(split('серебряных монет', 'серебро')).toBe(false);
+    });
+
+    test('an unbacked debit finds the split with NO text at all', () => {
+        // The language-invariant half: money was spent from a row holding nothing, so the credit is
+        // under another key. Pure arithmetic on fold's own numbers — this works in every script,
+        // including the four the token test above misses.
+        const inv = new Map([
+            [itemKey('银两', MONEY), { qty: -11 }],
+            [itemKey('二十银两', MONEY), { qty: 40 }],
+            [itemKey('金', MONEY), { qty: 3 }],
+        ]);
+        const found = unbackedDebits(inv);
+        expect(found).toHaveLength(1);
+        expect(found[0].name).toBe('银两');
+        // Every funded row is a candidate; fold picks none of them.
+        expect(found[0].candidates.map(c => c.name).sort()).toEqual(['二十银两', '金']);
+    });
+
+    test('the two detectors cover different halves, and both become witnesses', () => {
+        const inv = new Map([
+            [itemKey('银两', MONEY), { qty: -11 }],      // unbacked: found with no text at all
+            [itemKey('二十银两', MONEY), { qty: 40 }],    // the funded row the credit is likely in
+            [itemKey('silver wen'), { qty: 21 }],        // overlap: found by the token supplement
+            [itemKey('silver', MONEY), { qty: 76 }],
+        ]);
+        const { violations, suspected, witnesses } = checkInvariants({ inv });
+        expect(violations.some(v => v.kind === 'negative-quantity')).toBe(true);
+        expect(suspected.some(v => v.kind === 'unbacked-debit')).toBe(true);
+        expect(suspected.some(v => v.kind === 'split-currency')).toBe(true);
+        expect(witnesses.some(w => w.why === 'unbacked-debit')).toBe(true);
+        expect(witnesses.some(w => w.why === 'split-currency')).toBe(true);
+    });
+
+    test('an unbacked debit offers only MONEY rows as candidates, and that is deliberate', () => {
+        // Wuxia's real split is cross-place: `carried silver wen` holds the credit for a debit at
+        // `money silver`. With no text there is nothing to narrow carried rows by, so offering all
+        // of them would pair a negative balance against the dagger, the bow, the map and the rest —
+        // a flood of obviously-different questions spending the review's eight slots on noise.
+        //
+        // So the text-free detector stays precise and money-only, and the cross-place case is the
+        // token supplement's job wherever the script separates words. Where it does not (Han,
+        // Hangul, Kana, inflected Slavic), a cross-place split is currently UNCAUGHT — the honest
+        // boundary of both detectors, and the reason the schema field is the real answer.
+        const inv = new Map([
+            [itemKey('silver', MONEY), { qty: -11 }],
+            [itemKey('dagger'), { qty: 1 }],
+            [itemKey('bow'), { qty: 1 }],
+        ]);
+        const found = unbackedDebits(inv);
+        expect(found).toHaveLength(1);
+        expect(found[0].candidates).toEqual([]);
     });
 
     test('a clean ledger reports nothing', () => {

@@ -48,8 +48,25 @@
 
 import { CARRIED, MONEY, splitItemKey } from './state-table.js';
 
-/** Split a key's name into tokens. Language-neutral: every non-alphanumeric is a separator, and
- * the class spans U+00C0–U+FFFF so Han, Hangul and Cyrillic are token characters, not gaps. */
+/**
+ * Split a key's name into tokens.
+ *
+ * NOT language-neutral, and the first version of this comment claimed it was. Splitting on
+ * non-alphanumerics needs whitespace to separate words, which Han, Hangul and Kana do not use, so
+ * `二十银两` is ONE token and shares nothing with `银两`. Inflecting languages fail too:
+ * `серебряных` against `серебро` is morphology, which fold does not do. Measured:
+ *
+ *   english   "silver wen" vs "silver"          DETECTED
+ *   chinese   "二十银两"    vs "银两"             MISSED
+ *   japanese  "銀貨二十枚"  vs "銀貨"             MISSED
+ *   korean    "은화스무닢"  vs "은화"             MISSED
+ *   russian   "серебряных монет" vs "серебро"   MISSED
+ *
+ * The earlier claim was tested with `"玉佩 吊坠"` — a space no real Chinese text contains — which
+ * rigged the result. This is kept as a cheap SUPPLEMENT for space-delimited scripts, never as the
+ * mechanism; `unbackedDebits` below carries no text at all and is what actually holds in every
+ * language.
+ */
 const tokens = (name) => new Set(String(name ?? '').toLowerCase().split(/[^0-9a-zÀ-￿]+/i).filter(Boolean));
 
 /**
@@ -125,6 +142,46 @@ export function splitCurrency(inv) {
 }
 
 /**
+ * Money the ledger spent from a row that never held it.
+ *
+ * The language-invariant half, and the one that should be read first: it contains no text. If the
+ * model debits a currency row and the fold holds nothing there, the credit landed somewhere else —
+ * under a different key for the same money. That is a split, established by arithmetic on fold's
+ * own numbers, in any script and any writing system, with no tokenizer and no threshold.
+ *
+ * The two signals catch different halves and neither subsumes the other. This one fires only after
+ * a split has already cost something (Time Stop's `money silver` at −11), so it is precise and
+ * late. The token supplement fires before damage but only where words are separated by spaces
+ * (Wuxia's `silver wen` against `silver`, both still positive). Reported separately so the
+ * difference stays visible.
+ *
+ * @param {Map<string, {qty?: number}>} inv Derived inventory.
+ * @returns {Array<{kind: string, key: string, name: string, qty: number,
+ *   candidates: Array<{key: string, name: string, qty: number}>}>} Violations, with the funded rows
+ *   the missing credit could be sitting in.
+ */
+export function unbackedDebits(inv) {
+    const money = [];
+    for (const [key, row] of inv ?? []) {
+        const { place, name } = splitItemKey(key);
+        if (place === MONEY) {
+            money.push({ key, name, qty: Number(row?.qty) || 0 });
+        }
+    }
+    return money
+        .filter(row => row.qty < 0)
+        .map(row => ({
+            kind: 'unbacked-debit',
+            key: row.key,
+            name: row.name,
+            qty: row.qty,
+            // Every funded currency row is a candidate for where the credit went. Fold does not
+            // pick one — the pair goes to the model, exactly as a token overlap would.
+            candidates: money.filter(other => other.key !== row.key && other.qty > 0),
+        }));
+}
+
+/**
  * A `different` verdict inside a component the `same` verdicts merged.
  *
  * Identity is an equivalence relation, so `same` is transitive: union the `same` edges and any
@@ -193,14 +250,23 @@ export function checkInvariants({ inv, answers = [] }) {
     // `different` LABEL — the minority class the corpus has three of in seventy-six — and it cost
     // no question slot to raise. Both answers are worth having, which is why they are witnesses.
     const splits = splitCurrency(inv);
+    const unbacked = unbackedDebits(inv);
     const violations = [
         ...negativeQuantities(inv),
         ...partitionContradictions(answers),
     ];
-    const suspected = splits;
+    // Unbacked debits are SUSPECTED splits too, from the text-free side. The negative balance
+    // itself is already a proven violation above; what is suspected is WHICH funded row the credit
+    // went to, and that is the model's answer.
+    const suspected = [...splits, ...unbacked];
     // A split raises one question per pair of rows in the group. `of: 'item'` because the review
     // has no item identity source yet — this is the first one, and it arrives free.
     const witnesses = [];
+    for (const debt of unbacked) {
+        for (const candidate of debt.candidates) {
+            witnesses.push({ a: debt.key, b: candidate.key, of: 'item', why: 'unbacked-debit' });
+        }
+    }
     for (const split of splits) {
         for (let i = 0; i < split.rows.length; i++) {
             for (let j = i + 1; j < split.rows.length; j++) {
