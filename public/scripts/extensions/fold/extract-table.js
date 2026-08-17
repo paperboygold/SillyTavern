@@ -74,6 +74,33 @@ export function resolveMark(messages, { mid = NaN, key = '' } = {}) {
 /** The header over messages the model may read but may not extract from. */
 export const CONTEXT_HEADER = 'Earlier, for context only (already recorded — extract nothing from this):';
 
+/**
+ * How far back the FIRST pass may reach.
+ *
+ * ── The opening is the one message nobody else reads ──
+ *
+ * Cards put the premise, the character sheet and the starting equipment in the greeting. Fold had
+ * two ways to read it and used neither: `absorb` needs `findStateBlock` to recognise the card's
+ * delimiters, and the extraction window is the trailing `size`, so by the time the first pass fires
+ * — `MIN_INTERVAL` is 2 — the greeting has already slid out of it.
+ *
+ * The live Wuxia World RPG is the case. Its message 0 says, in plain unwrapped lines,
+ * `STORAGE RING: 1x Medicinal Pill … - 1x Basic Iron Sword`, and neither item ever reached the
+ * ledger: the card wraps nothing so absorb never ran, and the first pass anchored at mid 8 and read
+ * mids 3-8. When the player later picked up a sword it was the only sword fold had ever seen, and
+ * the narrator started treating him as a thief.
+ *
+ * So a pass with no mark reads from the start instead of from the tail. Bounded, because "the
+ * start" is not always small: measured across the corpus, a fresh chat's first pass wants at most
+ * ten messages (My Hero Academia), but one live Wuxia chat had fold enabled at message 266 of 277,
+ * and reading from the start there would put 266 messages into one prompt. Twenty-four is 4x the
+ * default window and 2.4x the worst fresh chat.
+ *
+ * What it cannot reach is REPORTED (`unread`) rather than dropped in silence, which is the lesson of
+ * the defect it fixes: absorb failed open for three campaigns and never said so.
+ */
+export const FIRST_WINDOW = 24;
+
 /** The header over messages this pass is actually about. */
 export const NEW_HEADER = 'New since the last look:';
 
@@ -85,13 +112,30 @@ export const NEW_HEADER = 'New since the last look:';
  * @param {object} [options] Options.
  * @param {number} [options.size] How many trailing messages to include in total.
  * @param {{mid: number, key: string}} [options.mark] The persisted high-water mark.
+ *
+ * ── `sources` and `seen` answer different questions ──
+ *
+ * `sources` is the new half: what may ANCHOR an event and carry a delta. `seen` is the whole
+ * window: what the model could be RE-telling. The already-recorded gate needs the second one —
+ * a refusal that rests on a beat outside this window is refusing something the model cannot see
+ * (`state-table.js` `validateInventory`, and the measurement in its docblock).
+ *
+ * ── A pass that has never run reaches back to the opening ──
+ *
+ * No mark means nothing here has ever been read, and the greeting is where a card states the
+ * premise and the starting kit. See `FIRST_WINDOW` for the measurement and for why it is bounded.
+ *
  * @returns {{text: string, newText: string, sources: Array<{key: string, mid: number}>,
- *   context: number, mark: number|null}} The window: `text` for the prompt, `newText` for the
- *   mention gate, `sources` for anchoring — new half only — and `context` for how many messages
- *   were shown as background.
+ *   seen: number[], unread: number, context: number, mark: number|null}} The window: `text` for the
+ *   prompt, `newText` for the mention gate, `sources` for anchoring — new half only — `seen` for
+ *   every mid displayed, `unread` for what it could not reach, and `context` for background count.
  */
 export function splitWindow(messages, { size = 6, mark = {} } = {}) {
-    const window = (messages ?? []).slice(-Math.max(1, size));
+    const all = messages ?? [];
+    // Resolved against the FULL list, not the slice: a mark that still stands means this is not the
+    // first pass, however short the chat is, and the reach-back is only for the pass that has none.
+    const started = resolveMark(all, mark) !== null;
+    const window = all.slice(-Math.max(1, started ? size : FIRST_WINDOW));
     const at = resolveMark(window, mark);
 
     const older = at === null ? [] : window.filter(message => message.mid <= at);
@@ -111,6 +155,14 @@ export function splitWindow(messages, { size = 6, mark = {} } = {}) {
         // attributes everything to the last of these, so an empty new half must never be papered
         // over with an old source — the caller declines the pass instead.
         sources: fresh.map(message => ({ key: message.key, mid: message.mid })),
+        // Both halves. Reported even when `sources` is empty: a pass that declines still displayed
+        // these mids, and the question `seen` answers is about display, not about anchoring.
+        seen: window.map(message => message.mid).filter(Number.isFinite),
+        // Messages nothing will EVER read. Only the first pass can leave any: once a mark exists,
+        // everything below it was read by the pass that set it. Non-zero means fold was enabled on
+        // a chat already in progress, and it is worth saying out loud rather than discovering later
+        // that the ledger began life not knowing what was in the first two hundred messages.
+        unread: started ? 0 : Math.max(0, all.length - window.length),
         context: older.length,
         mark: at,
     };

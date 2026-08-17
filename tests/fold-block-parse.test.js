@@ -117,6 +117,37 @@ describe('splitItems', () => {
     test('an empty value yields nothing', () => {
         expect(splitItems('')).toEqual([]);
     });
+
+    // ── A bracket around the WHOLE list is punctuation, not a qualifier ──
+    //
+    // The live Isekai RPG card writes its status block as
+    //
+    //     Equipment: [School Uniform, Backpack]
+    //     Inventory: [Smartphone, Wallet]
+    //
+    // Every comma there sat at depth 1, so the depth guard — correct for qualifiers — refused to
+    // split at all and the line became one item named `school uniform, backpack`. Measured in that
+    // chat: five real possessions became four fictional rows across two absorbs, and every one of
+    // them was handed to the narrator under `Carrying:`.
+    test('a list wrapped in brackets is a list, not one long item', () => {
+        expect(splitItems('[School Uniform, Backpack]')).toEqual(['School Uniform', 'Backpack']);
+        expect(splitItems('[Smartphone, Wallet]')).toEqual(['Smartphone', 'Wallet']);
+    });
+
+    test('unwrapping does not cost the qualifier guard it was written for', () => {
+        // The whole point of the depth check. One enclosing layer comes off; what is left still
+        // protects a parenthesised qualifier, including when the wrapper hid it.
+        expect(splitItems('[Beretta M92F (12 rounds, one spare magazine), crowbar]'))
+            .toEqual(['Beretta M92F (12 rounds, one spare magazine)', 'crowbar']);
+        expect(splitItems('[Impact Burst (Active)]')).toEqual(['Impact Burst (Active)']);
+    });
+
+    test('a bracket that closes early belongs to its entry and is left alone', () => {
+        // `[a], [b]` opens and closes before the end, so it never enclosed the list. Unwrapping it
+        // would eat the first item's own punctuation.
+        expect(splitItems('[flint dagger], [rough cloth wraps]'))
+            .toEqual(['[flint dagger]', '[rough cloth wraps]']);
+    });
 });
 
 describe('splitConditions', () => {
@@ -214,6 +245,24 @@ describe('sameItem — exact-key identity, the English morphology is gone', () =
 });
 
 describe('classifyBlock', () => {
+    test('a context field wrapped in brackets is stored unwrapped', () => {
+        // The live Isekai card writes `Quests: [Journey to the Capital, The Sage's Mandate]`. Kept
+        // whole, every reader that splits it on the comma produces `[Journey to the Capital` and
+        // `The Sage's Mandate]` — one orphan bracket at each end, which is exactly what the panel
+        // rendered. Unwrapping where the field is STORED fixes the prompt and the panel together.
+        const { context } = classifyBlock(new Map([
+            ['quests', '[Journey to the Capital, The Sage\'s Mandate]'],
+            ['abilities', '[Impact Burst (Active)]'],
+            ['bonds', 'Classmates:0 (neutral)'],
+            ['reputation', '0 "Nobody"'],
+        ]));
+        expect(context.get('quests')).toBe('Journey to the Capital, The Sage\'s Mandate');
+        expect(context.get('abilities')).toBe('Impact Burst (Active)');
+        // Untouched: no enclosing bracket to remove, and the quotes are the card's own punctuation.
+        expect(context.get('bonds')).toBe('Classmates:0 (neutral)');
+        expect(context.get('reputation')).toBe('0 "Nobody"');
+    });
+
     test('routes fields to inventory, conditions and context', () => {
         const { items, conditions, context } = classifyBlock(parseStateBlock(REPLY));
         expect(items).toEqual(['house keys', 'wallet', 'bus pass']);
@@ -363,5 +412,92 @@ describe('sameItemHead — exact-key identity, the pair that forced the old rule
     test('is total over junk', () => {
         expect(sameItemHead('', '')).toBe(true);
         expect(sameItemHead('', 'sword')).toBe(false);
+    });
+});
+
+describe('findStateBlock — the wrappers cards actually use', () => {
+    test('a fenced block inside an XML-ish tag, which cost a live campaign its ground truth', () => {
+        // The live Isekai card. `findStateBlock` matched only `[...]`, so it returned null for every
+        // one of these, `absorb.js` never ran, and fold inferred abilities from prose instead —
+        // producing "Work" as a skill and one quarterstaff proficiency as two rows, while Smartphone,
+        // Wallet, School Uniform and Backpack sat unread in this block.
+        const reply = 'He walks east as the light fails.\n\n<stats>\n```\n'
+            + 'HP: 100/100 | MP: 50/50\n'
+            + 'Class: NULL SAGE\n'
+            + 'Skills: Sense E (0/5), Quarterstaff Proficiency E (1/5)\n'
+            + 'Abilities: Null Insight (Active), Void Comprehension (Passive)\n'
+            + 'Equipment: Worn Quarterstaff (Common), School Uniform, Backpack\n'
+            + 'Inventory: Smartphone, Wallet\n'
+            + '```\n</stats>';
+        const fields = parseStateBlock(reply);
+        expect(fields).toBeTruthy();
+        expect(fields.get('class')).toBe('NULL SAGE');
+        expect(fields.get('inventory')).toBe('Smartphone, Wallet');
+        expect(fields.get('skills')).toBe('Sense E (0/5), Quarterstaff Proficiency E (1/5)');
+        // Both separators in one block: `|` on the HP line, newlines everywhere else.
+        expect(fields.get('hp')).toBe('100/100');
+        expect(fields.get('mp')).toBe('50/50');
+    });
+
+    test('a bare fenced block at the end', () => {
+        const fields = parseStateBlock('Prose.\n\n```\nHP: 12/20\nLocation: the inn\n```');
+        expect(fields.get('hp')).toBe('12/20');
+        expect(fields.get('location')).toBe('the inn');
+    });
+
+    test('the bracketed form still works, unchanged', () => {
+        const fields = parseStateBlock('Prose.\n\n[HP: 12/20 | Location: the inn]');
+        expect(fields.get('hp')).toBe('12/20');
+        expect(fields.get('location')).toBe('the inn');
+    });
+
+    test('a fenced CODE sample is not a status block', () => {
+        // The discrimination that keeps this off ordinary replies: no labelled field, no block.
+        expect(parseStateBlock('Here:\n\n```\nconst x = 1\nreturn x\n```')).toBeNull();
+    });
+
+    test('a mid-prose block is not a status block, wrapper or not', () => {
+        expect(parseStateBlock('<stats>\n```\nHP: 1\n```\n</stats>\n\nAnd then he left.')).toBeNull();
+    });
+
+    test('stripping removes the whole wrapper, not just the fence', () => {
+        const reply = 'He walks east.\n\n<stats>\n```\nHP: 100/100\n```\n</stats>';
+        expect(stripStateBlock(reply)).toBe('He walks east.');
+    });
+});
+
+describe('a list is a list in whatever script the narrator wrote it', () => {
+    // ── Language mode made the ASCII assumption load-bearing ──
+    //
+    // `splitItems` and `splitConditions` split on `,` and `;` only. That is fine while the narrator
+    // writes English and silently wrong the moment it does not: Chinese and Japanese separate list
+    // items with `，`, `、` and `；`, so `玉佩、吊坠、银两` was ONE item named after the whole list —
+    // exactly the defect the bracket-wrapping bug produced, arriving through a different door.
+    //
+    // Widening the class is punctuation, which RULE 1 permits explicitly as STRUCTURE. No word is
+    // consulted and the rule states the same thing in every language.
+
+    test('an ideographic comma separates items', () => {
+        expect(splitItems('玉佩、吊坠、银两')).toEqual(['玉佩', '吊坠', '银两']);
+    });
+
+    test('a fullwidth comma and semicolon do too', () => {
+        expect(splitItems('铁剑，丹药；地图')).toEqual(['铁剑', '丹药', '地图']);
+    });
+
+    test('conditions split the same way', () => {
+        expect(splitConditions('左臂骨折、轻微脑震荡')).toEqual(['左臂骨折', '轻微脑震荡']);
+    });
+
+    test('a bracketed CJK list unwraps and splits, like its ASCII twin', () => {
+        expect(splitItems('［校服、背包］')).toEqual(['校服', '背包']);
+        expect(splitItems('[校服、背包]')).toEqual(['校服', '背包']);
+    });
+
+    test('ASCII lists are completely unaffected', () => {
+        expect(splitItems('house keys, wallet, bus pass')).toEqual(['house keys', 'wallet', 'bus pass']);
+        expect(splitItems('Beretta M92F (12 rounds, one spare magazine), crowbar'))
+            .toEqual(['Beretta M92F (12 rounds, one spare magazine)', 'crowbar']);
+        expect(splitConditions('bruised but functional')).toEqual(['bruised but functional']);
     });
 });

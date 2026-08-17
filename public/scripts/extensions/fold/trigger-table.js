@@ -69,6 +69,18 @@ const SCENE_BREAK = /^\s*[-*#=~_]{3,}\s*$/m;
  * longer guesses it from prose — the interval catches a quiet skip, and the model reports a loud
  * one. `WORLD_TRIGGERS` still names both reasons so an armed pass can be attributed, but the
  * trigger that fires them is now the model's own report, not a regex.
+ *
+ * ── That last sentence was true of the deletion and false of the wiring, for a while ──
+ *
+ * Removing the word lists left `TIME_SKIPPED` with no producer at all: nothing anywhere emitted it,
+ * so `world.js` armed on a reason that could not occur and the off-screen world never wrote a single
+ * event. Measured across every live campaign before the repair: `0` events with `src: 'world'`,
+ * against 566 `world:idle` counters. The docblock described the intended design and nothing
+ * implemented it, which is the failure mode a comment is least able to catch.
+ *
+ * The producer now exists: `state.js` `applyClock` raises a flag when the scene probe's reported
+ * elapse is accepted, and `index.js` reads-and-clears it to escalate the next pass's `why` to
+ * `TIME_SKIPPED`. The report is still the model's; only the wire is fold's.
  */
 export const TIME_SKIPPED = 'time skipped';
 export const SCENE_BREAK_WHY = 'scene break';

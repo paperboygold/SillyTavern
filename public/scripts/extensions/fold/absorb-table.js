@@ -125,7 +125,7 @@ export function routeBlockFields(context, table, { turn = 0 } = {}) {
         // read one language. Whether a fragment is a separate lead is a reading the model answers
         // (the threads probe reports leads structurally from the same block text); this fallback
         // only routes on shape.
-        const clauses = String(value ?? '').split(/\s*[;,]\s+/).map(part => part.trim()).filter(Boolean);
+        const clauses = String(value ?? '').split(/\s*[;,，、；]\s*/).map(part => part.trim()).filter(Boolean);
         if (!clauses.length) {
             continue;
         }

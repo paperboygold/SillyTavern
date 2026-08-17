@@ -1059,6 +1059,46 @@ export function identityPairs(records) {
 }
 
 /**
+ * Shed the stakes the story has stopped touching.
+ *
+ * ── The other half of the stale repair, and why it is a demotion rather than a delete ──
+ *
+ * `threadsByKind` hides a dial-less thread past `THREAD_STALE`, which takes it out of the
+ * narrator's prompt — and nothing took it any further. So it sat in the table being posed to the
+ * review, which could only ever answer "still open" about a stake the excerpt no longer mentions:
+ * `review:kept` 53 against `review:settled` 1 in the live My Hero Academia RP, whose three threads
+ * were stale at 26, 31 and 35 turns with none of them rendered anywhere. `reviewBlock` now asks a
+ * stale line whether it is still a stake at all; this is what happens when nothing ever answers.
+ *
+ * `pruneEntities` has done exactly this for people since Phase C, and its reasoning transfers
+ * whole: "Soft-hiding is the right default while an entity might come back … but a table that only
+ * ever grows eventually dominates the metadata blob. Deletion is at double the hide threshold, so
+ * anything the panel could still show survives." Same threshold rule, same return-don't-delete
+ * contract — the caller demotes each row to the cold store ([EVICT]), so a stake the story left
+ * behind is recallable the moment it returns.
+ *
+ * A DIAL is never shed for going unmentioned. `threadsByKind` filters only dial-less threads by
+ * staleness, because a countdown is not stale for being quiet — it is the thing that goes on
+ * happening while nobody is looking — and pruning one would delete the pressure this table exists
+ * to keep.
+ *
+ * @param {Map<string, object>} table Thread table, mutated.
+ * @param {number} turn Current turn.
+ * @returns {Array<{key: string, row: object}>} The rows that gave up their slots.
+ */
+export function pruneThreads(table, turn = 0) {
+    const dropped = [];
+    for (const [key, value] of table_entries(table)) {
+        if (hasDial(value) || (turn - (value?.turn ?? 0)) <= THREAD_STALE * 2) {
+            continue;
+        }
+        dropped.push({ key, row: value });
+        table.delete(key);
+    }
+    return dropped;
+}
+
+/**
  * Threads that are still live, in the order the reader should meet them.
  * @param {Map<string, object>} table Thread table.
  * @param {number} turn Current turn.

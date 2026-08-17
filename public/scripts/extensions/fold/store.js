@@ -21,7 +21,25 @@ export const FOLD_SCHEMA_VERSION = 2;
 /** Hard ceiling on the serialized fold blob. Past this, pruners run until it fits. */
 export const MAX_FOLD_BYTES = 128 * 1024;
 
-/** @type {Array<(overBy: number) => void>} */
+/**
+ * What a pruner costs the player, low to high. The budget loop runs them in this order and stops as
+ * soon as the blob fits, so the cheapest thing to lose is always the first thing lost.
+ *
+ * ── Order was import order, and that cost campaign memory to save diagnostics ──
+ *
+ * `log.js` has always said "a debug surface must yield before the state it debugs does", and nothing
+ * implemented it: `runBudgetPasses` called every registered pruner on every over-budget pass, so the
+ * chronicle shed events in the same pass the log shed entries, whether or not the log alone would
+ * have been enough. Measured on the live chats, that was not a marginal difference — the diagnostics
+ * log was 35 KiB of Wuxia's 117 KiB blob (30%) and 29 KiB of Time Stop's 73 KiB (40%). Shedding it
+ * first is enough on its own to keep both under budget, which means every chronicle eviction those
+ * chats have taken was avoidable.
+ */
+export const PRUNE_DIAGNOSTICS = 10;
+export const PRUNE_ARCHIVE = 50;
+export const PRUNE_MEMORY = 100;
+
+/** @type {Array<{run: (overBy: number) => void, order: number}>} */
 const pruners = [];
 
 /** Fold blobs this session has already run the migration over. See `getFold`. */
@@ -30,10 +48,14 @@ const migrated = new WeakSet();
 /**
  * Register a pruner, called when the fold blob exceeds its budget. Pruners should remove the
  * least valuable entries they own and commit the result.
+ *
  * @param {(overBy: number) => void} pruner Called with how many bytes over budget we are.
+ * @param {number} [order] What losing this costs the player; lower runs first. Defaults to
+ *   `PRUNE_MEMORY`, so an unclassified pruner is treated as expensive rather than cheap.
  */
-export function registerPruner(pruner) {
-    pruners.push(pruner);
+export function registerPruner(pruner, order = PRUNE_MEMORY) {
+    pruners.push({ run: pruner, order });
+    pruners.sort((a, b) => a.order - b.order);
 }
 
 /**
@@ -235,17 +257,26 @@ export function enforceBudget() {
 function runBudgetPasses() {
     let size = foldByteSize();
     for (let pass = 0; pass < 4 && size > MAX_FOLD_BYTES && pruners.length; pass++) {
-        const overBy = size - MAX_FOLD_BYTES;
+        const before = size;
+        // Cheapest first, and STOP as soon as it fits. The inner re-measure is the whole repair:
+        // without it every pruner fired on every over-budget pass, so a blob that the diagnostics
+        // log alone would have rescued lost chronicle events too — permanently, since a demoted
+        // event keeps its summary and loses its delta.
         for (const pruner of pruners) {
+            if (size <= MAX_FOLD_BYTES) {
+                break;
+            }
             try {
-                pruner(overBy);
+                pruner.run(size - MAX_FOLD_BYTES);
             } catch (error) {
                 console.error('[fold] pruner failed', error);
             }
+            size = foldByteSize();
         }
-        const next = foldByteSize();
-        if (next >= size) break;
-        size = next;
+        // No pruner in a whole pass could shed anything, so another pass cannot either.
+        if (size >= before) {
+            break;
+        }
     }
     return size;
 }

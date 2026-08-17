@@ -22,7 +22,7 @@
  * any hot cap, so a cold store that truly outgrows the blob yields before the hot state does.
  */
 
-import { registerPruner } from './store.js';
+import { PRUNE_ARCHIVE, registerPruner } from './store.js';
 import { loadTable, commit, foldByteSize } from './store.js';
 import { table_entries } from './lib/hash.js';
 
@@ -226,4 +226,4 @@ registerPruner((overBy) => {
         commit(COLD_PATH, table);
         console.debug(`[fold] cold store shed ${dropped} old row(s) to fit the metadata budget`);
     }
-});
+}, PRUNE_ARCHIVE);

@@ -6,6 +6,7 @@ import process from 'node:process';
 import express from 'express';
 import sanitize from 'sanitize-filename';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
+import { inlineForExport } from './fold-ledger.js';
 import _ from 'lodash';
 
 import validateAvatarUrlMiddleware from '../middleware/validateFileName.js';
@@ -625,9 +626,14 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
         if (request.body.format === 'jsonl') {
             try {
                 const rawFile = fs.readFileSync(filename, 'utf8');
+                // fold keeps the chronicle on disk and treats the copy in chat_metadata as a cache
+                // the budget pruner may shed, so an exported chat would otherwise carry only
+                // whatever memory survived pruning. Inlining makes the file self-contained; it is a
+                // no-op for any chat fold has never touched.
+                const enriched = await inlineForExport(request.user.directories, rawFile);
                 const successMessage = {
                     message: `Chat saved to ${exportfilename}`,
-                    result: rawFile,
+                    result: enriched,
                 };
 
                 console.info(`Chat exported as ${exportfilename}`);

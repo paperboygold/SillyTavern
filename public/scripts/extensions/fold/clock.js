@@ -411,18 +411,36 @@ export function advanceSceneClock(current, { days = 0, minutes = 0, phase = '', 
 
     let day = (current?.day ?? 0);
     let minuteOfDay;
+    // How many days the SPAN itself rolled, kept apart from `day` so `dateChanged` below can tell
+    // whether anything already accounted for the boundary.
+    let rolled;
     if (face !== null) {
         // The probe read the clock directly — that is the face. The elapsed still rolls the day.
-        day += spanDays;
+        rolled = spanDays;
         minuteOfDay = face;
     } else {
         // A duration: add its sub-day minutes to the running face, rolling the day on overflow.
         const total = (current?.minutes ?? 0) + spanMinutes;
-        day += spanDays + Math.floor(total / DAY);
+        rolled = spanDays + Math.floor(total / DAY);
         minuteOfDay = total % DAY;
     }
+    day += rolled;
 
-    if (dateChanged) {
+    // ── `dateChanged` is the FALLBACK, which is what this function's docblock always said ──
+    //
+    // "The correct reading is complementary, not additive … `dateChanged` rolls the day EVEN WHEN
+    // no duration or marker said so." It was being added unconditionally instead, on top of
+    // `spanDays` and on top of the overflow — so a model narrating one night as all three true
+    // things at once ("the alarm cuts through the dark at 6:30 AM" is a new day, a day's span, and
+    // a clock face) rolled the day twice.
+    //
+    // Measured in the live My Hero Academia RP: three narrative days, two night transitions, and a
+    // panel reading DAY 5. Two nights at +2 apiece is exactly the +4 that produces it.
+    //
+    // A named day is still the one unambiguous signal when nothing else says so — an excerpt that
+    // opens "Tuesday" after a Monday rolls the day with no duration reported anywhere, which is the
+    // case this branch exists for and the only one it now covers.
+    if (dateChanged && !rolled) {
         day += 1;
     }
 

@@ -20,16 +20,23 @@
 
 import { lookup, table_entries } from './lib/hash.js';
 import {
+    ACTOR_KINDS,
+    DISPOSITIONS,
     ENTITY_STALE,
+    FACTION,
     LEAD,
+    MAX_DRIVE,
     MAX_THREAT,
     PERSON,
+    actorKind,
     castAt,
     foldEntities,
     foldEntity,
     mergeEntities,
     normalizeEntityName,
     renderEntities,
+    contestedAliases,
+    dispositionRank,
     resolveEntity,
     splitEntityKey,
     threatOf,
@@ -37,7 +44,7 @@ import {
 // The join between the cast table and the marks table happens here and only here: `state-table.js`
 // imports `entity-table.js` (to normalise owner names), so the reverse import would be a cycle, and
 // this file already depends on both halves.
-import { markPhrases } from './state-table.js';
+import { itemPhrases, markPhrases } from './state-table.js';
 import { identityPairs } from './thread-table.js';
 import { noteCoverage } from './coverage.js';
 import * as cold from './cold-store.js';
@@ -107,9 +114,50 @@ export function schema() {
                     type: 'object',
                     properties: {
                         name: { type: 'string', description: 'The person\'s name, or a short description if unnamed.' },
+                        // ── An organisation that acts is an actor, and had no way to say so ──
+                        //
+                        // fold has held a `faction` kind for as long as it has held `person`, and
+                        // nothing ever wrote one because this field did not exist and the fold
+                        // hardcoded `person` on the way in. Measured in a completed Xianxia
+                        // campaign: 26 cast rows, all `person`, while three trading houses and a
+                        // cultivator alliance ran the entire mid-game economy — present in the
+                        // record only as substrings inside some shopkeeper's `wants`.
+                        //
+                        // An enum, because the alternative is fold deciding "万通商行 sounds like a
+                        // company", which is a judgement about a name in one language. The model
+                        // classifies; `actorKind` checks the answer is a vocabulary member.
+                        // No empty member: Google's schema converter rejects one outright
+                        // (`src/prompt-converters.js` `toGeminiSchema`), and there is no third
+                        // answer worth having — an unsure model should say `person`.
+                        kind: {
+                            type: 'string',
+                            enum: [PERSON, FACTION],
+                            description: `"${FACTION}" for a group that acts as one — a guild, sect, company, crew, house, agency. "${PERSON}" for an individual, including a creature or a named beast. When unsure, say "${PERSON}".`,
+                        },
                         aka: {
                             type: 'string',
-                            description: 'Every OTHER name or title for this same person, comma-separated. Empty if only ever called one thing. Never repeat the name itself.',
+                            // ── This asked about the EXCERPT, and the excerpt is the wrong scope ──
+                            //
+                            // Cast aliasing's commonest shape by far is a person described before
+                            // they are named: "the tiefling fighter" for ten turns, then "Kaelira".
+                            // The two share no tokens, so `nearIdentity` is structurally blind to
+                            // the pair and can never raise it — verified against the shipped
+                            // detector on all three pairs in a live chat.
+                            //
+                            // The model was not blind. Measured on that chat's trace: at mid 0 it
+                            // reported `tiefling fighter` with `aka: "the fighter, the tiefling,
+                            // the first woman"` — using this field exactly as written. At mid 4 it
+                            // reported `Kaelira` with `aka: ""`, while the pinned People list in
+                            // that same prompt still read "tiefling fighter (…)". It answered the
+                            // question asked: within that excerpt she IS only called one thing.
+                            // The result was three people stored twice, 55 people reported across
+                            // 19 passes and 3 non-empty `aka` values, all from the first pass.
+                            //
+                            // So the field now points at fold's own list, the way the delta
+                            // schema's `same_as` points at the State block. That is the difference
+                            // between "what else did this excerpt call her" and "who is this, of
+                            // the people you already hold" — and only the second one merges.
+                            description: 'Other names for this same person, comma-separated. TWO kinds, and the second matters most: (1) other names or titles the excerpt itself uses; (2) the EXACT name this person is listed under in the people list above, when the excerpt has revealed who a previously-described person is — a name learned for someone recorded only by description ("the tall guard" turning out to be "Marek") goes here as "the tall guard". Empty only when neither applies. Never repeat the name itself.',
                         },
                         place: {
                             type: 'string',
@@ -141,16 +189,47 @@ export function schema() {
                             enum: ['present', 'remote', 'unreachable', 'gone'],
                             description: 'present if in the scene, remote if contactable at a distance, unreachable if not, gone ONLY if they left the story for good. Someone who walked into another room is still present.',
                         },
+                        // ── The agenda's LENGTH, asked once, so it can have a position at all ──
+                        //
+                        // `wants` says what they are after and is overwritten every sighting;
+                        // this says how many steps it takes, and once it is non-zero the actor
+                        // appears on the off-screen turn's list and can advance while the camera is
+                        // elsewhere. 0 for the overwhelming majority — a shopkeeper minding a
+                        // counter is not pursuing anything the story will track across a campaign.
+                        //
+                        // Asked here rather than on the world probe because this is a fact about
+                        // WHO SOMEBODY IS, established when they are first understood to have an
+                        // ambition. The world probe only moves the position; it never invents the
+                        // agenda, the same division the delta schema keeps between establishing a
+                        // gauge's ceiling and moving its current value.
+                        drive_size: {
+                            type: 'integer',
+                            description: `How many steps their standing ambition takes to achieve, 2 to ${MAX_DRIVE}. 0 for anyone with no long-running ambition — most people, and every shopkeeper, guard and passer-by. Set this only for an actor whose goal the story will follow across scenes: a rival cultivator seeking a breakthrough, a trading house cornering a market, a sect pressing a claim. Send the same number every time once set.`,
+                        },
                         threat: {
                             type: 'integer',
                             description: `How dangerous RIGHT NOW, 1 to ${MAX_THREAT}, while actively hostile. 0 for anyone who is not currently a threat (nearly everyone), and 0 again the moment a fight ends.`,
                         },
                         facts: {
                             type: 'string',
-                            description: 'Standing truths that do not change with the scene — a rank, a bloodline: "E-rank hunter". Never mood, location or activity.',
+                            // ── Appearance lives here, and it was never asked for ──
+                            //
+                            // The field's own worked example has always been `facts: "burly dwarf,
+                            // singed apron"` — half of which is a physical description — but the
+                            // instruction only named a rank and a bloodline, so models recorded
+                            // ranks and bloodlines. The consequence is the one the owner reports:
+                            // the narrator forgets what people look like and re-invents them,
+                            // because nothing in the record ever said.
+                            //
+                            // `facts` is the right home rather than a new field: it is already
+                            // rendered on every present cast line (`renderEntities`), already
+                            // merged field-wise so a turn that says only where someone is standing
+                            // cannot erase it, and already bounded. Appearance is exactly what the
+                            // field means — a standing truth that does not change with the scene.
+                            description: 'Standing truths that do not change with the scene. Include what they LOOK like the first time they are described — build, hair, face, dress, anything that would let someone pick them out of a crowd — and any rank, role or bloodline: "shaved head, broad through the chest, second-year". A few words each, not a paragraph. Never mood, location or activity.',
                         },
                     },
-                    required: ['name', 'aka', 'place', 'detail', 'reach', 'feels', 'wants', 'knows', 'status', 'threat', 'facts'],
+                    required: ['name', 'kind', 'aka', 'place', 'detail', 'reach', 'feels', 'wants', 'knows', 'status', 'drive_size', 'threat', 'facts'],
                     additionalProperties: false,
                 },
             },
@@ -242,9 +321,19 @@ export function applyExtraction(fragment, { windowText = '', turn: at = turn(), 
         }
     }
 
+    // `kind` LAST and resolved, not spread-over. This line used to end `{ ...entry, kind: PERSON }`,
+    // which overwrote whatever the probe answered — so the faction kind, complete on the read side
+    // since it was declared, could never be written. `actorKind` checks the answer against
+    // `ACTOR_KINDS` and falls back to `PERSON`, so a mis-tagged actor is still an actor.
     const people = foldEntities(
         table,
-        (fragment?.people ?? []).map(entry => ({ ...entry, kind: PERSON })),
+        (fragment?.people ?? []).map(entry => ({
+            ...entry,
+            kind: actorKind(entry?.kind),
+            // `drive_size` on the wire, `driveSize` on the row. Only threaded when the probe sent a
+            // usable number, so `foldEntity` can omit the field and a quiet sighting stays quiet.
+            ...(Number.isFinite(entry?.drive_size) ? { driveSize: entry.drive_size } : {}),
+        })),
         { windowText, turn: at, mid, mentioned });
 
     // ── Stale entities demote, they do not vanish ──
@@ -254,7 +343,9 @@ export function applyExtraction(fragment, { windowText = '', turn: at = turn(), 
     // [EVICT]: selection cannot bound a store, so eviction is demotion).
     const shed = prune(table, at);
     for (const dropped of shed) {
-        const kind = splitEntityKey(dropped.key).kind === PERSON ? 'person' : 'thread';
+        // Any ACTOR kind archives to the cast bucket, not just `person`. Keyed off `ACTOR_KINDS`
+        // rather than a PERSON comparison, or a shed faction would be filed away as a thread.
+        const kind = ACTOR_KINDS.includes(splitEntityKey(dropped.key).kind) ? 'person' : 'thread';
         cold.demote({ kind, key: dropped.key, row: dropped.row, at });
         observe.noteCap(kind === 'person' ? 'cast-archived' : 'threads-archived');
     }
@@ -284,9 +375,30 @@ export function applyExtraction(fragment, { windowText = '', turn: at = turn(), 
  * @returns {Array<{a: string, b: string, why: string}>} Pairs, by table key.
  */
 export function questions() {
-    return identityPairs(table_entries(load())
-        .filter(([key]) => splitEntityKey(key).kind === PERSON)
-        .map(([key, row]) => ({ key, name: row?.name ?? '' })));
+    const table = load();
+    const people = table_entries(table).filter(([key]) => splitEntityKey(key).kind === PERSON);
+    const pairs = identityPairs(people.map(([key, row]) => ({ key, name: row?.name ?? '' })));
+
+    // ── A contested alias is a stronger signal than a token subset, and it was invisible ──
+    //
+    // `identityPairs` compares NAMES by token containment, so `broker` ⊂ `scarred broker` raises and
+    // `Grimble` against `Armorer` never can. But those two both answer to "the dwarf" — the model
+    // itself put the word on both rows — and `canonicalKey` now refuses to resolve it either way
+    // rather than coin-flip. Refusing silently would leave the ambiguity standing forever, so the
+    // pair is asked. Measured: three such collisions across the live chats, none of which any
+    // name-based test could ever have raised.
+    const seen = new Set(pairs.map(pair => `${pair.a}${pair.b}`));
+    for (const [alias, keys] of contestedAliases(table, PERSON)) {
+        for (let i = 0; i < keys.length; i++) {
+            for (let j = i + 1; j < keys.length; j++) {
+                const [a, b] = [keys[i], keys[j]].sort();
+                if (seen.has(`${a}${b}`)) continue;
+                seen.add(`${a}${b}`);
+                pairs.push({ a, b, why: `both answer to "${alias}"` });
+            }
+        }
+    }
+    return pairs;
 }
 
 /**
@@ -342,11 +454,12 @@ function prune(table, at) {
  * Render entities into the injected block.
  * @returns {string} Lines, or ''.
  */
-export function render({ exclude = '', at = '', marks = null } = {}) {
+export function render({ exclude = '', at = '', marks = null, inv = null } = {}) {
     return renderEntities(load(), turn(), {
         exclude,
         at,
         hurt: marks ? name => markPhrases(marks, name) : null,
+        holds: inv ? name => itemPhrases(inv, name) : null,
     });
 }
 
@@ -402,6 +515,81 @@ export function setThreat(key, threat, at = turn()) {
     table.set(key, { ...row, threat: value, turn: at });
     commit(ENTITIES_PATH, table);
     return true;
+}
+
+/**
+ * Advance an actor's standing agenda, because time passed and somebody used it.
+ *
+ * Writes the whole record for `setThreat`'s reason: `drive` is a number, and `merge_entity` treats
+ * only `''`/null/undefined as silence, so a field-wise write of `0` would be indistinguishable from
+ * a sighting that said nothing about it. The full write also stamps `turn`, which is what
+ * `worldAsks` orders its queue by — an agenda that just moved goes to the back.
+ *
+ * Clamped at the size: a drive stops at full and does not wrap. What a FULL drive means is the
+ * caller's business — `world.js` records it as an event the narrator has to reckon with — because
+ * "the guild finished what it was doing" is a story beat, not a table operation.
+ *
+ * @param {string} key The cast row's key.
+ * @param {number} steps How far to advance. Clamped to the row's remaining room.
+ * @param {number} [at] The turn.
+ * @returns {{filled: number, size: number, full: boolean}|null} The new position, or null if the
+ *   row is missing, has no agenda, or did not move.
+ */
+export function advanceDrive(key, steps, at = turn()) {
+    const table = load();
+    const row = lookup(table, key, null);
+    const size = Number(row?.driveSize) || 0;
+    const move = Math.trunc(Number(steps) || 0);
+    if (!row || size <= 0 || move <= 0) {
+        return null;
+    }
+    const before = Math.max(0, Number(row.drive) || 0);
+    const filled = Math.min(size, before + move);
+    if (filled === before) {
+        return null;
+    }
+    table.set(key, { ...row, drive: filled, turn: at });
+    commit(ENTITIES_PATH, table);
+    return { filled, size, full: filled >= size };
+}
+
+/**
+ * Move somebody's disposition by one step, because of something that just happened.
+ *
+ * ── A social cost has to land on the person, or it did not happen ──
+ *
+ * A verdict against a named person could already cost "someone's trust" — in the directive, as
+ * prose, for the narrator to write and the next extraction to maybe re-read. That is a cost that
+ * evaporates: after twenty verdicts the trust-dings are wallpaper, and nothing in the record ever
+ * moved, so the next verdict against the same person starts from the same disposition as the first.
+ *
+ * Stepping the scale here makes it stick. It is one step, never more, and it is arithmetic over
+ * `DISPOSITIONS` — fold's own enum, an index moved by one — so nothing here reads narrative text.
+ * WHY it moved is prose and stays the model's job: the trail carries the cause the entity probe
+ * records on the next pass.
+ *
+ * Clamped at both ends: a hostile person cannot become more hostile through a scale that has no
+ * word for it, and the ceiling is `devoted`.
+ *
+ * @param {string} key The cast row's key.
+ * @param {number} steps How far to move, positive or negative. Rounded and clamped to ±1.
+ * @param {number} [at] The turn.
+ * @returns {string} The new disposition, or '' when nothing moved.
+ */
+export function stepFeels(key, steps, at = turn()) {
+    const table = load();
+    const row = lookup(table, key, null);
+    const move = Math.sign(Number(steps) || 0);
+    if (!row || !move || !row.feels) {
+        return '';
+    }
+    const next = DISPOSITIONS[Math.max(0, Math.min(DISPOSITIONS.length - 1, dispositionRank(row.feels) + move))];
+    if (next === row.feels) {
+        return '';
+    }
+    table.set(key, { ...row, feels: next, turn: at });
+    commit(ENTITIES_PATH, table);
+    return next;
 }
 
 /**

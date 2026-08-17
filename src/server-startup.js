@@ -11,6 +11,7 @@ import { router as movingUIRouter } from './endpoints/moving-ui.js';
 import { router as imagesRouter } from './endpoints/images.js';
 import { router as quickRepliesRouter } from './endpoints/quick-replies.js';
 import { router as foldTraceRouter } from './endpoints/fold-trace.js';
+import { router as foldLedgerRouter } from './endpoints/fold-ledger.js';
 import { router as avatarsRouter } from './endpoints/avatars.js';
 import { router as themesRouter } from './endpoints/themes.js';
 import { router as openAiRouter } from './endpoints/openai.js';
@@ -146,6 +147,7 @@ export function setupPrivateEndpoints(app) {
     app.use('/api/images', imagesRouter);
     app.use('/api/quick-replies', quickRepliesRouter);
     app.use('/api/fold-trace', foldTraceRouter);
+    app.use('/api/fold-ledger', foldLedgerRouter);
     app.use('/api/avatars', avatarsRouter);
     app.use('/api/themes', themesRouter);
     app.use('/api/openai', openAiRouter);

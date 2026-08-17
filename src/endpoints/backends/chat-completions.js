@@ -53,6 +53,7 @@ import {
     addReasoningContentToToolCalls,
     cachingSystemPromptForOpenRouter,
     addOpenRouterSignatures,
+    toGeminiSchema,
 } from '../../prompt-converters.js';
 
 import { readSecret, SECRET_KEYS } from '../secrets.js';
@@ -471,7 +472,11 @@ async function sendMakerSuiteRequest(request, response) {
     const isLearnLM = model.includes('learnlm');
 
     const responseMimeType = request.body.responseMimeType ?? (request.body.json_schema ? 'application/json' : undefined);
-    const responseSchema = request.body.responseSchema ?? (request.body.json_schema ? request.body.json_schema.value : undefined);
+    // Converted rather than passed through: a schema written for OpenAI's strict structured output
+    // says "no answer" with an empty enum member, which Google rejects with a 400 that fails the
+    // whole request. See `toGeminiSchema`.
+    const rawResponseSchema = request.body.responseSchema ?? (request.body.json_schema ? request.body.json_schema.value : undefined);
+    const responseSchema = rawResponseSchema ? toGeminiSchema(rawResponseSchema) : rawResponseSchema;
 
     const generationConfig = {
         stopSequences: request.body.stop,

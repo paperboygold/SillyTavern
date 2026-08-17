@@ -20,8 +20,10 @@ import * as chronicle from './chronicle.js';
 import * as clocks from './clocks.js';
 import * as entities from './entities.js';
 import * as observe from './observe.js';
-import { itemKey, MONEY, splitItemKey } from './state-table.js';
-import { DIFFERENT, SAME, describePlan, outstanding, pairKey, planReview } from './review-table.js';
+import { CARRIED, MONEY, splitItemKey } from './state-table.js';
+import { PERSON, resolveEntity } from './entity-table.js';
+import { resolveThread } from './thread-table.js';
+import { DIFFERENT, SAME, describePlan, outstanding, pairKey, planReview, resolveCurrencyKey, suspectedPairs } from './review-table.js';
 import { commit, loadTable, loadValue, commitValue } from './store.js';
 
 /**
@@ -44,6 +46,57 @@ const OWED_PATH = 'state.owed';
 
 /** Migration's own questions, written once by `migrate.js` and consumed here. */
 const MIGRATED_PATH = 'state.migrated';
+
+/**
+ * Pairs the model volunteered, waiting to be asked back.
+ *
+ * `nearIdentity` can only raise a restatement — it is a token-subset test, correctly so, and
+ * measured at ZERO pairs over 231 on the live New Eldoria table. The model reads the same list and
+ * can say "these two are one stake" about names sharing no tokens; `same_thread`/`same_person`
+ * collect that. It lands HERE rather than in `plan.merges` because a merge rewrites a table and a
+ * wrong one cannot be undone by silence (`entities.js`), so a volunteered pair is asked back with
+ * an id and merged only once confirmed.
+ *
+ * `outstanding` already drops anything `state.answers` has settled, so nothing here needs clearing:
+ * a pair answered either way stops being surfaced on the next pass and ages out under the bound.
+ */
+const SUSPECTED_PATH = 'state.suspected';
+
+/**
+ * How many volunteered pairs are kept.
+ *
+ * The Graph face, bounded, oldest dropped first — the same shape and the same reasoning as
+ * `MAX_TRAIL` and `MAX_SHADOW`. A pair that is never confirmed is a pair the model stopped
+ * believing in; holding a hundred of them would spend the review's budget on suspicions instead of
+ * on the stakes. Twelve is the review's own question budget twice over.
+ */
+export const MAX_SUSPECTED = 24;
+
+/** @returns {Map<string, object>} pair key -> `{of, a, b, at}`. */
+export function suspected() {
+    return loadTable(SUSPECTED_PATH);
+}
+
+/**
+ * Keep the pairs the model volunteered this pass.
+ *
+ * Keyed by the pair itself, so a model that names the same two lines every turn occupies one slot
+ * rather than flushing the table — `noteShadow`'s rule, for the same reason.
+ *
+ * @param {Array<{of: string, a: string, b: string}>} pairs From `planReview`'s `suspected`.
+ */
+function noteSuspected(pairs) {
+    const list = (Array.isArray(pairs) ? pairs : []).filter(pair => pair?.a && pair?.b);
+    if (!list.length) {
+        return;
+    }
+    const table = suspected();
+    for (const pair of list) {
+        insert_with(table, merge_b, pairKey(pair.a, pair.b), { of: pair.of, a: pair.a, b: pair.b, at: Date.now() });
+    }
+    const kept = [...table_entries(table)].slice(-MAX_SUSPECTED);
+    commit(SUSPECTED_PATH, new Map(kept));
+}
 
 /** @returns {Map<string, object>} pair key -> `{answer, at}`. */
 export function answers() {
@@ -141,6 +194,13 @@ export function pending({ itemQuestions = [] } = {}) {
         // `same` it names the split; answered `different` it is a minority label, which is the class
         // the resolver's witness set has three of in seventy-six.
         ...itemQuestions.map(pair => ({ ...pair, of: 'item' })),
+        // ── The pairs the model volunteered — the fifth source, and the only one that can raise
+        // a pair sharing no tokens. Resolution is pure (`suspectedPairs`); the tables are ours.
+        ...suspectedPairs(suspected(), {
+            resolve: (of, name) => (of === 'cast'
+                ? resolveEntity(cast, PERSON, name)?.key ?? null
+                : resolveThread(threadRows, name)?.key ?? null),
+        }),
         // Migration's questions, including the cross-table one the §2 detector provably cannot
         // reach — `{hunter, residency, twenty, d-rank, raids}` against `{residency, window, closes}`
         // is neither a subset nor one substitution, because two tables that were never keyed
@@ -211,11 +271,15 @@ function retireMigrated({ pairs = [], threads = [] } = {}) {
  * @param {number} [context.turn] Turn counter.
  * @param {Function|null} [context.validateDelta] `state.validateDelta`, injected — see the header.
  * @param {Function|null} [context.onContest] Called with each lock answer.
+ * @param {Function} [context.ledgerKeys] Returns the inventory keys the ledger holds, for resolving
+ *   a currency name the model reported to the row it names. Injected for the same reason
+ *   `validateDelta` is: the derived ledger lives in `state.js`, which imports THIS module.
  * @returns {object} What was applied.
  */
 export function applyExtraction(fragment, {
     review = new Map(), sources = [], windowText = '', turn = 0, validateDelta = null,
-    onContest = null, onClearMark = null,
+    onContest = null, onClearMark = null, ledgerKeys = () => new Set(), onClassify = null,
+    visible = null,
 } = {}) {
     if (!review.size) {
         // Nothing was asked, so nothing can be answered. Distinguished from "asked and ignored",
@@ -226,7 +290,9 @@ export function applyExtraction(fragment, {
     }
     observe.note('review:asked', review.size);
 
-    const plan = planReview(fragment, review);
+    // `windowText` so every refusal carries the excerpt it was read from, the same diagnostic
+    // the inventory and mark validators have always attached.
+    const plan = planReview(fragment, review, { windowText });
     const threadTable = clocks.load();
     const names = new Map(table_entries(threadTable).map(([key, row]) => [key, row?.name ?? key]));
 
@@ -259,20 +325,19 @@ export function applyExtraction(fragment, {
     let merged = 0;
     const castTable = entities.load();
     for (const merge of plan.merges) {
-        // ── An item `same` is REMEMBERED and not yet applied ──
+        // ── An item `same` is applied by the FOLD, not by a table rewrite ──
         //
         // Cast and thread merges rewrite a stored table. Inventory has none: it is a fold over the
-        // chronicle, so merging two item keys means relabelling the event stream, which is
-        // `KeyResolution.relabel` and wants a persisted crosswalk applied at derive time
-        // (`accum_append` makes that sound, because quantities sum). That is not built.
+        // chronicle, so merging two item keys means relabelling the event stream. `remember` is
+        // therefore the whole of the write — `crosswalk.js` reads `state.answers` on every derive
+        // and relabels the keys as it folds (`KeyResolution.relabel`, sound late because quantities
+        // sum). The next render shows one row.
         //
-        // The answer is still worth having now: `remember` puts it in `state.answers`, which is the
-        // resolver's witness set, so an item verdict trains the thing that will eventually apply it.
-        // Falling through to `clocks.merge` with an inventory key would look up a thread that does
-        // not exist and quietly do nothing, which is the same outcome without the record of why.
+        // Still `continue`, and not because the answer is being deferred: falling through to
+        // `clocks.merge` with an inventory key would look up a thread that does not exist.
         if (merge.of === 'item') {
             remember(merge.a, merge.b, SAME);
-            observe.note('review:item-same-deferred');
+            observe.note('review:item-same');
             continue;
         }
         const done = merge.of === 'cast'
@@ -295,6 +360,17 @@ export function applyExtraction(fragment, {
         remember(pair.a, pair.b, DIFFERENT);
         observe.note('review:different');
     }
+    // Volunteered pairs, kept for the next pass to ask with an id. Counted, because a field that
+    // never fires and a field that fires and resolves to nothing are the same silence otherwise.
+    if (plan.suspected?.length) {
+        noteSuspected(plan.suspected);
+        observe.note('review:suspected', plan.suspected.length);
+    }
+    // What each card-invented status field is. Injected like `validateDelta`, for the same reason:
+    // the sheet lives in `state.js`, which imports THIS module.
+    if (plan.sheet?.length && onClassify) {
+        observe.note('review:classified', onClassify(plan.sheet));
+    }
     retireMigrated({
         pairs: [...plan.merges, ...plan.different],
         threads: plan.polarity.map(flag => flag.key),
@@ -308,22 +384,40 @@ export function applyExtraction(fragment, {
     //
     // `plan.currency` is the model's answer to the one identity question fold cannot raise for
     // itself: it read the pinned Money block and named two lines as one currency. Recorded under
-    // the same keys the ledger uses, so a crosswalk can apply it once one exists, and counted so
+    // the same keys the ledger uses, which is what the crosswalk relabels on, and counted so
     // `/fold-calibrate` can say whether the field ever fires.
     //
-    // Deliberately NOT applied: see the item branch of the merge loop above. A verdict with nowhere
-    // to go is still a label, and this one costs no question slot at all — unlike every other
-    // identity answer, it was volunteered rather than asked.
+    // This one costs no question slot at all — unlike every other identity answer, it was
+    // volunteered rather than asked, so it is the cheapest label fold receives.
+    //
+    // ── The name has to be resolved against the ledger, not assumed to be at `money` ──
+    //
+    // This loop used to key both sides `itemKey(name, MONEY)`, on the reasoning that the Money block
+    // only renders money-place rows so both names must be money-place. Measured on a live replay,
+    // that reasoning is wrong twice over:
+    //
+    //   · The model answered `{"a":"silver wen","b":"silver"}` on a pass whose prompt had NO Money
+    //     line at all — only `Carrying: dagger, bow`. It read the story, not the block. The answer
+    //     was correct, and the assumption that produced the key was not.
+    //   · Wuxia's real split holds `silver wen` at `carried` and `silver` at `money`. Forcing both to
+    //     `money` produced `money␀silver wen`, a key the ledger has never held, so the crosswalk's
+    //     `known` filter dropped the correct answer on the floor — silently, which is the worst way
+    //     to be wrong.
+    //
+    // So the name is looked up in fold's own key space instead: exact equality against the normalized
+    // item names the ledger actually holds. That is STRUCTURE — no tokenizing, no substring, no
+    // morphology — and it means the same thing in every script. `money` wins a tie because a currency
+    // belongs there, and a name held at two other places at once is ambiguous and refused outright:
+    // an unresolvable answer must not become a confident merge.
+    const keys = ledgerKeys();
     for (const pair of plan.currency ?? []) {
-        // The block renders "20 silver wen", so the model quoting it "exactly as written" hands
-        // back the amount too — measured on the first run, where a one-entry block produced the
-        // self-pair `20 silver wen` / `silver wen`. Stripping a leading count is number parsing,
-        // which is STRUCTURE and means the same thing in every language; the instruction now asks
-        // for the name alone as well, and this is the belt to that brace.
-        const bare = (name) => String(name ?? '').trim().replace(/^[0-9.,\s]+/, '').trim().toLowerCase();
-        const a = itemKey(bare(pair.a), MONEY);
-        const b = itemKey(bare(pair.b), MONEY);
-        if (a === b || !bare(pair.a) || !bare(pair.b)) {
+        const a = resolveCurrencyKey(pair.a, keys);
+        const b = resolveCurrencyKey(pair.b, keys);
+        if (!a || !b || a === b) {
+            // Counted, because a field that fires and resolves to nothing is indistinguishable from
+            // a field that never fires, and the difference decides whether the instruction or the
+            // lookup is at fault.
+            observe.note('review:currency-unresolved');
             continue;
         }
         remember(a, b, SAME);
@@ -349,6 +443,40 @@ export function applyExtraction(fragment, {
     // the closures above. Swipe that message and the healing un-happens with the turn that described
     // it — the same property `overlayClosures` buys threads, with no overlay needed. The writer is
     // injected for the header's reason: `state.js` owns `validateDelta` and imports this module.
+    // ── A disposal is an EVENT, for the same reason clearing a mark is ──
+    //
+    // Inventory derives from the ledger, so the review removes an item by appending a negative
+    // delta anchored on the message that showed it going — not by editing a table. Swipe that turn
+    // and the character has the thing again, which is the property `deriveState` buys everywhere
+    // else and the reason nothing here writes state directly.
+    //
+    // The Azure Dragon sword is the case: taken at mid 88, laid down with the disciple at mid 92,
+    // and on the ledger ever since because no mechanism existed to take it off.
+    let dropped = 0;
+    for (const item of plan.dropped ?? []) {
+        const { place, name } = splitItemKey(item.key);
+        const proposed = { inv: [{ item: name, dq: -Math.abs(item.qty ?? 1), ...(place === CARRIED ? {} : { at: place }) }] };
+        // The gate text carries the item and the note, for `applyMoney`'s reason: the mention gate
+        // asks whether the excerpt names the thing, and a review answer IS the naming.
+        const gate = `${windowText}\n${name} ${item.note ?? ''}`;
+        const outcome = validateDelta ? validateDelta(proposed, { windowText: gate }) : { delta: proposed, rejected: [] };
+        if (outcome.rejected?.length) {
+            observe.noteRejections(outcome.rejected);
+        }
+        if (!outcome.delta) {
+            continue;
+        }
+        chronicle.recordReviewEvent({
+            summary: `No longer carrying ${name}${item.note ? ` (${item.note})` : ''}`.slice(0, 200),
+            keywords: [name],
+            delta: outcome.delta,
+            srcKey: anchor?.key,
+            mid: anchor?.mid,
+        });
+        dropped++;
+        observe.note('review:dropped');
+    }
+
     let cleared = 0;
     for (const mark of plan.cleared) {
         if (onClearMark?.({ ...mark, srcKey: anchor?.key, mid: anchor?.mid })) {
@@ -373,7 +501,7 @@ export function applyExtraction(fragment, {
         onContest?.(contest.field, contest.value);
     }
 
-    const paid = applyMoney(plan.money, { validateDelta, windowText, anchor });
+    const paid = applyMoney(plan.money, { validateDelta, windowText, anchor, visible });
 
     if (plan.rejected.length) {
         observe.noteRejections(plan.rejected);
@@ -386,6 +514,7 @@ export function applyExtraction(fragment, {
         kept: plan.kept,
         merged,
         placed: plan.places.length,
+        dropped,
         cleared,
         disarmed,
         paid,
@@ -406,14 +535,32 @@ export function applyExtraction(fragment, {
  * the model quoting a price it just read. Without it the gate would refuse the currency's own name
  * whenever the excerpt wrote "120k" and not "won".
  *
+ * ── The debit has to face the already-recorded gate, and it could not ──
+ *
+ * `validateInventory` refuses a re-tell by finding the SAME delta already on the contributor trail
+ * at a mid the model can still see. That last clause is the RC1 bound, and it is expressed as a
+ * `visible` set of mids — so a caller that passes none refuses nothing, ever, however plainly the
+ * ledger already carries the payment.
+ *
+ * This was that caller. MEASURED in the live Isekai chat: mid 42 recorded `gold -1` from "Ike
+ * Kōtoku gives Brenn a gold coin for a bottle of cheap red wine", and three messages later the
+ * `paid?` question was answered "1 gold" and billed it AGAIN — "Paid 1 gold for gold", at mid 45.
+ * One coin, two debits, 15 to 13 on a purchase of one. The trail held the matching -1 the whole
+ * time and the gate could not look at it, because `visible` was null and every candidate failed the
+ * in-sight test.
+ *
+ * It is threaded from the pass context, which has carried it to every probe since the window began
+ * reporting `seen` (`extract.js`) — the review simply never read it.
+ *
  * @param {object|null} money The plan's money answer.
  * @param {object} params Parameters.
  * @param {Function|null} params.validateDelta The validator.
  * @param {string} params.windowText The new half of the window.
  * @param {object} [params.anchor] The newest live source, for liveness.
+ * @param {Set<number>|null} [params.visible] Every mid this pass displayed, for the re-tell gate.
  * @returns {number} The amount debited, 0 when nothing was.
  */
-function applyMoney(money, { validateDelta, windowText, anchor }) {
+function applyMoney(money, { validateDelta, windowText, anchor, visible = null }) {
     if (!money) {
         return 0;
     }
@@ -430,7 +577,7 @@ function applyMoney(money, { validateDelta, windowText, anchor }) {
     const proposed = { inv: [{ item: currency, dq: -Math.abs(money.amount), at: MONEY }] };
     const gate = `${windowText}\n${currency} ${money.amount} ${money.note ?? ''}`;
     const outcome = validateDelta
-        ? validateDelta(proposed, { windowText: gate })
+        ? validateDelta(proposed, { windowText: gate, visible })
         : { delta: proposed, rejected: [] };
     if (outcome.rejected?.length) {
         observe.noteRejections(outcome.rejected);

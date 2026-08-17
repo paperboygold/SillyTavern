@@ -161,10 +161,13 @@ describe('rankEvents', () => {
     ]);
     const kwIndex = buildKeywordIndex(events);
 
-    test('ranks by keyword overlap', () => {
+    test('ranks by relevance, and the ORDER is the contract', () => {
+        // `overlap` used to be a raw count of matched tokens and this asserted it was exactly 2.
+        // It is now a BM25 score, so its magnitude carries no promise — what a caller may rely on
+        // is which event comes first and which are present at all.
         const ranked = rankEvents({ events, kwIndex, queryText: 'what happened with the dragon battle?' });
         expect(ranked[0].key).toBe('a');
-        expect(ranked[0].overlap).toBe(2);
+        expect(ranked[0].score).toBeGreaterThan(0);
         expect(ranked.map(r => r.key)).toContain('c');
         expect(ranked.map(r => r.key)).not.toContain('b');
     });
@@ -346,5 +349,63 @@ describe('replacing an event does not retract its delta', () => {
         const first = applyEvents({ events: new Map(), incoming: [{ key: 'k', event: bare }] });
         const again = applyEvents({ events: first.events, incoming: [{ key: 'k', event: bare }] });
         expect(again.events.get('k').d).toBeUndefined();
+    });
+});
+
+describe('rankEvents — relevance, not raw overlap', () => {
+    const ev = (s, kw, t, src = 'llm') => ({ s, kw, t, src });
+    const index = (events) => ({ events, kwIndex: buildKeywordIndex(events) });
+
+    test('a name with diacritics survives tokenization', () => {
+        // `Chí Guāngdé` is the protagonist of a 277-message campaign and tokenized to ["ngd"] —
+        // the third most common term in that chat was a meaningless 3-letter fragment. A Cyrillic
+        // or Hangul name produced [] outright: zero retrievable memory.
+        expect(tokenize('Chí Guāngdé')).toContain('guāngdé');
+        expect(tokenize('серебряных монет').length).toBeGreaterThan(0);
+        expect(tokenize('은화 스무닢').length).toBeGreaterThan(0);
+        expect(tokenize('Ike Kōtoku')).toContain('kōtoku');
+    });
+
+    test('ASCII tokenization is unchanged, so nothing already working regresses', () => {
+        expect(tokenize('the bus driver')).toEqual(['the', 'bus', 'driver']);
+        expect(tokenize('Jin-Woo\'s raid')).toEqual(['jin', 'woo\'s', 'raid']);
+    });
+
+    test('a keyword-dense closure does not outrank the scene it closed', () => {
+        // The measured failure: `Confirmed one thread: X = ...` events repeat the thread name AND
+        // its resolution, so they match more query tokens than the scene itself. Star Wars had all
+        // five top slots taken by them.
+        const events = new Map([
+            ['a', ev('Sol paid the smith for a spear', ['sol', 'smith', 'spear'], 1)],
+            ['b', ev('Confirmed one thread: the spear = Sol needed a spear from the smith',
+                ['sol', 'smith', 'spear', 'thread', 'confirmed', 'settled'], 2, 'review')],
+        ]);
+        const top = rankEvents({ ...index(events), queryText: 'sol spear smith', topK: 2 });
+        expect(top[0].event.src).toBe('llm');
+    });
+
+    test('a rare term outweighs a common one', () => {
+        // "sol" appears in 61 of 107 events in a live chat and discriminates nothing; the term that
+        // names the actual subject appears twice and decides everything.
+        const events = new Map([
+            ['a', ev('Sol walks', ['sol', 'walk'], 1)],
+            ['b', ev('Sol talks', ['sol', 'talk'], 2)],
+            ['c', ev('Sol finds the locket', ['sol', 'locket'], 3)],
+        ]);
+        const top = rankEvents({ ...index(events), queryText: 'sol locket', topK: 3 });
+        expect(top[0].key).toBe('c');
+    });
+
+    test('an unmatched query returns nothing rather than everything', () => {
+        const events = new Map([['a', ev('Sol walks', ['sol', 'walk'], 1)]]);
+        expect(rankEvents({ ...index(events), queryText: 'dragon castle', topK: 5 })).toEqual([]);
+    });
+
+    test('liveness still filters, and topK still bounds', () => {
+        const events = new Map([
+            ['a', ev('one', ['locket'], 1)],
+            ['b', ev('two', ['locket'], 2)],
+        ]);
+        expect(rankEvents({ ...index(events), queryText: 'locket', topK: 1 })).toHaveLength(1);
     });
 });

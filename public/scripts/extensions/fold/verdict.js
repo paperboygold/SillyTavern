@@ -30,7 +30,9 @@ import * as state from './state.js';
 import { hurtOf } from './state-table.js';
 import { commit, loadTable } from './store.js';
 import {
+    AGAINST_GRAIN,
     CLEAR,
+    CONTROLLED,
     COST,
     SETBACK,
     adjudicate,
@@ -152,13 +154,29 @@ function schema() {
                     type: 'string',
                     description: 'The name of the person most directly opposing or being asked, exactly as the transcript names them. Empty if the attempt is not aimed at anyone.',
                 },
+                grain: {
+                    type: 'string',
+                    enum: ['with', 'against', 'beside'],
+                    // ── The question a social contest actually turns on ──
+                    //
+                    // Standing read `feels` and nothing else, so the only social fact that moved a
+                    // verdict was whether someone LIKED you. That is not the simulationist question
+                    // — a merchant who dislikes you will still sell you a horse, and a friend will
+                    // still refuse to betray his brother. What decides it is whether the ask runs
+                    // with or against what that person is already trying to do.
+                    //
+                    // `wants` is on every cast row and is in the prompt this classifier reads, so
+                    // this is a reading over fold's own state answered through a schema enum — the
+                    // sanctioned shape — and never a word list applied to prose.
+                    description: 'Look at what the person named in "against" WANTS, as the record above states it. Does this attempt run WITH what they want — it helps them get it, or offers it? AGAINST it — it costs them the thing, or blocks it? Or BESIDE it — unrelated either way? Answer "beside" when nobody is named, when the record states no want for them, or when the attempt is not a social one.',
+                },
                 keywords: {
                     type: 'array',
                     items: { type: 'string' },
                     description: 'Two to five lowercase keywords describing the attempt, for matching against past events: verbs and nouns, not adjectives.',
                 },
             },
-            required: ['contested', 'supported', 'opposed', 'reckless', 'against', 'keywords'],
+            required: ['contested', 'supported', 'opposed', 'reckless', 'against', 'grain', 'keywords'],
             additionalProperties: false,
         },
     };
@@ -276,6 +294,14 @@ export async function judge(attempt, options = {}) {
     const verdict = adjudicate(classified, standing);
     setMomentum(verdict.momentum);
     observe.note(`verdict:${verdict.band}`);
+    // Both axes, separately. The single-sum design shipped with its thresholds explicitly unfitted
+    // ("a band that never fires is a band set wrong") and the counters are what eventually proved
+    // them wrong — 1 clear in 16 attempts. These are the same instrument for the replacement.
+    observe.note(`verdict:${verdict.position}`);
+    observe.note(`verdict:${verdict.effect}`);
+    if (verdict.spent) {
+        observe.note('verdict:resisted');
+    }
 
     // ── The outcome becomes the next attempt's precedent, as data not prose ──
     //
@@ -312,6 +338,26 @@ export async function judge(attempt, options = {}) {
     if (verdict.band === COST) {
         notePendingCost(said);
         observe.note('verdict:cost-note');
+    }
+
+    // ── A social cost lands on the person, not in the prose ──
+    //
+    // The directive could already spend "someone's trust", but only as words for the narrator to
+    // write and the next pass to maybe re-read. Nothing in the record moved, so the next attempt
+    // against the same person started from the same disposition as the first, however badly the
+    // last one went — and after twenty verdicts the trust-dings are wallpaper.
+    //
+    // So an attempt aimed at somebody, that cuts against what they want and costs something, steps
+    // their disposition down by one. Bounded to the two conditions that make it unambiguous: a
+    // named target, and a grain the model called AGAINST. Cutting against what someone wants and
+    // getting away with it clean (`controlled`) costs nothing — that is what getting away with it
+    // means. WHY it moved stays the entity probe's job; this only moves the scale.
+    const key = target ? resolveEntity(table, PERSON, classified.against)?.key : '';
+    if (key && classified.grain === AGAINST_GRAIN && verdict.position !== CONTROLLED) {
+        const moved = entities.stepFeels(key, -1, turn);
+        if (moved) {
+            observe.note('verdict:regard-spent');
+        }
     }
 
     return {

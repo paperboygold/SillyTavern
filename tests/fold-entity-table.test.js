@@ -1,12 +1,16 @@
 import { describe, expect, test } from '@jest/globals';
 
 import {
+    ACTOR_KINDS,
+    actorKind,
     DISPOSITIONS,
     ELSEWHERE,
+    FACTION,
     ENTITY_STALE,
     GONE,
     HERE,
     LEAD,
+    MAX_DRIVE,
     MAX_ENTITIES,
     MAX_THREAT,
     MAX_TRAIL,
@@ -19,6 +23,8 @@ import {
     entityKey,
     findEntity,
     foldEntities,
+    absentKeys,
+    contestedAliases,
     foldEntity,
     isExposition,
     mergeEntities,
@@ -32,6 +38,7 @@ import {
     samePlace,
     splitEntityKey,
 } from '../public/scripts/extensions/fold/entity-table.js';
+import { nearIdentity } from '../public/scripts/extensions/fold/thread-table.js';
 
 describe('normalizeEntityName', () => {
     test('keys lowercase and displays as written', () => {
@@ -849,6 +856,87 @@ describe('the exposition gate is the model\'s `unresolved` answer', () => {
  * whole of the live chat and could not stop (FOLD-RPG-GAP.md §2); the broker pair reopened within 48
  * hours of being hand-fixed (§0.1).
  */
+describe('an alias two people answer to decides nothing', () => {
+    // Measured across the live chats, three collisions in two of them:
+    //
+    //   New Eldoria   "dwarf"          Grimble | Armorer
+    //   Solo Leveling "ji gwang-deok"  Solomon Winters | The doctor
+    //   Solo Leveling "woman"          Kang | Park Min-ji
+    //
+    // `canonicalKey` scanned the table and took the FIRST row whose alias set intersected, so each
+    // of those resolved by Map iteration order — a silent coin-flip. New Eldoria shows what it
+    // costs: Grimble the apothecary carries the armorer's `wants` ("closing soon, spare a moment"),
+    // the armorer's `detail` ("showing spears and staves") and the armorer's shop as his place,
+    // because every later "the dwarf" in a story with three dwarves landed on him.
+
+    test('a contested alias resolves to nobody rather than to whoever iterates first', () => {
+        const table = new Map();
+        foldEntity(table, { kind: PERSON, name: 'Grimble', aka: 'the old man, the dwarf', turn: 1 });
+        foldEntity(table, { kind: PERSON, name: 'Armorer', aka: 'the dwarf', turn: 2 });
+        expect(resolveEntity(table, PERSON, 'the dwarf')).toBe(null);
+        // Insertion order must not change the answer — that is the whole complaint.
+        const other = new Map();
+        foldEntity(other, { kind: PERSON, name: 'Armorer', aka: 'the dwarf', turn: 1 });
+        foldEntity(other, { kind: PERSON, name: 'Grimble', aka: 'the old man, the dwarf', turn: 2 });
+        expect(resolveEntity(other, PERSON, 'the dwarf')).toBe(null);
+    });
+
+    test('an alias only one person answers to still resolves', () => {
+        const table = new Map();
+        foldEntity(table, { kind: PERSON, name: 'Grimble', aka: 'the old man, the dwarf', turn: 1 });
+        foldEntity(table, { kind: PERSON, name: 'Armorer', aka: 'the dwarf', turn: 2 });
+        expect(resolveEntity(table, PERSON, 'the old man')?.entity?.name).toBe('Grimble');
+    });
+
+    test('a newcomer that NAMES a stored row still merges into it', () => {
+        // The direction the alias field exists for, and it is untouched. A card calls its
+        // protagonist "the Hero" and the narration calls him "Solomon"; the observation that says
+        // so is the model answering an identity question directly, which is the one authority fold
+        // has. Only two strangers holding one adjective are refused.
+        const table = new Map();
+        foldEntity(table, { kind: PERSON, name: 'the Hero', turn: 1 });
+        foldEntity(table, { kind: PERSON, name: 'Solomon', aka: 'the Hero', turn: 2 });
+        expect(table.size).toBe(1);
+        expect(resolveEntity(table, PERSON, 'the Hero')?.entity?.name).toBe('Solomon');
+    });
+
+    test('a name is never contested away from its own row', () => {
+        // The direct key hit precedes the alias scan, so a row whose actual NAME somebody else
+        // claims as an alias still answers to it. Solo Leveling is that case: `ji gwang-deok` is
+        // claimed by both "Solomon Winters" and "The doctor" in the live cast table, so the alias
+        // decides nothing — but the doctor's own name still finds the doctor.
+        const table = new Map([
+            ['person\u0000ji gwang-deok', { kind: PERSON, name: 'Ji Gwang-deok', aka: 'the doctor' }],
+            ['person\u0000solomon winters', { kind: PERSON, name: 'Solomon Winters', aka: 'ji gwang-deok' }],
+        ]);
+        expect(contestedAliases(table, PERSON).has('ji gwang-deok')).toBe(true);
+        expect(resolveEntity(table, PERSON, 'Ji Gwang-deok')?.entity?.name).toBe('Ji Gwang-deok');
+        // And the doctor's own row is reachable by the alias only she claims.
+        expect(resolveEntity(table, PERSON, 'the doctor')?.entity?.name).toBe('Ji Gwang-deok');
+    });
+
+    test('a new sighting under a contested alias opens its own row instead of joining one', () => {
+        // `canonicalKey` is the write path too. Landing on the wrong row is how Grimble acquired a
+        // forge; a row of its own is recoverable, and the review is told to ask about the pair.
+        const table = new Map();
+        foldEntity(table, { kind: PERSON, name: 'Grimble', aka: 'the dwarf', turn: 1 });
+        foldEntity(table, { kind: PERSON, name: 'Armorer', aka: 'the dwarf', turn: 2 });
+        foldEntity(table, { kind: PERSON, name: 'the dwarf', detail: 'behind the counter', turn: 3 });
+        expect(table.get('person\u0000grimble').detail).not.toBe('behind the counter');
+        expect(table.get('person\u0000armorer').detail).not.toBe('behind the counter');
+    });
+
+    test('the collision is reported, so the review can settle it', () => {
+        const table = new Map();
+        foldEntity(table, { kind: PERSON, name: 'Grimble', aka: 'the old man, the dwarf', turn: 1 });
+        foldEntity(table, { kind: PERSON, name: 'Armorer', aka: 'the dwarf', turn: 2 });
+        expect(contestedAliases(table, PERSON).get('dwarf'))
+            .toEqual(['person\u0000grimble', 'person\u0000armorer']);
+        // One claimant is not a contest.
+        expect(contestedAliases(table, PERSON).has('old man')).toBe(false);
+    });
+});
+
 describe('mergeEntities — the answer to an identity question', () => {
     /** Two rows, the fuller name written second so neither order is privileged by accident. */
     function pair() {
@@ -1009,5 +1097,213 @@ describe('threat — one small integer, and only while it is true', () => {
         const table = new Map();
         foldEntity(table, { kind: PERSON, name: 'the hobgoblin', threat: 4, place: 'the gate mouth', turn: 1 });
         expect(renderEntities(table, 1, { at: 'the gate mouth' })).toContain('threat 4');
+    });
+});
+
+describe('a person named after being described — the commonest aliasing shape', () => {
+    test('the name learned later merges onto the description, keeping one row', () => {
+        // Live failure: `tiefling fighter` (turn 14) and `Kaelira` (turn 19) stood as two people,
+        // as did `elven wizard`/`Sylanna` and `dark elf rogue`/`Vexia`. The merge path was never
+        // the problem — this is what it does when the back-link arrives.
+        const cast = new Map();
+        foldEntity(cast, { kind: PERSON, name: 'tiefling fighter', place: 'clearing', wants: 'defeat the goblins' });
+        foldEntity(cast, { kind: PERSON, name: 'Kaelira', aka: 'tiefling fighter', place: 'inn\'s back yard' });
+        expect(cast.size).toBe(1);
+        expect([...cast.values()][0].name).toBe('Kaelira');
+    });
+
+    test('the earlier row keeps what the later report does not restate', () => {
+        // A name reveal usually says nothing about goals; silence must not erase them.
+        const cast = new Map();
+        foldEntity(cast, { kind: PERSON, name: 'the tall guard', wants: 'keep the gate', place: 'gate' });
+        foldEntity(cast, { kind: PERSON, name: 'Marek', aka: 'the tall guard', place: 'barracks' });
+        const row = [...cast.values()][0];
+        expect(row.name).toBe('Marek');
+        expect(row.wants).toBe('keep the gate');
+    });
+
+    test('token overlap cannot find these pairs, which is why the field has to', () => {
+        // The detector is a token-subset trigger over fold's own keys. A name and the description
+        // it replaces share nothing, so no structural rule reaches them — pinned so nobody tries.
+        // `nearIdentity` returns the reason it fired, or a falsy value when it did not.
+        expect(nearIdentity('kaelira', 'tiefling fighter')).toBeFalsy();
+        expect(nearIdentity('sylanna', 'elven wizard')).toBeFalsy();
+        expect(nearIdentity('vexia', 'dark elf rogue')).toBeFalsy();
+        // …while the case it IS for still works.
+        expect(nearIdentity('ling xiang', 'xiang')).toBeTruthy();
+    });
+
+    test('an aka naming nobody held creates no phantom', () => {
+        const cast = new Map();
+        foldEntity(cast, { kind: PERSON, name: 'Kaelira', aka: 'someone never recorded' });
+        expect(cast.size).toBe(1);
+        expect([...cast.values()][0].name).toBe('Kaelira');
+    });
+});
+
+describe('absentKeys — who the record positively places somewhere else', () => {
+    // The review can only settle what the excerpt touches. Midoriya has been `stunned` since mid 69
+    // of the live My Hero Academia RP; the exercise ended at mid 71 and the story moved on for two
+    // in-story days, but `markLines` posed his mark every single pass — a question the excerpt was
+    // never going to answer, spending a slot out of a budget the present cast needs.
+    //
+    // Deliberately ABSENT rather than "present": `castAt` splits three ways, and only `elsewhere` is
+    // positive evidence that somebody is not here. `unplaced` means fold does not know — the review
+    // asks `[where now?]` about exactly those people — so their marks stay posed. Skipping on
+    // ignorance would be the presence guess `castAt` was built to stop making.
+    const cast = () => {
+        const table = new Map();
+        foldEntity(table, { kind: PERSON, name: 'Midoriya', place: 'Gym Gamma', status: 'present', turn: 5 });
+        foldEntity(table, { kind: PERSON, name: 'Kirishima', place: 'his room at U.A.', status: 'present', turn: 5 });
+        foldEntity(table, { kind: PERSON, name: 'Tokoyami', turn: 5 });
+        return table;
+    };
+
+    test('somebody the record puts elsewhere is absent', () => {
+        expect(absentKeys(cast(), 5, 'his room at U.A.').has('midoriya')).toBe(true);
+    });
+
+    test('somebody here is not', () => {
+        expect(absentKeys(cast(), 5, 'his room at U.A.').has('kirishima')).toBe(false);
+    });
+
+    test('somebody unplaced is not absent — not knowing is not evidence', () => {
+        expect(absentKeys(cast(), 5, 'his room at U.A.').has('tokoyami')).toBe(false);
+    });
+
+    test('with no scene location nobody is absent', () => {
+        // `castAt` cannot place anyone against a location it does not have, and a review that went
+        // quiet whenever the scene probe missed a beat would lose marks it should still be asking about.
+        expect(absentKeys(cast(), 5, '').size).toBe(0);
+    });
+});
+
+/*
+ * ── The faction kind was readable and never writable ──
+ *
+ * `FACTION` is declared (`entity-table.js:71`), included in `ACTOR_KINDS` (:82), accepted by
+ * `foldEntity` (:592) and resolved by the world probe (`world-table.js:182`). Nothing ever wrote
+ * one, because the cast probe hardcoded `kind: PERSON` onto every entry it returned
+ * (`entities.js:285`).
+ *
+ * Measured in the retired Wuxia campaign (`e8416d96`): 26 cast rows, all `person`. 万仙盟, 万通商行
+ * and 灵丹阁 drove the whole mid-game economy and existed only as substrings inside a shopkeeper's
+ * `wants`. The world-turn's rule — "a move must name a person or faction FROM THE CAST" — therefore
+ * made faction motion unreachable by construction: the rule that prevents inventing actors also
+ * prevented factions from ever being actors.
+ */
+describe('a faction is an actor the cast can hold', () => {
+    test('a faction folds under its own kind and is not silently a person', () => {
+        const table = new Map();
+        const key = foldEntity(table, { kind: FACTION, name: '万通商行', wants: 'corner the Rank-4 pill trade', place: '烈阳城', turn: 1 });
+        expect(key).toBeTruthy();
+        expect(splitEntityKey(key)).toEqual({ kind: FACTION, name: expect.any(String) });
+        expect(table.get(key).kind).toBe(FACTION);
+    });
+
+    test('a faction counts as an actor wherever people do', () => {
+        // `ACTOR_KINDS` is what `castAt` and the world probe's root check read. A faction whose
+        // sphere is the scene is present in it, the same way a person standing there is.
+        expect(ACTOR_KINDS).toContain(FACTION);
+        expect(ACTOR_KINDS).toContain(PERSON);
+        const table = new Map();
+        foldEntity(table, { kind: FACTION, name: '万仙盟', place: 'blazing sun city', turn: 1 });
+        expect(entitiesOfKind(table, FACTION)).toHaveLength(1);
+    });
+
+    test('a person is untouched — every existing chat folds exactly as before', () => {
+        const table = new Map();
+        const key = foldEntity(table, { kind: PERSON, name: 'Líng Xiāng', turn: 1 });
+        expect(splitEntityKey(key).kind).toBe(PERSON);
+    });
+
+    test('the probe\'s answer decides the kind, and is checked against the vocabulary', () => {
+        // The seam that was actually shut: `entities.js` spread `kind: PERSON` over every entry, so
+        // the model's answer could not have survived even once it was asked for.
+        expect(actorKind('faction')).toBe(FACTION);
+        expect(actorKind('FACTION')).toBe(FACTION);
+        expect(actorKind('person')).toBe(PERSON);
+        // A mis-tagged actor is still an actor — losing a person over a label would be worse than
+        // holding them under the commoner kind.
+        expect(actorKind('guild')).toBe(PERSON);
+        expect(actorKind('')).toBe(PERSON);
+        expect(actorKind(undefined)).toBe(PERSON);
+        // And never a lead: a lead is a thread, and threads are the other half of the root rule.
+        expect(actorKind(LEAD)).toBe(PERSON);
+    });
+
+    test('a kind outside the vocabulary is refused, not coerced to person', () => {
+        // The existing `ACTOR_KINDS` guard already does this; the gate pins that opening the field
+        // to the model did not turn it into a place where anything can be written.
+        const table = new Map();
+        expect(foldEntity(table, { kind: 'guild', name: 'the smiths', turn: 1 })).toBeNull();
+        expect(foldEntity(table, { kind: '', name: 'the smiths', turn: 1 })).toBeNull();
+        expect(table.size).toBe(0);
+    });
+});
+
+/*
+ * ── A standing agenda needs a position, and `wants` cannot hold one ──
+ *
+ * `wants` is last-write per sighting. Measured across a completed Xianxia campaign, that churn had
+ * decayed 22 of 26 `wants` into occupations — "selling herbs and answering customer inquiries" —
+ * and an occupation has no next state, so the world-turn's rule ("root each move in that actor's
+ * stated wants; an agenda with no advance contributes no move") had nothing to work with on any
+ * of the 107 passes it was armed for.
+ *
+ * `drive`/`driveSize` is the position. The text stays in `wants`.
+ */
+describe('drive — the integer a standing agenda moves along', () => {
+    test('an actor can carry an agenda position', () => {
+        const table = new Map();
+        const key = foldEntity(table, {
+            kind: FACTION, name: '万通商行', wants: 'corner the Rank-4 pill trade',
+            drive: 2, driveSize: 6, turn: 1,
+        });
+        expect(table.get(key)).toMatchObject({ drive: 2, driveSize: 6 });
+    });
+
+    test('a sighting that says only where they are does NOT reset the agenda', () => {
+        // The trap `threat` documents and solves a different way. `merge_entity` treats '' as
+        // silence but 0 is not '', so a defaulted `drive: 0` would clobber. The field is omitted
+        // when unsupplied instead, exactly as `mid` and `marks` are.
+        const table = new Map();
+        const key = foldEntity(table, { kind: FACTION, name: '万仙盟', drive: 3, driveSize: 8, turn: 1 });
+        foldEntity(table, { kind: FACTION, name: '万仙盟', place: 'blazing sun city', turn: 2 });
+        expect(table.get(key)).toMatchObject({ drive: 3, driveSize: 8, place: 'blazing sun city' });
+    });
+
+    test('no agenda is the default, so every existing row is untouched', () => {
+        const table = new Map();
+        const key = foldEntity(table, { kind: PERSON, name: 'innkeeper', wants: 'earning silver from lodgers', turn: 1 });
+        expect(table.get(key).driveSize).toBeUndefined();
+        expect(table.get(key).drive).toBeUndefined();
+    });
+
+    test('the size is bounded the way a progress track is', () => {
+        const table = new Map();
+        const a = foldEntity(table, { kind: FACTION, name: 'a', driveSize: 900, turn: 1 });
+        const b = foldEntity(table, { kind: FACTION, name: 'b', driveSize: 1, turn: 1 });
+        const c = foldEntity(table, { kind: FACTION, name: 'c', driveSize: 0, turn: 1 });
+        expect(table.get(a).driveSize).toBe(MAX_DRIVE);
+        expect(table.get(b).driveSize).toBe(2);
+        // Zero is not rounded up to two — it is the "no standing agenda" answer.
+        expect(table.get(c).driveSize).toBe(0);
+    });
+
+    test('a later turn wins, because the merge is versioned', () => {
+        const table = new Map();
+        const key = foldEntity(table, { kind: FACTION, name: 'x', drive: 1, driveSize: 6, turn: 5 });
+        foldEntity(table, { kind: FACTION, name: 'x', drive: 4, driveSize: 6, turn: 9 });
+        expect(table.get(key).drive).toBe(4);
+        // …and an out-of-order older sighting does not undo it.
+        foldEntity(table, { kind: FACTION, name: 'x', drive: 2, driveSize: 6, turn: 6 });
+        expect(table.get(key).drive).toBe(4);
+    });
+
+    test('a person may carry one too — a rival is an actor with an agenda', () => {
+        const table = new Map();
+        const key = foldEntity(table, { kind: PERSON, name: 'Líng Xiāng', drive: 1, driveSize: 4, turn: 1 });
+        expect(table.get(key)).toMatchObject({ kind: PERSON, drive: 1, driveSize: 4 });
     });
 });

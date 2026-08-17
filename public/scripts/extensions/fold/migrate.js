@@ -449,7 +449,7 @@ function migrateContext(state, table, counts, dropped) {
         // Punctuation split only — the old `splitClauses` used the `FINITE_VERB` English verb list
         // to decide which comma fragment was its own lead. Whether a clause is a separate lead is a
         // reading the threads probe answers structurally from the same block text.
-        const clauses = value.split(/\s*[;,]\s+/).map(part => part.trim()).filter(Boolean);
+        const clauses = value.split(/\s*[;,，、；]\s*/).map(part => part.trim()).filter(Boolean);
         if (!clauses.length) {
             continue;
         }

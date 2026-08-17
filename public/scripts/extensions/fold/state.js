@@ -16,7 +16,7 @@ import * as chronicle from './chronicle.js';
 import * as entities from './entities.js';
 import * as clocks from './clocks.js';
 import * as observe from './observe.js';
-import { ENTITY_STALE, LEAD_LABELS, PERSON, PERSON_LABELS, resolveEntity } from './entity-table.js';
+import { ENTITY_STALE, LEAD_LABELS, PERSON, PERSON_LABELS, absentKeys, resolveEntity } from './entity-table.js';
 import {
     BLOCK,
     CONTEXT_OVERRIDE_AFTER,
@@ -26,6 +26,7 @@ import {
     creditsWithoutDebit,
     deriveState,
     foldContest,
+    isDisposable,
     ownerKey,
     povMarks,
     splitMarkKey,
@@ -47,10 +48,11 @@ import {
 import { reviewBlock, reviewableWindow } from './review-table.js';
 import * as review from './review.js';
 import { coveredCast, coveredThreads } from './coverage.js';
-import { commit, loadTable, loadValue } from './store.js';
+import { commit, commitValue, loadTable, loadValue } from './store.js';
 import * as log from './log.js';
 import { renderWorldEvents, revealContract } from './world-table.js';
-import { checkInvariants } from './invariant-table.js';
+import { checkInvariants, freshFindings } from './invariant-table.js';
+import { buildCrosswalk } from './crosswalk.js';
 
 const REJECTS_PATH = 'state.rejects';
 // `review.js` owns this table; read here for the partition-consistency check only, never written.
@@ -60,6 +62,84 @@ const CLOCK_PATH = 'state.clock';
 const LOCKS_PATH = 'state.locks';
 const CONTESTS_PATH = 'state.contests';
 const SYNC_PATH = 'state.sync';
+
+/**
+ * Whether the model reported narrative time moving on the last pass, waiting to arm the next one.
+ * A single boolean rather than a table: it holds one fact and is read-and-cleared. See `applyClock`.
+ */
+const SKIPPED_PATH = 'state.skipped';
+
+/**
+ * Invariant findings already reported, so a standing defect is counted once rather than per pass.
+ *
+ * See `freshFindings` (`invariant-table.js`) for the measurement that made this necessary. Bounded
+ * by the number of REAL defects a chat has, which is one in 143 messages of the live Wuxia RP — the
+ * flood it replaces was 94 copies of that one.
+ */
+const AUDITED_PATH = 'state.audited';
+
+/**
+ * What the ledger held before the events it no longer keeps. Bounded by the number of distinct
+ * items a campaign ever touches, not by its length, which is why it can outlive the event cap.
+ */
+const BASELINE_PATH = 'state.baseline';
+
+/** What each card-invented status field IS, as the review model classified it. label -> {kind, tempo, same_as}. */
+const SHEET_PATH = 'state.sheet';
+
+/**
+ * Context labels fold routes itself, and therefore never asks the model to classify.
+ *
+ * These are fold's OWN protocol — the scene probe writes `location`, `pov`, `time`, `date` and
+ * `weather` under exactly these names, and `block-parse.js` routes `health`/`conditions` into the
+ * status pipeline before context is ever written. RULE 1 permits block-field labels explicitly as
+ * PROTOCOL; what it bans is a list of English words used to guess what a CARD meant, which is the
+ * job `SHEET_KINDS` hands to the model instead.
+ */
+export const MODELLED_FIELDS = new Set(['time', 'date', 'location', 'weather', 'pov', 'conditions', 'health']);
+
+/** @returns {Map<string, {kind: string, tempo: string, same_as: string}>} The stored classifications. */
+export function sheet() {
+    return loadTable(SHEET_PATH);
+}
+
+/**
+ * Record what the review model said each card field is.
+ * @param {Array<{label: string, kind: string, tempo: string, same_as: string}>} rows Classifications.
+ * @returns {number} How many were stored.
+ */
+export function classifySheet(rows) {
+    const list = Array.isArray(rows) ? rows.filter(row => row?.label) : [];
+    if (!list.length) {
+        return 0;
+    }
+    const table = sheet();
+    for (const row of list) {
+        insert_with(table, merge_b, row.label, { kind: row.kind, tempo: row.tempo, same_as: row.same_as ?? '' });
+    }
+    commit(SHEET_PATH, table);
+    return list.length;
+}
+
+/**
+ * The card fields nothing has classified yet, for the review block to pose.
+ *
+ * Only the unanswered ones, so a sorted sheet costs nothing: the list empties, the section stops
+ * rendering and the schema array comes back empty forever after.
+ *
+ * @returns {Array<{label: string, value: string}>} Unsorted fields.
+ */
+export function unsortedSheet() {
+    const known = sheet();
+    const out = [];
+    for (const [label, field] of table_entries(loadContext())) {
+        if (MODELLED_FIELDS.has(label) || known.has(label)) {
+            continue;
+        }
+        out.push({ label, value: String(field?.v ?? '') });
+    }
+    return out;
+}
 
 /**
  * The extraction lifecycle, as the player should see it.
@@ -212,7 +292,38 @@ function applyClock(clock, source) {
     if (source === 'scene') {
         observe.note('clock:scene-elapsed');
     }
+    // ── The reconnected wire: an accepted elapse arms the NEXT pass ──
+    //
+    // `trigger-table.js` says the world's triggers are "the model's own report, not a regex", and
+    // that was true of the deletion and false of the wiring. When the English time-phrase word lists
+    // came out, `TIME_SKIPPED` lost its only producer and nothing replaced it — so `world.js` armed
+    // on a reason no code path could emit, and the off-screen world never wrote a single event.
+    // Measured before this line existed: `0` events with `src: 'world'`, across every campaign.
+    //
+    // The model already answers the question, structurally, in the schema it fills every pass
+    // (`elapsed_days`, `elapsed_minutes`, `date_changed`). This flag is that answer, kept for one
+    // pass. One pass behind is not a compromise here: the pass that READ the skip has already built
+    // and sent its prompt, so arming it retroactively is impossible, and inventing a second request
+    // to ask sooner is the thing RULE 1 forbids outright.
+    commitValue(SKIPPED_PATH, true);
     return { skipped: true, minutes: clock.minutes };
+}
+
+/**
+ * Has the model reported narrative time moving since the last pass looked?
+ *
+ * Read-and-clear: the flag arms exactly one pass. Leaving it set would arm every subsequent pass
+ * until the next skip, which would make the world fragment permanent rather than occasional and
+ * quietly triple the schema on conversational turns.
+ *
+ * @returns {boolean} True when the previous pass reported an elapse, clearing it.
+ */
+export function takeTimeSkip() {
+    if (!loadValue(SKIPPED_PATH, false)) {
+        return false;
+    }
+    commitValue(SKIPPED_PATH, false);
+    return true;
 }
 
 /**
@@ -356,7 +467,14 @@ export function setContext(context, { source = BLOCK, skipClock = false } = {}) 
         }), block: source === BLOCK ? before.seen : before.block };
     saveClock(clock);
     if (clock.reason === 'reversed') {
-        noteRejections([{ item: String(context.get('time') ?? ''), reason: 'clock-reversed' }]);
+        // The raw is what the clock was told and what it held: a refusal nobody can read back is a
+        // tally, not a diagnostic (`tests/fold-no-raw-reject.test.js`).
+        noteRejections([{
+            item: String(context.get('time') ?? ''),
+            reason: 'clock-reversed',
+            detail: `held day ${before.day} ${before.raw ?? ''}`,
+            raw: { time: context.get('time') ?? '', date: context.get('date') ?? '', source },
+        }]);
     }
 
     const locks = loadLocks();
@@ -635,16 +753,121 @@ export function noteShadow(entries) {
  * (`state-table.js` `seedMarks`, `migrate.js`); everything else comes from events, which is what
  * makes state branch-aware for free.
  *
- * @returns {{inv: Map, vitals: Map, marks: Map, since: Map, contributors: Map}} Derived state.
+ * ── Where the identity verdicts finally land ──
+ *
+ * `state.answers` has always collected `same`/`different` for items, and until the crosswalk existed
+ * an item verdict was recorded and never applied (`review.js`, the `review:item-same-deferred`
+ * branch). Built here rather than inside `deriveState` because the crosswalk needs `itemKey` and
+ * `MONEY` from `state-table.js`, so importing it there would close a cycle; passing it in matches
+ * how `seeds` and `reachKeys` already arrive.
+ *
+ * Rebuilt on every derive, deliberately. It is a pure function of the answers and the events, so
+ * caching it would only create a second thing that can be stale, and a verdict that landed this turn
+ * takes effect on the next render rather than the next reload.
+ *
+ * @returns {{inv: Map, vitals: Map, marks: Map, since: Map, contributors: Map, suppressed: number}} Derived state.
  */
 export function derive() {
     // `reachKeys` is the migration's OWN record of the legacy contact rows it moved — exact item
     // keys, never an English place word. `loadValue` returns undefined when no migration has run.
     const reachKeys = loadValue('state.migrated.reachKeys');
-    return deriveState(chronicle.liveEvents(), {
+    const events = chronicle.liveEvents();
+    const held = baseline();
+    return deriveState(events, {
         seeds: entities.markSeeds(),
         reachKeys: Array.isArray(reachKeys) ? new Set(reachKeys) : null,
+        // The baseline's keys ride in as observed: their events are gone, so without this a verdict
+        // about a carried-forward row would be dropped and the row would fossilize under its old name.
+        crosswalk: buildCrosswalk(events, loadTable(REVIEW_ANSWERS_PATH), held.keys()),
+        // What the events that have already been shed contributed. Without this the ledger rewinds
+        // as the chat grows, which is the failure that binds a year-long campaign long before any
+        // accuracy question does.
+        baseline: held,
+        // So an `st` delta that named nobody folds onto the same key as one that named the player.
+        // See the `who` resolution in `deriveState`'s status fold for the measurement.
+        pov: pov(),
     });
+}
+
+/**
+ * What the ledger held before the events it no longer keeps.
+ *
+ * @returns {Map<string, {qty: number}>} Inventory key -> carried-forward quantity.
+ */
+export function baseline() {
+    return loadTable(BASELINE_PATH);
+}
+
+/**
+ * Carry the contribution of events about to be evicted into the baseline.
+ *
+ * ── Called BEFORE the eviction, because afterwards the deltas are gone ──
+ *
+ * `demoteEvents` archives a summary, keywords and a timestamp; it drops `d`. So the moment an event
+ * leaves the hot ledger its delta is unrecoverable, and since state is a fold over live events, the
+ * balance it contributed silently unwinds. Nothing counted this, and the failure looks exactly like
+ * the model having been wrong about a purchase months ago.
+ *
+ * The measurement is a difference of two folds of the SHIPPED `deriveState` — what the ledger holds
+ * now, against what it would hold with these events gone — so the carried amount is by construction
+ * whatever eviction was about to destroy, including any interaction with the zero-floor. Two folds
+ * of a few hundred events is cheap and this runs only when the blob is over budget.
+ *
+ * Marks and vitals are NOT carried. Marks already have a seed path (`seedMarks`, written by
+ * migration) and vitals are a clamped last-write whose baseline shape is a different argument; both
+ * are real gaps and neither is inventory, which is where the measured damage is. Stated rather than
+ * silently skipped.
+ *
+ * @param {string[]} evictedKeys Event keys about to leave the hot ledger.
+ * @param {Map<string, object>} before The ledger as it stands, to read the rows from.
+ */
+export function carryForward(evictedKeys, before) {
+    const doomed = new Set(evictedKeys ?? []);
+    if (!doomed.size || !before?.size) {
+        return;
+    }
+    const keep = [];
+    const all = [];
+    for (const [key, event] of table_entries(before)) {
+        all.push(event);
+        if (!doomed.has(key)) {
+            keep.push(event);
+        }
+    }
+    const held = baseline();
+    // The same options on both folds, or the difference measures the options rather than the loss.
+    const options = { seeds: entities.markSeeds(), baseline: held };
+    const now = deriveState(all, options).inv;
+    const after = deriveState(keep, options).inv;
+
+    let carried = 0;
+    const next = new Map(table_entries(held));
+    for (const [key, row] of table_entries(now)) {
+        const lost = (Number(row?.qty) || 0) - (Number(after.get(key)?.qty) || 0);
+        if (lost <= 0) continue;
+        insert_with(next, merge_b, key, { qty: (Number(lookup(next, key, { qty: 0 }).qty) || 0) + lost });
+        carried += lost;
+    }
+    // A row that existed only in the evicted events disappears from `now`'s successor entirely; the
+    // loop above catches it because `after` simply has no entry, which reads as zero.
+    if (carried) {
+        commit(BASELINE_PATH, next);
+        observe.noteCap('baseline-carried', carried);
+    }
+}
+
+/**
+ * The inventory keys the ledger currently holds.
+ *
+ * Injected into `review.applyExtraction` so a currency name the model volunteered can be resolved to
+ * the row it names. The model reports a NAME ("silver wen"); the ledger is keyed by place and name,
+ * and which place is not something the model was asked or should be assumed to know — it answered
+ * `silver wen`/`silver` on a pass whose prompt carried no Money line at all.
+ *
+ * @returns {Set<string>} Inventory keys.
+ */
+export function ledgerKeys() {
+    return new Set(derive().inv.keys());
 }
 
 /**
@@ -659,16 +882,82 @@ export function derive() {
  * raised on the live chats are a silver ring and a silver moon locket sharing a token with the
  * balance. They leave as witnesses instead.
  *
+ * ── The overdraw incidents have to ride in from the SAME derivation ──
+ *
+ * `overdrawn` is produced by the fold as it deletes a row, so it exists only on the result object
+ * that produced it. Deriving twice — once for `inv`, once for the incidents — would be two folds and
+ * an invitation for them to disagree; one `derive()` and both fields off it is the only shape that
+ * cannot drift. This is also why `negativeQuantities` stays in the violation list despite being
+ * unable to fire here: it is still correct for a pre-derive table, and removing it would hide that
+ * the check exists at all.
+ *
  * @returns {Array<{a: string, b: string, of: string, why: string}>} Identity questions raised.
  */
 export function auditLedger() {
-    const { violations, witnesses } = checkInvariants({ inv: derive().inv, answers: loadTable(REVIEW_ANSWERS_PATH) });
-    if (violations.length) {
-        noteRejections(violations.map(v => ({
-            item: v.kind === 'partition-contradiction' ? `${v.a} ~ ${v.b}` : v.name,
-            reason: `invariant:${v.kind}`,
-            detail: v.kind === 'negative-quantity' ? `${v.place} holds ${v.qty}` : '',
-        })));
+    const state = derive();
+    const { violations, witnesses } = checkInvariants({
+        inv: state.inv,
+        answers: loadTable(REVIEW_ANSWERS_PATH),
+        overdrawn: state.overdrawn,
+    });
+    // ── Reported ONCE, because a finding is a state and this channel counts events ──
+    //
+    // This function runs on every pass and `state.overdrawn` is re-derived from the whole event
+    // history each time, so every finding used to be re-noted forever. Measured on the live Wuxia
+    // World RPG: 94 of 118 recorded rejections were one overdraw incident, and they filled 94 of
+    // `log.js`'s 120 diagnostic slots. `freshFindings` carries the identities already reported.
+    const { fresh, seen } = freshFindings(
+        [
+            ...violations,
+            // An overdraw is a proven defect even though the row it happened to is gone, so it is
+            // logged where a defect belongs rather than left to the witness path alone.
+            ...(state.overdrawn ?? []),
+            // ── Drift rides the same channel, for the same reason ──
+            //
+            // A stated total that disagrees with the computed one is evidence a transaction went
+            // unrecorded, and it was completely invisible: a completed campaign agreed with its own
+            // narrator on 21 of 63 stated balances and nothing in the product said so. Same
+            // `freshFindings` dedupe as the overdraws, or a re-derive would re-report every drift in
+            // the history on every pass — the failure `AUDITED_PATH` was added to stop.
+            ...(state.drifted ?? []).map(d => ({ ...d, kind: 'drift' })),
+        ],
+        loadValue(AUDITED_PATH, []),
+    );
+    if (fresh.length) {
+        // The worst gap on record, so a glance at the counters says whether drift is a rounding
+        // matter or a fortune. `note` is a running total; this is a high-water mark, so it is
+        // written rather than incremented.
+        const worst = (state.drifted ?? []).reduce((most, d) => Math.max(most, Math.abs(d.gap)), 0);
+        if (worst) {
+            observe.noteMax('money:drift-worst', worst);
+        }
+        // Routed by kind rather than by a three-deep ternary: each finding shape names its own
+        // row, and a new kind is a new entry rather than another nested branch.
+        const asRejection = {
+            drift: v => ({
+                item: splitItemKey(v.key).name,
+                reason: 'money:drift',
+                detail: `fold held ${v.held}, the story said ${v.said} (gap ${v.gap > 0 ? '+' : ''}${v.gap})`,
+                raw: v,
+                mid: Number.isFinite(v.mid) ? v.mid : undefined,
+            }),
+            overdraw: v => ({
+                item: splitItemKey(v.key).name,
+                reason: 'invariant:overdraw',
+                detail: `held ${v.had}, debited ${v.dq}, short ${v.short}`,
+                // The incident IS the evidence — there is no model proposal behind a state check,
+                // so the raw is what the fold recorded rather than what anyone sent.
+                raw: v,
+                mid: Number.isFinite(v.mid) ? v.mid : undefined,
+            }),
+        };
+        noteRejections(fresh.map(v => (asRejection[v.kind] ?? (row => ({
+            item: row.kind === 'partition-contradiction' ? `${row.a} ~ ${row.b}` : row.name,
+            reason: `invariant:${row.kind}`,
+            detail: row.kind === 'negative-quantity' ? `${row.place} holds ${row.qty}` : '',
+            raw: row,
+        })))(v)));
+        commitValue(AUDITED_PATH, [...seen]);
     }
     return witnesses;
 }
@@ -716,8 +1005,41 @@ export function deltaSchema() {
                             type: 'string',
                             description: 'Where it is: "carried" (on the character, incl. worn or drawn), a place name ("apartment", "car boot"), "assets" (owned property not carried), "abilities" (a capability), or "money" (the currency name, set or dq = amount). Contact details — a phone number, address, email — are never items.',
                         },
+                        who: {
+                            type: 'string',
+                            // ── Whose, which `at` was being made to carry and cannot ──
+                            //
+                            // The model already tried: `{"item":"pale stone sphere","dq":-1,
+                            // "at":"Sylanna's satchel"}`, refused as `remove-unknown` because a
+                            // satchel is not a place fold holds anything at. A companion's gear had
+                            // no channel at all, so New Eldoria's ironwood branch was chronicled and
+                            // never recorded, and 17 gold handed to Vexia was credited to the
+                            // player. One field, answered in whatever language the excerpt uses.
+                            description: 'Whose it is, when it is NOT the point-of-view character\'s — the person\'s name exactly as the record or the excerpt gives it. Empty for the point-of-view character, which is the normal case. Use this when a companion picks something up, is given something, or is handed money: what someone else now holds is theirs, not the viewpoint character\'s.',
+                        },
+                        rank: {
+                            type: 'string',
+                            // ── The grade, in the story's own system, which fold never interprets ──
+                            //
+                            // Deliberately one free-text field and not an enum, a number, or a
+                            // ladder. Settings grade things however they like: F/E/D/C/B/A/S,
+                            // "Unskilled/Amateur/Proficient", 1–10, 0–100000, "Novice (3/5)", or not
+                            // at all. An enum would fit exactly one of those and silently mangle the
+                            // rest, and any ordering fold imposed would be fold deciding that D beats
+                            // E or that Proficient beats Amateur — language understanding, which is
+                            // the model's job and not fold's.
+                            //
+                            // fold stores this string, shows it, and replaces it when a new one
+                            // arrives. It never compares two ranks, so it never needs the order.
+                            //
+                            // Splitting the grade out of the NAME is the point: a skill that goes
+                            // F→E→D is one row whose rank changes, not three rows. That is exactly
+                            // the defect this closes — a live campaign showed "Quarterstaff
+                            // proficiency (e)" and "Quarterstaff proficiency" as two abilities.
+                            description: 'The rank, grade or level the story gives this, copied exactly as written — "E", "D", "Amateur", "47/100", "Novice (3/5)", "Lv. 12". Leave empty when the story grades it with nothing. The "item" name must NOT contain the rank: a skill written "Quarterstaff Proficiency (E)" is item "quarterstaff proficiency" with rank "E", so that the same skill at a new grade stays one entry instead of becoming a second one.',
+                        },
                     },
-                    required: ['item', 'same_as', 'dq', 'set', 'magnitude', 'at'],
+                    required: ['item', 'same_as', 'dq', 'set', 'magnitude', 'at', 'rank', 'who'],
                     additionalProperties: false,
                 },
             },
@@ -729,9 +1051,50 @@ export function deltaSchema() {
                     properties: {
                         name: { type: 'string', description: 'Vital name, lowercase: "hp", "mana", "stamina".' },
                         dcur: { type: 'number', description: 'Change from the current value this turn, never the new total: "HP 62 to 44" is dcur -18.' },
-                        max: { type: 'number', description: 'Ceiling; send only when newly established, then omit afterwards.' },
+                        max: { type: 'number', description: 'Ceiling, when the story states one. 0 when it does not — this field is required, so 0 is how you say nothing was stated, and fold keeps whatever ceiling it already had. Send a real number only when the story newly establishes or changes it.' },
                     },
                     required: ['name', 'dcur', 'max'],
+                    additionalProperties: false,
+                },
+            },
+            standing: {
+                type: 'array',
+                // ── Every named track a setting keeps, without fold knowing any of their names ──
+                //
+                // fold used to classify a status block by matching its LABELS against English word
+                // lists (`INVENTORY_LABELS`, `HEALTH_LABELS`, `LEAD_LABELS`, `PRESSURE_LABELS`), and
+                // `domainOf` returned '' for anything absent from all of them. So a live card
+                // emitting `Level: 1 (0/100 EXP)`, `BP: 10`, `Reputation: 0 "Nobody"`,
+                // `Class: NULL SAGE`, `Threat: Low` and `Bonds: Yamada:5 (trusting)` had every one
+                // of those fields silently discarded — and no list could ever have caught them,
+                // because the next card names them differently and the one after that names them in
+                // another language.
+                //
+                // This is the repair, and it is the `rank` trick one level up: the MODEL says what
+                // is being tracked and what it currently reads, and fold stores an opaque pair. No
+                // ordering, no units, no vocabulary. A setting can grade reputation as a number, a
+                // word, a colour or a rune and fold carries it identically.
+                //
+                // `who` is what makes relationships fall out for free rather than needing their own
+                // structure: a bond is simply a standing whose subject is someone else.
+                description: 'Named tracks the story keeps score with, and their current reading — the things a status line lists that are neither items nor injuries. Level, experience, class, rank, reputation, standing, threat level, alignment, favour, notoriety, a relationship score with a named person. Report one entry whenever the story states or changes such a track. Do not report inventory, money or injuries here; they have their own fields.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        name: {
+                            type: 'string',
+                            description: 'What is tracked, lowercase, exactly as the story names it: "level", "reputation", "class", "threat", "bp", "notoriety", "standing with the guild". Use the story\'s own word, in the story\'s own language; never translate it.',
+                        },
+                        value: {
+                            type: 'string',
+                            description: 'What it reads NOW, copied exactly as written and complete: "1 (0/100 EXP)", "NULL SAGE", "Low", "0 \\"Nobody\\"", "5 (trusting)", "Exalted". Always the current full reading, never a change or a difference — this replaces whatever was recorded before.',
+                        },
+                        who: {
+                            type: 'string',
+                            description: 'Whose track it is — the person\'s name exactly as in the people list. Empty for the point-of-view character. A relationship score the story keeps about another person is that person\'s standing: "Yamada: 5 (trusting)" is name "bond", value "5 (trusting)", who "Yamada".',
+                        },
+                    },
+                    required: ['name', 'value', 'who'],
                     additionalProperties: false,
                 },
             },
@@ -850,10 +1213,22 @@ export function deltaInstruction() {
  *   that built the prompt knows the answer.
  * @param {Set<string>|null} [context.mentioned] Names the model reports the excerpt uses —
  *   coverage by report, not a substring proxy ([ROUTER]).
+ * @param {Set<number>|null} [context.visible] The mids this pass displayed (`splitWindow`'s
+ *   `seen`). Threaded for `shown`'s exact reason: only the caller that built the prompt knows what
+ *   the model was shown, and the already-recorded gate may not refuse on anything else.
  * @returns {{delta: object|null, rejected: object[]}} The accepted delta, or null if empty.
  */
-export function validateDelta(raw, { windowText = '', state = null, shown = null, mentioned = null } = {}) {
+export function validateDelta(raw, { windowText = '', state = null, shown = null, mentioned = null, visible = null } = {}) {
     const current = state ?? derive();
+    // ── The cast table is the only thing that can say whether an owner exists ──
+    //
+    // Threaded in rather than looked up inside `state-table.js`, for that file's standing reason: it
+    // is pure, and a validator that reaches into storage cannot be replayed. `entities.load()` is a
+    // read of the same table the probe writes, so a person established earlier in THIS pass is
+    // already in it by the time a delta names them. Read once and shared by the two validators that
+    // resolve an owner — marks have always needed it, items need it now that they carry `who`.
+    const cast = entities.load();
+    const viewpoint = pov();
 
     const inventory = validateInventory({
         inv: current.inv,
@@ -862,23 +1237,22 @@ export function validateDelta(raw, { windowText = '', state = null, shown = null
         budget: MAX_CHANGES_PER_TURN,
         shown,
         mentioned,
-        // The contributor trail, so the already-recorded gate can refuse a cross-window re-record
-        // (the doubled ₩680,000 payout, the knife and phone numbers) — see the gate's docblock.
+        // The contributor trail, so the already-recorded gate can refuse a re-record the pinned
+        // ledger did not carry (the knife, the phone numbers) — see the gate's docblock.
         contributors: current.contributors,
+        // …and the window that bounds it. Without this the trail is unbounded history and refuses
+        // every repeat purchase forever; the docblock carries the corpus measurement.
+        visible,
+        cast,
+        pov: viewpoint,
     });
     const vitals = validateVitals({ vitals: current.vitals, deltas: raw?.vit, windowText, mentioned });
-    // ── The cast table is the only thing that can say whether an owner exists ──
-    //
-    // Threaded in rather than looked up inside `state-table.js`, for that file's standing reason: it
-    // is pure, and a validator that reaches into storage cannot be replayed. `entities.load()` is a
-    // read of the same table the probe writes, so a person established earlier in THIS pass is
-    // already in it by the time a delta names them.
     const status = validateStatus({
         status: current.marks,
         deltas: raw?.st,
         windowText,
-        cast: entities.load(),
-        pov: pov(),
+        cast,
+        pov: viewpoint,
         mentioned,
     });
 
@@ -960,9 +1334,9 @@ export function noteRejections(rejections) {
  *   there is nothing to say), the inventory keys it contained, and the review id index.
  */
 export function ledgerBlock({ windowText = '' } = {}) {
-    const { inv, vitals, marks } = derive();
+    const { inv, vitals, marks, standings } = derive();
     const who = pov();
-    const { lines, shown } = renderLedger({ inv, vitals, marks, pov: who });
+    const { lines, shown } = renderLedger({ inv, vitals, marks, standings, pov: who });
 
     const fields = loadContext();
     const at = lookup(fields, 'location', { v: '' }).v;
@@ -970,7 +1344,10 @@ export function ledgerBlock({ windowText = '' } = {}) {
     // centre of, and listing him invites the model to write him as someone in the room. His marks
     // are on the `Condition:` line above; everyone else's ride beside their own name, which is the
     // whole of Phase D as the model sees it.
-    const cast = entities.render({ exclude: who, at, marks });
+    // `inv` as well as `marks`: an item can belong to somebody now, and what a companion is
+    // carrying belongs on their line rather than nowhere. `renderLedger` above has already left
+    // those rows out of the player's, so nothing is said twice.
+    const cast = entities.render({ exclude: who, at, marks, inv });
     const turn = entities.turn();
 
     // ── The review section REPLACES the thread lines; it does not sit under them ──
@@ -1044,8 +1421,18 @@ export function ledgerBlock({ windowText = '' } = {}) {
         // afflicting anybody (`FOLD-REDESIGN.md` §2's table names marks in the second row, and their
         // only exit before this was the `turns` guess made at write time). Names come from the cast
         // table so the block says "Lee" rather than a normalised key.
-        marks: markLines(marks, who),
+        marks: markLines(marks, who, at),
         threats: entities.threats(),
+        // ── The only way anything leaves the ledger ──
+        //
+        // What is on the player's person, so the review can ask whether each is still there.
+        // Somebody else's belongings are theirs to lose, not the player's; money is asked about by
+        // the `paid?` question instead, a balance going down being a payment rather than a disposal;
+        // and a row already recorded off the pack is not asked at all, because its key is the answer.
+        carried: carriedLines(inv, who),
+        // The card's own stat fields that nothing has classified yet. Empty once the sheet is
+        // sorted, which is what makes this cost decay to nothing rather than ride every pass.
+        sheet: unsortedSheet(),
     });
 
     // ── The world moves while you are not looking (FOLD-REDESIGN.md §7.5) ──
@@ -1077,8 +1464,8 @@ export function ledgerBlock({ windowText = '' } = {}) {
  * @returns {string} The block, or '' when there is nothing to say.
  */
 export function render({ player = '' } = {}) {
-    const { inv, vitals, marks } = derive();
-    const body = renderState({ inv, vitals, marks, pov: pov() });
+    const { inv, vitals, marks, standings } = derive();
+    const body = renderState({ inv, vitals, marks, standings, pov: pov() });
 
     // ── `cap:stale-hidden` was counted here, and nothing increments it any more ──
     //
@@ -1106,6 +1493,7 @@ export function render({ player = '' } = {}) {
         // in the same call.
         at: lookup(fields, 'location', { v: '' }).v,
         marks,
+        inv,
     });
     // Pressure last in the block and first in importance — it is the only part that says what is
     // about to happen rather than what is already true. Rendered here rather than below because
@@ -1201,7 +1589,15 @@ export function snapshot() {
         // Everything the card itself reported — time, location, conditions, leads. Fold cannot
         // model most of it and does not need to; the panel's job is to show what was said.
         context: table_entries(loadContext())
-            .map(([label, field]) => ({ label, value: field.v, age: Math.max(0, (loadClock().seen ?? 0) - (field.t ?? 0)) })),
+            .map(([label, field]) => ({
+                label,
+                value: field.v,
+                age: Math.max(0, (loadClock().seen ?? 0) - (field.t ?? 0)),
+                // What this field IS, as the review model classified it — the panel routes on this
+                // rather than on the label, so a card can call its health anything. Null until the
+                // review has seen it, which the panel renders as "unsorted" rather than guessing.
+                ...(lookup(sheet(), label, null) ?? {}),
+            })),
         // How long since the narrator last restated its status block. Measured on a real chat,
         // blocks arrive in bursts, so a gap is normal — but a gap nobody can see looks like a
         // tracker that has stopped working.
@@ -1212,16 +1608,25 @@ export function snapshot() {
         // every row by construction — kept on the shape rather than removed, because the panel and
         // the calibration instrument both read it and a silently vanishing field is the kind of
         // change that produces a blank section nobody notices.
-        inventory: table_entries(inv).map(([key, item]) => ({
-            ...splitItemKey(key),
-            key,
-            qty: item?.qty ?? 0,
-            since: since.get(key) ?? 0,
-            fresh: true,
-            // Why you have this: the events that produced the quantity, each with its anchor so the
-            // panel can jump a contributor to the message that caused it (§8 cause-link).
-            from: (contributors.get(key) ?? []).map(c => ({ dq: c.dq, summary: c.summary, mid: c.mid ?? null })),
-        })),
+        inventory: table_entries(inv).map(([key, item]) => {
+            const parts = splitItemKey(key);
+            return {
+                ...parts,
+                key,
+                qty: item?.qty ?? 0,
+                since: since.get(key) ?? 0,
+                fresh: true,
+                // `owner`/`mine` exactly as the marks below carry them, and for the same reason: an
+                // item can belong to a companion now, so the panel needs to draw it beside them
+                // rather than in the player's pockets — and it must never have to know that a name
+                // and a title can be the same person. Resolved here, through the alias set.
+                owner: parts.who ? (resolveEntity(cast, PERSON, parts.who)?.key ?? '') : '',
+                mine: !parts.who || parts.who === ownerKey(who),
+                // Why you have this: the events that produced the quantity, each with its anchor so
+                // the panel can jump a contributor to the message that caused it (§8 cause-link).
+                from: (contributors.get(key) ?? []).map(c => ({ dq: c.dq, summary: c.summary, mid: c.mid ?? null })),
+            };
+        }),
         vitals: table_entries(vitals).map(([name, v]) => ({ name, cur: v?.cur ?? 0, max: v?.max ?? 0 })),
         // ── The pov's marks only, which is what the Condition section always claimed to be ──
         //
@@ -1289,12 +1694,29 @@ export function snapshot() {
  *
  * @param {Map<string, object>} marks The marks table.
  * @param {string} who The pov's name.
+ * @param {string} [at] The scene location, for the presence predicate.
  * @returns {object[]} Mark lines for `reviewBlock`.
  */
-function markLines(marks, who) {
+function markLines(marks, who, at = '') {
     const cast = entities.load();
+    // ── Only about people who could be in the room ──
+    //
+    // The review settles what the excerpt touches, so a mark on somebody the record places two
+    // scenes away is a question with one possible answer, re-posed every pass out of a budget the
+    // present cast needs (`MAX_MARK_LINES`). Midoriya carried `stunned` from mid 69 of the live My
+    // Hero Academia RP through two in-story days that never mentioned him again.
+    //
+    // `absentKeys` is deliberately positive evidence only — somebody merely UNPLACED is still asked
+    // about, because not knowing where they are is not knowing they are gone. The mark itself is
+    // untouched either way: a wound does not heal because the story looked elsewhere, and this
+    // bounds the question, not the condition.
+    const absent = absentKeys(cast, entities.turn(), at);
     return table_entries(marks)
         .filter(([, mark]) => mark?.on)
+        .filter(([key]) => {
+            const owner = splitMarkKey(key).who;
+            return !owner || !absent.has(ownerKey(owner));
+        })
         .map(([key, mark]) => {
             const owner = splitMarkKey(key).who;
             const named = owner ? resolveEntity(cast, PERSON, owner)?.entity?.name : '';
@@ -1312,6 +1734,30 @@ function markLines(marks, who) {
             };
         })
         .sort((a, b) => Number(b.mine) - Number(a.mine) || a.key.localeCompare(b.key));
+}
+
+/**
+ * The player's carried rows, for the review's `still carrying?` questions.
+ *
+ * Freshest first — `since` counts events since a row was last touched, so the things the story has
+ * been handling lately are the things it is most likely to have just put down, and the ones this
+ * pass can actually answer about. `MAX_ITEM_LINES` caps the queue; what does not fit is posed on a
+ * later pass, exactly as the mark lines work.
+ *
+ * @param {Map<string, {qty: number}>} inv Derived inventory.
+ * @param {string} who The pov's name.
+ * @returns {Array<{key: string, name: string, qty: number}>} Item lines for `reviewBlock`.
+ */
+function carriedLines(inv, who) {
+    const { since } = derive();
+    return table_entries(inv)
+        // The pack, and the pack only. What that excludes and why is `isDisposable`'s docblock —
+        // the short version is that "still carrying?" asked about an ability, a house or a thing
+        // already recorded elsewhere has one honest answer, and that answer used to delete the row.
+        .filter(([key]) => isDisposable(key, who))
+        .map(([key, item]) => ({ key, name: splitItemKey(key).name, qty: item?.qty ?? 1, age: since.get(key) ?? 0 }))
+        .sort((a, b) => a.age - b.age)
+        .map(({ key, name, qty }) => ({ key, name, qty }));
 }
 
 /**

@@ -6,26 +6,55 @@
  * answer is a set of moves, each rooted in an actor fold already tracks. Nothing here touches
  * storage or the extraction call; that is `world.js`. FOLD-REDESIGN.md §7.
  *
- * ── Why rooted, and why the root is a cast row ──
+ * ── Why rooted, and why rootedness stopped needing a rule ──
  *
  * §7.4: "a proposed move must be rooted: it names an existing row's `wants` or an existing front's
  * next step. Unrooted inventions are refused." The world probe may ADVANCE the world fold knows
  * about, never AUTHOR a new one — new actors and fronts arrive the normal way, by being established
- * on-screen. A move citing no tracked person or faction is the model inventing state, which is the
- * one thing this probe exists to stop (FOLD-REDESIGN.md §7.4, anti-pattern: "rule hallucination").
+ * on-screen. That intent is unchanged and the enforcement is gone, because it became unnecessary:
+ * the probe is no longer asked to NAME an actor, it is handed numbered lines fold printed and asked
+ * to answer them. An id can only come from the block, so an unrooted advance is not refused, it is
+ * unsayable — the class made impossible by construction rather than caught by a gate, and
+ * `unrooted-move` retired with the shape that needed it.
  *
- * Rootedness is resolved with the SAME machinery the rest of the codebase uses for entity identity
- * (`resolveEntity`), not a similarity metric: §11 bans those for reading the narrative, and a name
- * match against the cast is identity resolution against fold's own state, which is the sanctioned
- * shape. The cheapest layer — a person with a `wants` who acts between scenes — needs no faction
- * kind at all, and per §7.3 it covers most of the value (Kang and Jin-Woo are people, not factions).
+ * ── And why it is a form rather than a question ──
+ *
+ * Measured across a completed campaign: armed 107 times by real elapsed spans, 107 empty answers,
+ * zero rejections — nothing was ever proposed for a gate to refuse. On those same passes the
+ * review's numbered disposition lines drew 3319 answers from the same model. The subject was not
+ * the problem and neither was the model; `moves: []` was always valid and the instruction spent two
+ * of its six clauses granting permission to use it. See `worldBlock`.
  */
 
-import { FACTION, PERSON, resolveEntity } from './entity-table.js';
-import { HIDDEN, OPEN, samePlace } from './thread-table.js';
+import { table_entries } from './lib/hash.js';
+import { windowSnippet } from './diag.js';
+import { ACTOR_KINDS, splitEntityKey } from './entity-table.js';
+import { HIDDEN, OPEN, dialOf, samePlace } from './thread-table.js';
 
 /** How many recent world events the pinned block may carry. */
 export const MAX_WORLD_LINES = 3;
+
+/**
+ * How many agendas one off-screen turn may ask about.
+ *
+ * The block is a form to fill in, and a form nobody finishes is a form that was too long. Bounded
+ * the way `MAX_ITEM_LINES` bounds the review's half; what does not fit is asked on a later skip,
+ * and `worldAsks` orders by how long each has gone unmoved so the queue drains.
+ */
+export const MAX_WORLD_ASKS = 8;
+
+/**
+ * The most one agenda may advance on one pass.
+ *
+ * Off-screen has no mention gate — that is what off-screen MEANS — so the elapsed span is the only
+ * evidence, and it cannot distinguish one step from five. One step per skip makes a long ambition
+ * take many skips, which is the pacing a campaign wants anyway, and bounds what a compliant model
+ * can do if it decides everything advanced at once.
+ */
+export const MAX_WORLD_TICK = 1;
+
+/** Line-id prefix, mirroring `review-table.js`'s per-kind prefixes. */
+const ASK_PREFIX = 'W';
 
 /**
  * Render the recent off-screen world for the pinned block, honouring the reveal contract.
@@ -100,19 +129,23 @@ export function schema() {
         type: 'object',
         description: 'What the people and factions already on the cast did while the camera was elsewhere. Off-screen only — never events the excerpt showed directly.',
         properties: {
-            moves: {
+            advances: {
                 type: 'array',
-                description: 'Advances of standing agendas during the elapsed span. Empty when the span was short, nothing plausibly moved, or the excerpt showed the events directly.',
+                description: 'One entry for EVERY numbered line in the "WHAT MOVED WHILE YOU WERE AWAY" block, in order. Answer every line, including the ones that did not move.',
                 items: {
                     type: 'object',
                     properties: {
-                        who: {
+                        id: {
                             type: 'string',
-                            description: 'The person or faction making the move, BY NAME as it appears in the cast above. Must be someone already tracked there — never a new actor.',
+                            description: 'The line id exactly as printed, e.g. "W1". Never an id the block did not print.',
+                        },
+                        tick: {
+                            type: 'integer',
+                            description: `How far it advanced during the elapsed span: 0 if nothing happened, 1 if it moved. At most ${MAX_WORLD_TICK} per span. 0 is a real answer and the right one for a short gap or an agenda nothing served.`,
                         },
                         what: {
                             type: 'string',
-                            description: 'One phrase: how their agenda advanced: "ran two D-rank raids", "moved on the border".',
+                            description: 'One phrase saying how it advanced: "ran two D-rank raids", "bought out the eastern pill stalls". Empty when the tick is 0.',
                         },
                         where: {
                             type: 'string',
@@ -124,12 +157,12 @@ export function schema() {
                             description: `${OPEN} if the point-of-view character could plausibly learn of this, ${HIDDEN} if beyond their knowledge. Default ${HIDDEN} for anything they would have to be told about and were not.`,
                         },
                     },
-                    required: ['who', 'what', 'where', 'seen'],
+                    required: ['id', 'tick', 'what', 'where', 'seen'],
                     additionalProperties: false,
                 },
             },
         },
-        required: ['moves'],
+        required: ['advances'],
         additionalProperties: false,
     };
 }
@@ -137,47 +170,195 @@ export function schema() {
 /** @returns {string} Prompt guidance for the probe. */
 export function instruction() {
     return [
-        'What the people and factions already on the cast did while the camera was elsewhere, given the time the excerpt says has passed.',
-        'A move must name a person or faction FROM THE CAST ABOVE — never invent a new actor. fold advances the world it knows; new actors arrive only on-screen.',
-        'Root each move in that actor\'s stated wants where one is recorded. An agenda with no advance contributes no move.',
+        'The "WHAT MOVED WHILE YOU WERE AWAY" block lists standing agendas by id. Answer EVERY line once, in order.',
+        `"tick" is 0 if that agenda did not advance during the elapsed span, ${MAX_WORLD_TICK} if it did. 0 is a real answer: a short gap, or nobody served that agenda, and most lines on most passes are 0.`,
+        'Judge only the span the excerpt says has passed, and only what happened OFF-SCREEN. If the excerpt showed it directly, the other probes already recorded it and the tick is 0.',
+        'When a line ticks, "what" says in one phrase how it advanced, rooted in what that actor or stake is after.',
         `Say whether the point-of-view character could plausibly learn of it ("${OPEN}") or not ("${HIDDEN}"). Default "${HIDDEN}" for anything they would have to be told about and were not.`,
-        'Off-screen only. If the excerpt showed an event directly, the other probes already recorded it.',
-        'Use an empty array when the span was short, nothing plausibly advanced, or the pass was not triggered by elapsed time.',
+        'Use an empty array only when the block listed no lines.',
     ].join(' ');
 }
 
 /**
- * Turn a world fragment into the moves fold will record, refusing the unrooted ones.
+ * The agendas this pass may ask about: every dial that can move while the camera is away.
+ *
+ * Actors and threads arrive from different tables and leave as one list, because the question is
+ * the same for both — an integer with a position, and something that would move it. `driveSize: 0`
+ * is "no standing agenda", which is every cast row in every chat written before drives existed, so
+ * a campaign that has never set one asks nothing and behaves exactly as it did.
+ *
+ * Ordered by how long each has gone unmoved, so a queue longer than `MAX_WORLD_ASKS` drains instead
+ * of asking about the same eight forever.
+ *
+ * @param {object} params Parameters.
+ * @param {Map<string, object>} [params.entities] The cast table.
+ * @param {Array<object>} [params.threads] Thread rows, as `threads()` returns them.
+ * @param {number} [params.turn] Current turn, for ordering.
+ * @returns {Array<object>} Eligible agendas, most-neglected first.
+ */
+export function worldAsks({ entities = new Map(), threads = [], turn = 0 } = {}) {
+    const asks = [];
+
+    for (const [key, row] of table_entries(entities)) {
+        if (!ACTOR_KINDS.includes(splitEntityKey(key).kind)) {
+            continue;
+        }
+        const size = Number(row?.driveSize) || 0;
+        if (size <= 0) {
+            continue;
+        }
+        asks.push({
+            kind: 'actor',
+            key,
+            name: String(row?.name ?? ''),
+            about: String(row?.wants ?? ''),
+            filled: Math.max(0, Number(row?.drive) || 0),
+            size,
+            age: Math.max(0, turn - (Number(row?.turn) || 0)),
+        });
+    }
+
+    for (const thread of Array.isArray(threads) ? threads : []) {
+        const dial = dialOf(thread);
+        if (!dial) {
+            continue;
+        }
+        asks.push({
+            kind: 'thread',
+            key: String(thread?.key ?? ''),
+            name: String(thread?.name ?? ''),
+            about: String(thread?.about ?? thread?.open ?? ''),
+            filled: dial.filled,
+            size: dial.size,
+            polarity: dial.kind,
+            age: Math.max(0, Number(thread?.stale) || 0),
+        });
+    }
+
+    return asks
+        .filter(ask => ask.key && ask.name)
+        .sort((a, b) => b.age - a.age || a.name.localeCompare(b.name))
+        .slice(0, MAX_WORLD_ASKS);
+}
+
+/**
+ * Render the off-screen turn as numbered lines the model files against.
+ *
+ * ── The measurement this replaces an open invitation with ──
+ *
+ * The probe used to be handed a free `moves` array and asked what advanced. Across a completed
+ * campaign it was armed 107 times by real elapsed spans and returned an empty list 107 times, with
+ * zero rejections — the model never proposed anything for a gate to refuse. In the same campaign,
+ * on the same passes, the review's numbered disposition lines drew 3319 answers.
+ *
+ * The difference is not the model and not the subject. A form gets filled in and an open question
+ * gets skipped, and the schema made skipping free: `moves: []` is always valid, and the instruction
+ * spent two of its six clauses granting permission to use it.
+ *
+ * So the world turn is a form now. One line per agenda, each with an id, and an answer per id.
+ *
+ * ── Addressing by id retires `unrooted-move` ──
+ *
+ * The old shape asked the model to NAME its actor, which meant a name could miss — the whole point
+ * of the rootedness rule and its `unrooted-move` refusal. An id can only come from the block fold
+ * just printed, so an unrooted move is no longer refused, it is unsayable. That is the class made
+ * impossible by construction rather than caught by a gate, and it is why the rule leaves with the
+ * shape that needed it. `unknown-id` remains for a garbled or invented id, which is a different and
+ * much narrower failure.
+ *
+ * @param {object} params Parameters.
+ * @param {Array<object>} [params.asks] Rows from `worldAsks`.
+ * @param {string} [params.elapsed] How much time the excerpt says passed, for the heading.
+ * @returns {{text: string, index: Map<string, object>}} The block and its id lookup.
+ */
+export function worldBlock({ asks = [], elapsed = '' } = {}) {
+    const index = new Map();
+    if (!asks.length) {
+        return { text: '', index };
+    }
+
+    const lines = asks.map((ask, at) => {
+        const id = `${ASK_PREFIX}${at + 1}`;
+        index.set(id, { ...ask, id });
+        const face = ask.kind === 'actor' ? 'drive' : (ask.polarity || 'dial');
+        const about = ask.about ? ` — ${ask.about}` : '';
+        return `  ${id} [${face} ${ask.filled}/${ask.size}] ${ask.name}${about}`;
+    });
+
+    const span = String(elapsed ?? '').trim();
+    return {
+        text: [
+            `WHAT MOVED WHILE YOU WERE AWAY${span ? ` (${span})` : ''}`,
+            ...lines,
+        ].join('\n'),
+        index,
+    };
+}
+
+/**
+ * Turn the answered lines into the moves fold will record.
  *
  * @param {any} fragment The probe's slice of the extraction.
  * @param {object} params Parameters.
- * @param {Map<string, object>} params.entities The entity table (the cast; read-only here).
- * @returns {{accepted: Array<{who: string, what: string, where: string, seen: string, root: string}>, rejected: Array<{who: string, reason: string}>}}
- *   What fold will advance, and what was refused for being unrooted.
+ * @param {Map<string, object>} params.index The id lookup `worldBlock` returned.
+ * @param {string} [params.windowText] Narrative window, for the diagnostics snippet.
+ * @returns {{accepted: Array<object>, rejected: Array<object>, declined: number}} What fold will
+ *   advance, what was refused, and how many lines were answered "nothing moved".
  */
-export function planWorld(fragment, { entities } = {}) {
+export function planWorld(fragment, { index = new Map(), windowText = '' } = {}) {
     const accepted = [];
     const rejected = [];
+    const snippet = windowSnippet(windowText);
+    let declined = 0;
+    const answered = new Set();
 
-    for (const move of Array.isArray(fragment?.moves) ? fragment.moves : []) {
-        const who = String(move?.who ?? '').trim();
-        const what = String(move?.what ?? '').trim();
-        if (!who || !what) {
-            rejected.push({ who, reason: 'no-change' });
+    for (const advance of Array.isArray(fragment?.advances) ? fragment.advances : []) {
+        const id = String(advance?.id ?? '').trim().toUpperCase();
+        const ask = index.get(id);
+        if (!ask) {
+            // Narrower than `unrooted-move` ever was: not "you named somebody I do not know" but
+            // "you answered a question I did not ask".
+            rejected.push({ item: id || String(advance?.id ?? ''), reason: 'unknown-id', raw: advance, snippet });
             continue;
         }
-        // The root is a cast row, resolved the way everything in fold resolves identity — against
-        // the entity table, not by reading the move's prose. A person first (the cheap layer that
-        // covers Kang and Jin-Woo), then a faction. No match is the model inventing an actor.
-        const root = resolveEntity(entities, PERSON, who) || resolveEntity(entities, FACTION, who);
-        if (!root) {
-            rejected.push({ who, reason: 'unrooted-move' });
+        // One answer per line. A second is not evidence of two advances; it is the same line filed
+        // twice, and taking both would let one agenda outrun the per-pass cap by repetition.
+        if (answered.has(id)) {
+            rejected.push({ item: id, reason: 'duplicate-id', raw: advance, snippet });
             continue;
         }
-        const where = String(move?.where ?? '').trim();
-        const seen = move?.seen === HIDDEN ? HIDDEN : OPEN;
-        accepted.push({ who: root.entity.name || who, what, where, seen, root: root.key });
+        answered.add(id);
+
+        const tick = Math.trunc(Number(advance?.tick) || 0);
+        if (tick <= 0) {
+            // A first-class answer, and the honest one for a short span. What changed is that it
+            // must be GIVEN — an absent array no longer stands in for "I considered them all".
+            declined++;
+            continue;
+        }
+
+        const what = String(advance?.what ?? '').trim();
+        if (!what) {
+            // A tick with nothing to say is a number with no fiction under it. The summary is what
+            // makes the advance recallable later, so an advance without one is not worth recording.
+            rejected.push({ item: ask.name, reason: 'no-change', raw: advance, snippet });
+            continue;
+        }
+
+        accepted.push({
+            id,
+            kind: ask.kind,
+            root: ask.key,
+            who: ask.name,
+            what,
+            where: String(advance?.where ?? '').trim(),
+            seen: advance?.seen === HIDDEN ? HIDDEN : OPEN,
+            tick: Math.min(MAX_WORLD_TICK, tick),
+            filled: ask.filled,
+            size: ask.size,
+        });
     }
 
-    return { accepted, rejected };
+    return { accepted, rejected, declined };
 }
+

@@ -40,18 +40,56 @@ const HEALTH_LABELS = new Set(['health', 'condition', 'status', 'injuries', 'sta
  */
 export function findStateBlock(text) {
     const source = String(text ?? '');
-    // Optional horizontal rule, then a bracketed block, then only whitespace to the end.
-    const match = source.match(/\n?\s*(?:^|\n)\s*(?:[-*_]{3,}\s*\n)?\s*(\[[^[\]]*\])\s*$/);
-    if (!match) {
-        return null;
+
+    // ── Three wrappers, because cards do not agree on one ──
+    //
+    // This recognised `[...]` and nothing else, and that cost a whole campaign its ground truth. A
+    // live Isekai card closes its replies with a FENCED block inside an XML-ish tag:
+    //
+    //     <stats>
+    //     ```
+    //     HP: 100/100 | MP: 50/50
+    //     Skills: Sense E (0/5), Quarterstaff Proficiency E (1/5)
+    //     Abilities: Null Insight (Active), Void Comprehension (Passive)
+    //     Equipment: Worn Quarterstaff (Common), School Uniform, Backpack
+    //     Inventory: Smartphone, Wallet
+    //     ```
+    //     </stats>
+    //
+    // `findStateBlock` returned null for every one of them, so `absorb.js` never ran, `clock.block`
+    // was never written, and fold fell back to inferring state from prose. What that inference
+    // produced, on the panel the owner was reading: `Quarterstaff proficiency (e)` and
+    // `Quarterstaff proficiency` as two abilities (they are one skill that went F→E→D), `Work` as an
+    // ability (from "settling into the rhythm of the work"), and no Smartphone, Wallet, School
+    // Uniform or Backpack at all — every one of them listed, correctly, in a block fold could not
+    // see. The structured truth was in the message the whole time.
+    //
+    // Matching a delimiter shape is FORMAT, which RULE 1 permits explicitly, and the field LABELS
+    // this feeds (`INVENTORY_LABELS` and friends) are block-field labels, which it permits as
+    // PROTOCOL. Nothing here reads narrative.
+    const patterns = [
+        // A bracketed block: `[HP: 10 | Location: the inn]`
+        /\n?\s*(?:^|\n)\s*(?:[-*_]{3,}\s*\n)?\s*\[([^[\]]*)\]\s*$/,
+        // A tag wrapper, with or without a fence inside: `<stats> ``` ... ``` </stats>`
+        /\n?\s*(?:^|\n)\s*(?:[-*_]{3,}\s*\n)?\s*<([a-z][\w-]*)>\s*(?:```[^\n]*\n)?([\s\S]*?)(?:\n\s*```)?\s*<\/\1>\s*$/i,
+        // A bare fenced block at the end: ``` ... ```
+        /\n?\s*(?:^|\n)\s*(?:[-*_]{3,}\s*\n)?\s*```[^\n]*\n([\s\S]*?)\n\s*```\s*$/,
+    ];
+
+    for (const pattern of patterns) {
+        const match = source.match(pattern);
+        if (!match) {
+            continue;
+        }
+        // The tag form captures the tag name first, so the payload is always the LAST group.
+        const inner = String(match[match.length - 1] ?? '').trim();
+        // A status block is labelled fields; a bare bracketed aside or a code sample is not.
+        if (!inner.includes(':')) {
+            continue;
+        }
+        return { raw: match[0], inner, index: source.length - match[0].length };
     }
-    const raw = match[0];
-    const inner = match[1].slice(1, -1).trim();
-    // A status block is labelled fields; a bare bracketed aside is not.
-    if (!inner.includes(':')) {
-        return null;
-    }
-    return { raw, inner, index: source.length - raw.length };
+    return null;
 }
 
 /**
@@ -81,7 +119,11 @@ export function parseStateBlock(text) {
     }
 
     const fields = new Map();
-    for (const part of inner.split('|')) {
+    // Newlines separate fields as surely as `|` does — a one-line block uses pipes, a fenced one
+    // uses lines, and the live Isekai card uses BOTH (`HP: 100/100 | MP: 50/50` on its own line).
+    // Splitting on only `|` folded ten labelled lines into one field whose value was the rest of
+    // the block.
+    for (const part of inner.split(/[\n|]/)) {
         const colon = part.indexOf(':');
         if (colon === -1) {
             continue;
@@ -116,10 +158,62 @@ export function isEmptyValue(value) {
 }
 
 /**
+ * Strip one bracket pair that encloses the WHOLE value.
+ *
+ * ── A wrapper is not a qualifier, and the depth guard could not tell them apart ──
+ *
+ * `splitItems` ignores separators inside brackets so that a qualifier — "Beretta M92F (12 rounds,
+ * one spare magazine)" — stays one item. That guard is right about qualifiers and was catastrophic
+ * about lists, because plenty of cards bracket the entire field:
+ *
+ *     Equipment: [School Uniform, Backpack]
+ *     Inventory: [Smartphone, Wallet]
+ *
+ * Every comma there sits at depth 1, so nothing split, and the line became a single item literally
+ * named `school uniform, backpack`. MEASURED in the live Isekai RPG chat: those two lines produced
+ * four inventory rows across two absorbs — `school uniform, backpack`, `rough cloth wraps,
+ * smartphone, wallet`, `school uniform, rough cloth wraps`, `backpack, smartphone, wallet` — five
+ * real possessions rendered as four fictional ones, each listed twice, and the narrator was handed
+ * all of it as `Carrying:`.
+ *
+ * The distinction is structural, not linguistic: a bracket whose match is the last character
+ * encloses everything, so it is punctuation around a list. A bracket that closes early is attached
+ * to one entry, so it qualifies that entry. No word is consulted, which keeps this on RULE 1's
+ * STRUCTURE side.
+ *
+ * Only one layer comes off, and only when it is genuinely the outermost: `[a, b]` unwraps, and
+ * `[a], [b]` does not, because the first `[` closes before the end.
+ *
+ * @param {string} value A field value.
+ * @returns {string} The value with one enclosing bracket pair removed, if it had one.
+ */
+export function unwrapList(value) {
+    const text = String(value ?? '').trim();
+    // Fullwidth and ideographic brackets too: a card written in Chinese wraps its lists in ［］ or 【】,
+    // and a wrapper fold cannot see is a list it turns into one long item.
+    const pairs = { '[': ']', '(': ')', '［': '］', '【': '】', '（': '）', '「': '」' };
+    const close = pairs[text[0]];
+    if (!close || text[text.length - 1] !== close) {
+        return text;
+    }
+    let depth = 0;
+    for (let at = 0; at < text.length; at++) {
+        if (text[at] === text[0]) depth++;
+        else if (text[at] === close) depth--;
+        // Closed before the end, so this bracket belongs to the first entry rather than the list.
+        if (depth === 0 && at < text.length - 1) {
+            return text;
+        }
+    }
+    return text.slice(1, -1).trim();
+}
+
+/**
  * Split an inventory field into item strings.
  *
  * Splits on commas and semicolons at bracket depth zero, so a qualifier like
- * "Beretta M92F (12 rounds, one spare magazine)" stays one item rather than three.
+ * "Beretta M92F (12 rounds, one spare magazine)" stays one item rather than three — after
+ * `unwrapList` removes a bracket that wraps the whole field, which is a list and not a qualifier.
  *
  * @param {string} value The inventory field value.
  * @returns {string[]} Item strings, uncleaned.
@@ -133,14 +227,14 @@ export function splitItems(value) {
     let current = '';
     let depth = 0;
 
-    for (const ch of String(value)) {
+    for (const ch of unwrapList(value)) {
         if (ch === '(' || ch === '[') {
             depth++;
             current += ch;
         } else if (ch === ')' || ch === ']') {
             depth = Math.max(0, depth - 1);
             current += ch;
-        } else if ((ch === ',' || ch === ';') && depth === 0) {
+        } else if ((ch === ',' || ch === ';' || ch === '，' || ch === '、' || ch === '；') && depth === 0) {
             if (current.trim()) items.push(current.trim());
             current = '';
         } else {
@@ -337,7 +431,7 @@ export function splitConditions(value) {
         return [];
     }
     return String(value)
-        .split(/[,;]/)
+        .split(/[,;，、；]/)
         .map(part => part.trim().toLowerCase().replace(/[.]+$/, ''))
         .filter(part => part && !isEmptyValue(part));
 }
@@ -364,9 +458,13 @@ export function classifyBlock(fields) {
                 context.set(label, value);
             }
         } else if (!isEmptyValue(value)) {
-            // Time, Location, Conditions, Leads and anything else a card invents: kept verbatim
-            // so the injected block can carry them without fold needing to model them.
-            context.set(label, value);
+            // Time, Location, Conditions, Leads and anything else a card invents: kept as the card
+            // wrote it so the injected block can carry them without fold needing to model them —
+            // less the bracket some cards wrap a whole field in, for the same reason `splitItems`
+            // drops it. `Quests: [Journey to the Capital, The Sage's Mandate]` is a two-item list,
+            // and a reader that splits it on the comma without unwrapping first produces
+            // `[Journey to the Capital` and `The Sage's Mandate]` — which is what the panel showed.
+            context.set(label, unwrapList(value));
         }
     }
 

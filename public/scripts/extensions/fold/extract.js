@@ -338,6 +338,16 @@ export async function runExtraction({ windowSize = 6, responseLength = 800, prof
         return outcome(window.context ? 'nothing-new' : 'empty-window');
     }
 
+    // ── A chat fold was switched on halfway through says so, once ──
+    //
+    // The first pass reaches back to the opening (`FIRST_WINDOW`), but it is bounded, so enabling
+    // fold at message 266 of 277 leaves 261 messages nothing will ever read. That is not a defect
+    // to repair — it is a fact about this ledger, and the whole class of bug this session chased
+    // was subsystems failing in silence. `absorb` never ran in four campaigns and never said so.
+    if (window.unread) {
+        observe.noteCap('opening-unread', window.unread);
+    }
+
     busy = true;
     try {
         // FOLD-SLA §2.1: the wait must be visible. Extraction is in flight.
@@ -568,6 +578,14 @@ export async function runExtraction({ windowSize = 6, responseLength = 800, prof
                     turn,
                     windowText: window.newText,
                     shown: ledger.shown,
+                    // ── Every mid this pass displayed, both halves ──
+                    //
+                    // `sources` above is the new half — what may anchor an event. This is what the
+                    // model could be RE-telling, and it is the only thing the already-recorded gate
+                    // is allowed to refuse on (`state-table.js` `validateInventory`). Built from the
+                    // window that was actually rendered, not from the mark or the size, because a
+                    // refusal has to be about the text the model was handed.
+                    visible: new Set(window.seen ?? []),
                     // The id index the pinned block built this pass. Threaded for `shown`'s exact
                     // reason: an answer is about a line the model was shown, and only the caller
                     // that built the prompt knows which lines those were or what ids they carried.

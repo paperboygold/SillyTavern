@@ -54,6 +54,74 @@ export const COST = 'cost';
 export const SETBACK = 'setback';
 
 /**
+ * ── The engine, and why it is Blades' and not a blend ──
+ *
+ * The first design summed every factor into one number and cut it into CLEAR / COST / SETBACK. It
+ * borrowed the CONSEQUENCE SLOTS from Fate (`MAX_MARKS = 3`, phrase-and-severity, no hit points),
+ * the MOMENTUM TRACK from Ironsworn (`MOMENTUM_FLOOR = -6`, `MOMENTUM_CEILING = 10` — Ironsworn's
+ * exact range), and CLOCKS from Blades. What it did not borrow was the part of each that makes it
+ * work:
+ *
+ *   · In Fate a consequence is INERT until someone spends a fate point to invoke it, and it clears
+ *     on a defined schedule — mild after a scene, moderate after a session. Here it was a permanent
+ *     stacking subtraction on every roll, and nothing ever cleared it.
+ *   · In Ironsworn momentum is a resource you BURN to turn a miss into a hit, resetting to +2. Here
+ *     it was a passive cushion that only applied while positive, with no burn and no reset.
+ *   · In Blades the roll never asks "did you fail". Position and effect are set before it, and the
+ *     roll decides what it COSTS and how much you GET.
+ *
+ * MEASURED, live Wuxia World RPG at 57 messages: 16 adjudicated attempts — 1 clear, 11 cost,
+ * 4 setback, the last four consecutive. Standing `[-8, -6]` against a `SETBACK_AT` of -2, from
+ * "actively opposed; carrying 5 injuries; this has failed before". Six points underwater with a
+ * maximum reachable bonus of +4 (support +2, cushion +2). Momentum sat at -6 — the exact floor of a
+ * track borrowed from a game where it would have been spent long before. Nothing the player could
+ * do could reach the threshold, so the narrator was asked to justify a failure every single turn,
+ * and ran out of plausible ones: the player's legs ended up buried under rubble mid-fight with a
+ * boar.
+ *
+ * The structural error is that ONE SUM. Every system fold drew on keeps "how bad is my situation"
+ * and "did I succeed" on separate axes, and every one of them gives failure something back —
+ * PbtA marks experience on a miss, Ironsworn hands you momentum and a Pay the Price move, Blades
+ * offers a devil's bargain and stress to resist with, Fate pays you for accepting a compel. fold
+ * was the only one where failure was purely subtractive: -2 momentum and another wound that made
+ * the next attempt worse.
+ *
+ * So the two axes are the model now, taken from Blades rather than assembled from three games:
+ *
+ *   POSITION  how exposed the attempt is — what it will COST when it costs.
+ *   EFFECT    how much of what was wanted actually lands.
+ *
+ * Both are FLOORED. `desperate` + `limited` still accomplishes something at a steep price, which is
+ * Blades' actual promise: the question is never "did I fail", it is "what does this cost". An
+ * injured character in a bad spot gets less done and pays more for it, and never enters a state
+ * from which nothing can be attempted.
+ */
+
+/**
+ * Whether an attempt runs with, against, or beside what the person it is aimed at wants.
+ *
+ * The social axis. `feels` — their disposition — says whether they are inclined to help you;
+ * this says whether helping costs them the thing they are already chasing. A merchant who dislikes
+ * you will still sell you a horse; a friend will still refuse to hand over his brother.
+ */
+export const WITH_GRAIN = 'with';
+export const AGAINST_GRAIN = 'against';
+export const BESIDE_GRAIN = 'beside';
+export const GRAINS = [WITH_GRAIN, AGAINST_GRAIN, BESIDE_GRAIN];
+
+/** How exposed the attempt is. Decides what a consequence costs, never whether one lands. */
+export const CONTROLLED = 'controlled';
+export const RISKY = 'risky';
+export const DESPERATE = 'desperate';
+export const POSITIONS = [CONTROLLED, RISKY, DESPERATE];
+
+/** How much of what was wanted lands. Never zero — that is the whole point. */
+export const LIMITED = 'limited';
+export const STANDARD = 'standard';
+export const GREAT = 'great';
+export const EFFECTS = [LIMITED, STANDARD, GREAT];
+
+/**
  * How favourable the standing must be before an attempt simply works, and how unfavourable before
  * it fails outright.
  *
@@ -182,6 +250,132 @@ export function standingRange(attempt = {}, standing = {}) {
 }
 
 /**
+ * How much a wound costs you, on Blades' scale rather than as an unbounded subtraction.
+ *
+ * Blades harm is levelled: level 1 is "less effective", level 2 is "reduced effect", level 3 is
+ * "you need help to act at all". It reduces what you ACCOMPLISH; it does not reduce your chance of
+ * accomplishing anything, and it saturates — there is no level 7. `hurtOf` returns a weighted count
+ * with no ceiling (it reached 5 in the live chat), so it is compressed here to the three steps the
+ * source system actually has.
+ *
+ * @param {number} hurt The weighted mark count from `hurtOf`.
+ * @returns {number} 0, 1 or 2 steps of lost effect.
+ */
+export function harmSteps(hurt) {
+    const count = Math.max(0, Number(hurt) || 0);
+    if (count >= 4) return 2;
+    if (count >= 1) return 1;
+    return 0;
+}
+
+/**
+ * Where an attempt stands, as a position and an effect.
+ *
+ * Neither axis can reach a value that means "nothing happens". That is not leniency — it is the
+ * rule the source system is built on, and it is what makes a wounded character in a desperate spot
+ * still a character with something to do.
+ *
+ * ── What moves which axis ──
+ *
+ * POSITION is about exposure, so it takes the things that make an attempt dangerous: active
+ * opposition, recklessness, somebody's ill will, and — only once you are badly hurt — your own
+ * condition. Being hurt does not by itself put you in a desperate spot; being hurt while something
+ * fights back does.
+ *
+ * EFFECT is about capability, so it takes the things that say how much you can bring to bear: what
+ * the world has already established, what has worked before, and your wounds on Blades' harm scale.
+ *
+ * `momentum` is the resist lever, and it is spent rather than accrued: standing earned by playing
+ * well buys back one step of position when you are in the worst spot. Ironsworn burns momentum to
+ * convert a miss; Blades spends stress to resist a consequence; this is the same move with fold's
+ * one integer, and it is the reason a bad run is escapable at all.
+ *
+ * @param {object} attempt The classified attempt.
+ * @param {object} standing What the world currently says.
+ * @returns {{position: string, effect: string, why: string[], spent: number}} The two axes.
+ */
+export function standingAxes(attempt = {}, standing = {}) {
+    const why = [];
+    const hurt = Math.max(0, Number(standing.hurt) || 0);
+    const harm = harmSteps(hurt);
+
+    // ── Position: what it costs when it costs ──
+    let exposure = 0;
+    if (attempt.opposed) {
+        exposure += 1;
+        why.push('actively opposed');
+    }
+    if (attempt.reckless) {
+        exposure += 2;
+        why.push('ignores what the character knows');
+    }
+    const regard = Number(standing.regard);
+    if (Number.isFinite(regard) && regard !== 2) {
+        exposure += regard < 2 ? 1 : -1;
+        why.push(regard < 2 ? 'they are inclined against it' : 'they are inclined to help');
+    }
+    // Being hurt is exposure only once it is serious, and only ever by one step. A character with
+    // three scratches is not in a desperate spot for having them.
+    if (harm >= 2) {
+        exposure += 1;
+        why.push(`badly hurt (${hurt})`);
+    }
+    if (attempt.supported === false) {
+        exposure += 1;
+        why.push('nothing established makes this possible');
+    }
+    // Asking someone for the thing they are trying to keep is the exposed move, whatever they think
+    // of you. `feels` says whether they are inclined to help; `grain` says whether helping costs
+    // them what they are after, which is the question a negotiation actually turns on.
+    if (attempt.grain === AGAINST_GRAIN) {
+        exposure += 1;
+        why.push('cuts against what they want');
+    }
+
+    // The lever. Only ever buys back the worst step, and only when there is standing to spend.
+    const banked = clampMomentum(standing.momentum);
+    let spent = 0;
+    if (exposure >= 2 && banked >= 3) {
+        exposure -= 1;
+        spent = 3;
+        why.push('standing earned earlier absorbs the worst of it');
+    }
+
+    // ── Effect: how much lands ──
+    let reach = 0;
+    if (attempt.supported) {
+        reach += 1;
+        why.push('the world supports it');
+    }
+    if (standing.precedent === WORKED) {
+        reach += 1;
+        why.push('this has worked before');
+    } else if (standing.precedent === FAILED) {
+        reach -= 1;
+        why.push('this has failed before');
+    }
+    // Offering somebody what they are already after is the strongest thing you can bring to a
+    // social attempt, and it is earned entirely through play: you have to have learned the want,
+    // which is a scene, and be able to answer it, which is another one.
+    if (attempt.grain === WITH_GRAIN) {
+        reach += 1;
+        why.push('runs with what they want');
+    }
+    reach -= harm;
+    if (harm) {
+        why.push(harm === 1 ? 'carrying an injury' : `carrying ${hurt} injuries`);
+    }
+
+    const at = (scale, index) => scale[Math.max(0, Math.min(scale.length - 1, index))];
+    return {
+        position: at(POSITIONS, exposure),
+        effect: at(EFFECTS, reach + 1),
+        why,
+        spent,
+    };
+}
+
+/**
  * Decide the band from the interval's endpoints.
  *
  * Never reads a midpoint. `point_estimate_can_misdispatch` (`SelectionDispatch.lean:159`) shows a
@@ -212,16 +406,31 @@ export function bandOf({ lo, hi }) {
  * @returns {{band: string, lo: number, hi: number, why: string[], momentum: number}} The verdict.
  */
 export function adjudicate(attempt = {}, standing = {}) {
-    const range = standingRange(attempt, standing);
-    const band = bandOf(range);
+    const axes = standingAxes(attempt, standing);
+
+    // ── `band` is derived, and kept because the side effects are still right ──
+    //
+    // A desperate position is what advances a clock — pressure rises when things go badly, which is
+    // Blades' own reason for having clocks at all. Anything short of `great` cost something, which
+    // is what `notePendingCost` records. Nothing downstream needs to change to stop calling this a
+    // failure, because under the two axes it never was one.
+    const band = axes.position === DESPERATE && axes.effect === LIMITED
+        ? SETBACK
+        : (axes.position === CONTROLLED && axes.effect !== LIMITED ? CLEAR : COST);
+
+    // ── Momentum: spent when it saves you, earned when you do well, never a spiral ──
+    //
+    // The old rule subtracted 2 on every setback and added 1 on a clear, so a bad run drove the
+    // track to its floor and there was no move that could climb back — the clear it needed was the
+    // thing the injuries made unreachable. Ironsworn's actual rule is the opposite shape: momentum
+    // is SPENT to escape trouble and resets afterwards, and a miss is a move that gives you
+    // something. So a resist deducts what it used, a good outcome banks one, and a bad one costs
+    // nothing it did not already spend. The floor stops being an attractor.
+    const earned = band === CLEAR ? 1 : 0;
     return {
+        ...axes,
         band,
-        lo: range.lo,
-        hi: range.hi,
-        why: range.why,
-        // What the outcome does to banked standing. Clearing something hard earns it; a setback
-        // spends it, which is what stops momentum ratcheting upward forever.
-        momentum: clampMomentum((standing.momentum ?? 0) + (band === CLEAR ? 1 : band === SETBACK ? -2 : 0)),
+        momentum: clampMomentum((standing.momentum ?? 0) - axes.spent + earned),
     };
 }
 
@@ -342,14 +551,28 @@ export function renderVerdict(verdict, attempt = '') {
     const what = String(attempt ?? '').trim();
     const subject = what ? `this attempt (${what})` : 'this attempt';
 
-    switch (verdict?.band) {
-        case CLEAR:
-            return `[Outcome: ${subject} SUCCEEDS. Narrate it working. Do not introduce a complication.]`;
-        case SETBACK:
-            // Fail forward, stated as such — an LLM asked for failure will otherwise write a scene
-            // where nothing happens, which is the one outcome that stalls a story.
-            return `[Outcome: ${subject} FAILS. Narrate it not working, and change the situation for the worse as a result — a new problem, a lost chance, someone's attention. Never simply restate the status quo.]`;
-        default:
-            return `[Outcome: ${subject} SUCCEEDS AT A COST. Narrate it working, and make it cost something concrete — time, a resource, an injury, someone's trust, or being noticed.]`;
-    }
+    // ── The narrator is told what LANDS and what it COSTS, never "you failed" ──
+    //
+    // The old directive for the bottom band read "FAILS. Narrate it not working, and change the
+    // situation for the worse". Fired four times consecutively in the live Wuxia chat, that
+    // instruction is a demand for four escalating disasters in a row, and the narrator supplied
+    // them — ending with the player's legs buried under rubble in the middle of a boar fight.
+    //
+    // Under two axes there is nothing to escalate INTO, because the attempt always does something.
+    // The narrator is handed a size and a price and has no license to invent a catastrophe to
+    // justify a refusal it was never asked for.
+    const lands = {
+        [GREAT]: 'accomplishes MORE than was asked — it lands well',
+        [STANDARD]: 'accomplishes what was asked',
+        [LIMITED]: 'accomplishes only PART of what was asked — a foothold, not the thing',
+    }[verdict?.effect] ?? 'accomplishes what was asked';
+
+    const price = {
+        [CONTROLLED]: 'It costs nothing. Do not introduce a complication.',
+        [RISKY]: 'It costs something concrete — time, a resource, a minor hurt, someone\'s notice or trust.',
+        [DESPERATE]: 'It costs something serious and immediate, arising from what is already in the scene — '
+            + 'a real wound, a lost position, something breaking. Never invent a new hazard that was not already present.',
+    }[verdict?.position] ?? 'It costs something concrete.';
+
+    return `[Outcome: ${subject} ${lands}. ${price} Narrate the attempt going through — never simply restate the status quo, and never narrate it as doing nothing at all.]`;
 }

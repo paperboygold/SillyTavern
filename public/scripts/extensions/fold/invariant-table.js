@@ -12,20 +12,31 @@
  * fact about the world. A `different` verdict inside a component the `same` verdicts already
  * merged is a contradiction. None of these need a label, a model call, or a human.
  *
- * Measured over the live chats the day this was written, by running this module over them:
+ * Measured over the live chats the day this was written:
  *
- *   Time Stop          PROVEN     silver −11, silver moon locket −1
- *   Solo Leveling      PROVEN     painkillers −1
  *   Wuxia              suspected  carried `silver wen` 21 against money `silver` 76
- *   Isekai (67 msgs)   suspected  money `copper coins` 14 against money `copper` 0
+ *   Isekai (73 msgs)   suspected  money `copper coins` 14 against money `copper` 2
  *
- * Four of nine campaigns, and the Isekai one appeared inside 67 messages — this is not a
- * long-campaign problem that can be deferred.
+ * Both are real splits and both are STILL SPLIT in the live chats. `crosswalk.js` folds them to 77
+ * and 6, one row each — but only once a `same` verdict for the pair exists in `state.answers`, and
+ * across all nine campaigns the persisted verdicts are 21 cast + 48 thread and ZERO item. Those two
+ * numbers were produced by seeding the verdict by hand and on a duplicated test chat; no live pass
+ * has yet asked the item question and had it answered. The mechanism is verified end to end, its
+ * effect on a real campaign is not, and the difference is exactly the kind this file has been wrong
+ * about twice before. The Isekai split appeared inside 73 messages, so this is not a long-campaign
+ * problem that can be deferred.
  *
- * A hand-rolled version of this check reported `marks −8500` for Royal Succession, and that was an
- * artifact of summing `dq` while ignoring `set`: an absolute restatement is not a change. This
- * module applies both and Royal Succession is clean. Recorded because the wrong number was said out
- * loud before the right one.
+ * ── Two wrong numbers were published from this file, and both are recorded rather than erased ──
+ *
+ * A hand-rolled version of this check reported `marks −8500` for Royal Succession, an artifact of
+ * summing `dq` while ignoring `set`: an absolute restatement is not a change. This module applies
+ * both and Royal Succession is clean.
+ *
+ * The same scratch fold also produced a "PROVEN" column here — Time Stop `silver −11`, Solo Leveling
+ * `painkillers −1` — which `deriveState` cannot ever produce, because it deletes a row that reaches
+ * zero. See `negativeQuantities` below for what was really happening, which was worse. Both errors
+ * have the same cause: a convenience reimplementation of the fold, trusted because it agreed with
+ * expectations. The measurement instrument has to be the shipped one.
  *
  * ── The second job: violations are WITNESSES ──
  *
@@ -72,10 +83,25 @@ const tokens = (name) => new Set(String(name ?? '').toLowerCase().split(/[^0-9a-
 /**
  * Quantities that have gone below zero.
  *
- * A ledger that is a fold over signed deltas can go negative two ways, and both are defects: a
- * debit was double-counted, or a debit was keyed to a row that never held the credit. Time Stop's
- * `silver −11` is the second — the spends landed on `money␀silver` while the credits landed on
- * `carried␀silver wen`.
+ * A ledger that is a fold over signed deltas can go negative two ways, and both are defects: a debit
+ * was double-counted, or a debit was keyed to a row that never held the credit.
+ *
+ * ── This check CANNOT fire on live state, and the docblock above used to claim it had ──
+ *
+ * `deriveState` deletes any row the moment it reaches zero or below, and `setQty` clamps at zero, so
+ * no derived inventory can contain a negative quantity. Run over `derive().inv` this function returns
+ * `[]` for every chat, unconditionally. The "PROVEN" rows this module reported — Time Stop `silver
+ * −11`, Solo Leveling `painkillers −1` — came from a scratch fold written to inspect the chats, which
+ * omitted the delete rule. They were never what fold showed anyone.
+ *
+ * What fold actually did was worse, and is why the mistake was worth chasing rather than quietly
+ * fixing: an overdraw DELETES the row, so the balance restarts from zero on the next credit and the
+ * line silently vanishes from the panel. Time Stop ended a campaign of buying and selling with no
+ * silver row at all. `crosswalk.js` is the repair — with the duplicate guard the same events fold to
+ * 13 — and `tests/fold-crosswalk.test.js` pins both the impossibility of a negative and the recovery.
+ *
+ * Kept, not deleted: it is the correct check for a table that has not been through `deriveState`,
+ * which is what `migrate.js` and the replay harness build, and it costs one pass over a small map.
  *
  * @param {Map<string, {qty?: number}>} inv Derived inventory, keyed by `itemKey`.
  * @returns {Array<{kind: string, key: string, place: string, name: string, qty: number}>} Violations.
@@ -87,6 +113,74 @@ export function negativeQuantities(inv) {
         if (Number.isFinite(qty) && qty < 0) {
             const { place, name } = splitItemKey(key);
             out.push({ kind: 'negative-quantity', key, place, name, qty });
+        }
+    }
+    return out;
+}
+
+/**
+ * One THING occupying two rows in the same place, found by strict token containment.
+ *
+ * ── The gap this closes, reported from live play ──
+ *
+ * Everything else in this file is money. `splitCurrency` requires a row at `money`,
+ * `unbackedDebits` reads overdrawn balances, and `same_currency` (`review-table.js`) reads the
+ * pinned Money block. So an ability recorded twice under two spellings had NO detector at all, and
+ * a fresh Isekai campaign showed it inside 49 messages:
+ *
+ *   abilities  "quarterstaff proficiency (e)"   granted at mid 4, with its rank
+ *   abilities  "quarterstaff proficiency"       re-reported at mid 46, without it
+ *
+ * The card grades skills in prose (`(e)`, `(d)` appear in the narrative), so the model sometimes
+ * captures the grade and sometimes does not. Both readings are faithful; the ledger keyed them
+ * apart and showed the player one skill twice.
+ *
+ * ── Why STRICT CONTAINMENT and SAME PLACE, measured ──
+ *
+ * Containment either way (`{quarterstaff, proficiency} ⊂ {quarterstaff, proficiency, e}`) rather
+ * than shared-token grouping, which is what `splitCurrency` uses. Shared-token is right for money —
+ * a currency name is short and its variants overlap loosely — and far too loose everywhere else: it
+ * would pair every carried item sharing any word. Containment says one name is the other plus
+ * qualifiers, which is what a re-report under a fuller spelling actually looks like.
+ *
+ * Same place, because place is part of the identity by design: the ledger's own docblock says a
+ * crowbar in the boot and a crowbar in your hand are two entries and moving one must not merge them.
+ * The cross-place case is money's alone, and `splitCurrency` already owns it.
+ *
+ * Swept over all nine campaigns, this raises **three** pairs in total:
+ *
+ *   abilities  "quarterstaff proficiency (e)" ~ "quarterstaff proficiency"   one skill, two rows
+ *   carried    "second ledger" ~ "ledger"                                    two real objects
+ *   carried    "fs-4 dataspike" ~ "dataspike"                                genuinely ambiguous
+ *
+ * One certain merge, one certain refusal, one worth asking — which is the calibration a QUESTION
+ * source wants. It decides nothing: the pair goes to the model exactly as a currency split does, and
+ * a `different` answer is a minority label the resolver's witness set is starved of.
+ *
+ * @param {Map<string, {qty?: number}>} inv Derived inventory.
+ * @returns {Array<{kind: string, rows: Array<{key: string, place: string, name: string, qty: number}>}>} Suspicions.
+ */
+export function splitNames(inv) {
+    const rows = [];
+    for (const [key, row] of inv ?? []) {
+        const { who, place, name } = splitItemKey(key);
+        rows.push({ key, who, place, name, qty: Number(row?.qty) || 0, t: tokens(name) });
+    }
+    const out = [];
+    for (let i = 0; i < rows.length; i++) {
+        for (let j = i + 1; j < rows.length; j++) {
+            const a = rows[i];
+            const b = rows[j];
+            // Same OWNER as well as same place. Two people carrying a sword and a shortsword is two
+            // people carrying swords, not one row that split — and raising it would spend a review
+            // question on a pair whose only relation is that both are armed.
+            if (a.who !== b.who || a.place !== b.place || !a.t.size || !b.t.size || a.t.size === b.t.size) {
+                continue;
+            }
+            const [small, big] = a.t.size < b.t.size ? [a.t, b.t] : [b.t, a.t];
+            if ([...small].every(token => big.has(token))) {
+                out.push({ kind: 'split-name', rows: [{ ...a, t: undefined }, { ...b, t: undefined }] });
+            }
         }
     }
     return out;
@@ -118,8 +212,10 @@ export function negativeQuantities(inv) {
 export function splitCurrency(inv) {
     const byToken = new Map();
     for (const [key, row] of inv ?? []) {
-        const { place, name } = splitItemKey(key);
-        if (place !== MONEY && place !== CARRIED) {
+        const { who, place, name } = splitItemKey(key);
+        // The player's purse only. One currency in two rows is a question about one person's money;
+        // a companion holding silver is not evidence that the player's silver is split.
+        if (who || (place !== MONEY && place !== CARRIED)) {
             continue;
         }
         for (const token of tokens(name)) {
@@ -155,12 +251,29 @@ export function splitCurrency(inv) {
  * (Wuxia's `silver wen` against `silver`, both still positive). Reported separately so the
  * difference stays visible.
  *
- * @param {Map<string, {qty?: number}>} inv Derived inventory.
+ * ── It reads INCIDENTS, not the table, and that is a correction ──
+ *
+ * This used to scan the derived inventory for `qty < 0`, exactly as `negativeQuantities` does. That
+ * cannot work and never did: `deriveState` deletes a row the moment it reaches zero or below, so the
+ * table it was handed can never contain a negative. Measured over all nine live campaigns, this
+ * function returned `[]` every single time, while the event streams contain real overdraws — Isekai
+ * `money copper` held 12 and was debited 14; Solo Leveling `carried painkillers` held 1 and was
+ * debited 2. The check that was documented as "what actually holds in every language" was dead code,
+ * which left the token supplement — script-dependent by its own docblock — as the only live detector.
+ *
+ * `deriveState` now records each overdraw as it deletes the row, so the evidence survives the line
+ * that destroys it, and this function reads that instead. Still pure arithmetic on fold's own
+ * numbers: no text, no tokenizer, no threshold.
+ *
+ * @param {Map<string, {qty?: number}>} inv Derived inventory, for the funded rows a credit could be in.
+ * @param {Array<{key: string, had: number, dq: number, short: number, mid: number|null}>} [overdrawn]
+ *   Overdraw incidents from `deriveState`. Absent, this reports nothing — an empty result means
+ *   "nothing was recorded", never "the ledger is sound".
  * @returns {Array<{kind: string, key: string, name: string, qty: number,
  *   candidates: Array<{key: string, name: string, qty: number}>}>} Violations, with the funded rows
  *   the missing credit could be sitting in.
  */
-export function unbackedDebits(inv) {
+export function unbackedDebits(inv, overdrawn = []) {
     const money = [];
     for (const [key, row] of inv ?? []) {
         const { place, name } = splitItemKey(key);
@@ -168,16 +281,22 @@ export function unbackedDebits(inv) {
             money.push({ key, name, qty: Number(row?.qty) || 0 });
         }
     }
-    return money
-        .filter(row => row.qty < 0)
-        .map(row => ({
+    return (overdrawn ?? [])
+        // Money only, and deliberately: with no text there is nothing to narrow carried rows by, so
+        // offering them would pair a shortfall against the dagger, the bow and the map — a flood of
+        // obviously-different questions spending the review's slots on noise.
+        .filter(incident => splitItemKey(incident.key).place === MONEY)
+        .map(incident => ({
             kind: 'unbacked-debit',
-            key: row.key,
-            name: row.name,
-            qty: row.qty,
+            key: incident.key,
+            name: splitItemKey(incident.key).name,
+            qty: -incident.short,
+            had: incident.had,
+            dq: incident.dq,
+            mid: incident.mid,
             // Every funded currency row is a candidate for where the credit went. Fold does not
             // pick one — the pair goes to the model, exactly as a token overlap would.
-            candidates: money.filter(other => other.key !== row.key && other.qty > 0),
+            candidates: money.filter(other => other.key !== incident.key && other.qty > 0),
         }));
 }
 
@@ -186,9 +305,21 @@ export function unbackedDebits(inv) {
  *
  * Identity is an equivalence relation, so `same` is transitive: union the `same` edges and any
  * `different` edge landing inside one component is a contradiction the model cannot have meant.
- * Measured across seven campaigns and 76 verdicts this count is ZERO, which is what licenses
- * treating the transitive closure as fact — 63 asked edges imply 73 pairs, so ten labels come from
- * algebra. If it ever goes non-zero the closure stops being free and this says so.
+ * Measured over PERSISTED answers — `state.answers`, nine campaigns, 69 verdicts — this count is
+ * ZERO, which is what licenses treating the transitive closure as fact there.
+ *
+ * That licence does NOT extend to the harvested training corpus, and the earlier version of this
+ * docblock implied it did. `harvest.js` walks the traces rather than the persisted table, and at 174
+ * pairs it carries 13 partition contradictions — roughly 7.5% of pairs sitting in a contradicted
+ * component, with the same two names answered both ways on different passes. The persisted table
+ * looks clean only because `remember` keeps one answer per pair key, so the last write hides the
+ * disagreement rather than resolving it. A resolver trained on the harvest is therefore trained on an
+ * inconsistent relation, and `evaluate.js` prints that warning itself.
+ *
+ * The consequence for this module: a wrong `same` that lands last flows straight into
+ * `crosswalk.js` with nothing flagging it. Quarantining contradicted components out of `aliasMap` —
+ * the way `unsoundComponents` already drops `set` collisions — is the cheap guard, and it is not
+ * built.
  *
  * @param {Map<string, {answer?: string}>|Iterable<[string, {answer?: string}]>} answers
  *   Persisted identity answers, keyed by `pairKey`.
@@ -236,7 +367,53 @@ export function partitionContradictions(answers, pairSep = String.fromCharCode(1
  *   witnesses: Array<{a: string, b: string, of: string, why: string}>}}
  *   Proven defects, suspected splits, and the identity questions those raise — never answers.
  */
-export function checkInvariants({ inv, answers = [] }) {
+/**
+ * The findings that have not already been reported.
+ *
+ * ── A rejection is an event; an invariant finding is a state ──
+ *
+ * `observe.noteRejections` is the channel for "the model proposed, fold refused" — the Count face,
+ * one increment per thing that happened. An invariant finding is not that. It is true OF the ledger
+ * until the ledger changes, and `checkInvariants` re-derives it from the whole event history on
+ * every pass, so pushing it down that channel counts the same defect once per pass forever.
+ *
+ * Measured on the live Wuxia World RPG: 118 rejections recorded, of which 94 were
+ * `invariant:overdraw` with ONE distinct payload — `copper, held 1, debited 2` at mid 50. The tally
+ * read ninety-four defects where there was one. Worse, `log.js` caps at `LOG_LIMIT` 120, so the
+ * duplicates took 94 of the 120 diagnostic slots and left 26 for every real rejection in the chat —
+ * each duplicate carrying an empty `raw`, an empty `snippet` and a null `mid`, because a state has
+ * no proposal behind it to record.
+ *
+ * Identity is the INCIDENT, not the row. Overdrawing the same purse twice is two defects and a
+ * filter that collapsed them would hide the second one forever, so an anchored finding keys on its
+ * `mid` and its magnitudes. A standing violation — a contradicted partition, a split name — has no
+ * mid, and keys on the pair it is about.
+ *
+ * @param {object[]} findings Everything the audit proved this pass.
+ * @param {Set<string>|Iterable<string>} [seen] Identities already reported.
+ * @returns {{fresh: object[], seen: Set<string>}} What is new, and the set carried forward.
+ */
+export function freshFindings(findings, seen = new Set()) {
+    const known = new Set(seen ?? []);
+    const fresh = [];
+    for (const finding of Array.isArray(findings) ? findings : []) {
+        const id = [
+            finding?.kind ?? '',
+            finding?.key ?? finding?.name ?? '',
+            finding?.a ?? '', finding?.b ?? '',
+            Number.isFinite(finding?.mid) ? finding.mid : '',
+            finding?.dq ?? '', finding?.had ?? '',
+        ].join('\u0001');
+        if (known.has(id)) {
+            continue;
+        }
+        known.add(id);
+        fresh.push(finding);
+    }
+    return { fresh, seen: known };
+}
+
+export function checkInvariants({ inv, answers = [], overdrawn = [] }) {
     // PROVEN against SUSPECTED, and the distinction is load-bearing. A negative quantity and a
     // contradicted partition are defects: no reading of the story makes them right. A token overlap
     // is a QUESTION — `carried/silver moon locket` shares "silver" with `money/silver` and is not
@@ -250,7 +427,11 @@ export function checkInvariants({ inv, answers = [] }) {
     // `different` LABEL — the minority class the corpus has three of in seventy-six — and it cost
     // no question slot to raise. Both answers are worth having, which is why they are witnesses.
     const splits = splitCurrency(inv);
-    const unbacked = unbackedDebits(inv);
+    // The non-money half. `splitCurrency` cannot see it (it requires a `money` row) and neither can
+    // the arithmetic detector (an ability is never overdrawn), which is why a duplicated skill sat
+    // on the panel with nothing in this file able to raise it.
+    const names = splitNames(inv);
+    const unbacked = unbackedDebits(inv, overdrawn);
     const violations = [
         ...negativeQuantities(inv),
         ...partitionContradictions(answers),
@@ -258,26 +439,42 @@ export function checkInvariants({ inv, answers = [] }) {
     // Unbacked debits are SUSPECTED splits too, from the text-free side. The negative balance
     // itself is already a proven violation above; what is suspected is WHICH funded row the credit
     // went to, and that is the model's answer.
-    const suspected = [...splits, ...unbacked];
+    const suspected = [...splits, ...names, ...unbacked];
     // A split raises one question per pair of rows in the group. `of: 'item'` because the review
     // has no item identity source yet — this is the first one, and it arrives free.
+    //
+    // ── One pair, one question, however many times the evidence says so ──
+    //
+    // A key can overdraw more than once in a campaign — Time Stop's `money silver` did it three
+    // times — and each incident offers the same funded rows, so the naive loop emitted the same pair
+    // once per incident. Measured before this dedup: 2 incidents produced 6 witnesses, of which 3
+    // were repeats. The review has eight slots; spending two of them re-asking a question already on
+    // the list is the cheapest possible waste. Order-independent, because a pair raised as (a,b) by
+    // one incident and (b,a) by another is one question.
     const witnesses = [];
+    const raised = new Set();
+    const raise = (a, b, why) => {
+        const id = [a, b].sort().join('');
+        if (raised.has(id)) {
+            return;
+        }
+        raised.add(id);
+        witnesses.push({ a, b, of: 'item', why });
+    };
     for (const debt of unbacked) {
         for (const candidate of debt.candidates) {
-            witnesses.push({ a: debt.key, b: candidate.key, of: 'item', why: 'unbacked-debit' });
+            raise(debt.key, candidate.key, 'unbacked-debit');
         }
     }
     for (const split of splits) {
         for (let i = 0; i < split.rows.length; i++) {
             for (let j = i + 1; j < split.rows.length; j++) {
-                witnesses.push({
-                    a: split.rows[i].key,
-                    b: split.rows[j].key,
-                    of: 'item',
-                    why: 'split-currency',
-                });
+                raise(split.rows[i].key, split.rows[j].key, 'split-currency');
             }
         }
+    }
+    for (const pair of names) {
+        raise(pair.rows[0].key, pair.rows[1].key, 'split-name');
     }
     return { violations, suspected, witnesses };
 }

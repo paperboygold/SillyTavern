@@ -60,6 +60,28 @@ export function note(rule, times = 1) {
 }
 
 /**
+ * Record a high-water mark rather than a running total.
+ *
+ * The Count face answers "how often"; some bounds are only legible as "how far". A drift counter
+ * that summed its gaps would grow with the length of the campaign and say nothing about severity —
+ * forty ten-stone discrepancies and one of 2604 would read the same. `merge_max` is the other
+ * idempotent merge the hash trinity already provides, so this is the same one-line insert with a
+ * different monoid, and re-noting the same finding cannot inflate it.
+ *
+ * @param {string} rule The rule that fired, already namespaced.
+ * @param {number} value The observed magnitude.
+ */
+export function noteMax(rule, value) {
+    const key = String(rule ?? '').trim();
+    if (!key || !Number.isFinite(value)) {
+        return;
+    }
+    const table = load();
+    insert_with(table, (nu, old) => Math.max(Number(nu) || 0, Number(old) || 0), key, Math.trunc(value));
+    commit(OBSERVED_PATH, table);
+}
+
+/**
  * Record a batch of validator rejections.
  *
  * The tally (`reject:<reason>`) says how often a rule fired; this ALSO writes each refusal to the
@@ -157,6 +179,18 @@ export const KNOWN_RULES = Object.freeze([
     // the one case that still refuses (the table full of dial-bearing open threads). See
     // `cold-store.js` ([EVICT]: eviction is demotion, never a relevance-judged delete).
     'cap:threads-archived',
+    // The staleness prune, which is a different event from the full-table shed above: `archived`
+    // means the table ran out of slots, `pruned` means the story stopped touching a stake for twice
+    // the hide threshold and it was retired to the cold store. Before it existed, nothing retired a
+    // thread at all unless the table filled — the live My Hero Academia RP held three threads, none
+    // of them rendered anywhere, all of them posed to the review forever (`review:kept` 53 against
+    // `review:settled` 1). A zero here in a long chat now means every stake really was resolved.
+    'cap:threads-pruned',
+    // Messages below the first pass's reach — fold switched on partway through a chat. Zero in a
+    // chat started with fold on, which is the common case; non-zero says the ledger begins life not
+    // knowing what is in the messages before it, which explains a great deal that would otherwise
+    // read as extraction failing.
+    'cap:opening-unread',
     // The same demotion for the cast: a person nobody has mentioned for two stale windows moves to
     // the cold store instead of ceasing to exist, so they can be recalled the moment the story
     // returns to them. `cast-archived` counts those demotions.
@@ -185,6 +219,15 @@ export const KNOWN_RULES = Object.freeze([
     // questions and was ignored — the same split as `pressure:absent` versus `pressure:empty`.
     'review:asked', 'review:none', 'review:settled', 'review:moot', 'review:kept',
     'review:advanced', 'review:merged', 'review:different', 'review:placed', 'review:polarity',
+    // ── Pairs the model volunteered, which no detector fold has could raise ──
+    //
+    // `nearIdentity` is a token-subset test and raises ZERO pairs over the 231 available on the live
+    // New Eldoria thread table — including two threads opened one turn apart. `suspected` counts the
+    // model naming a pair unprompted (`review-table.js` `same_thread`/`same_person`); those become
+    // ordinary `[same?]` questions on the next pass, so a rise here should show up as `merged` or
+    // `different` a turn later. `suspected` climbing while both of those stay flat means the pairs
+    // are not resolving to rows, which is a lookup defect and not a model one.
+    'review:suspected',
     // ── Marks and adversaries closing, which nothing could do before Phase D ──
     //
     // A wound's only exit used to be the `turns` guess made at write time, and `cap:condition-expired`
@@ -193,6 +236,13 @@ export const KNOWN_RULES = Object.freeze([
     // §12.3 makes the second one the phase's open measurement: no live combat has run under this
     // schema, so a zero here after a real fight is the finding.
     'review:mark-cleared', 'review:threat-cleared',
+    // The one table the review could not close. An item entered on a volunteered positive delta and
+    // left only on a volunteered negative one — three of those in 143 messages of the live Wuxia
+    // World RPG, all from one selling scene, while a sword the player laid on a corpse stayed on
+    // his hip in every prompt thereafter. A zero here in a long chat means either a character who
+    // never puts anything down or a question nobody is answering, and the two are worth telling
+    // apart.
+    'review:dropped',
     // The directed money question (§5 fix 1). `owed` is the trigger firing — a pass credited items
     // with nothing paid; `paid` is a debit landing from an answer; `unpaid` is the model answering
     // "nothing", which is a real answer and clears the question. Money moved up and never down for
@@ -206,6 +256,7 @@ export const KNOWN_RULES = Object.freeze([
     // Both are prompt defects rather than model failures, and neither should be repaired by
     // guessing what was meant.
     'reject:review-unknown-id', 'reject:review-wrong-shape', 'reject:review-unreadable-amount',
+    'reject:review-unmergeable', 'reject:sheet-unnamed', 'reject:sheet-unknown-kind', 'review:classified',
     // Caps — nobody proposed anything; a bound simply dropped it.
     // `stale-hidden` is retired to ZERO by construction as of Phase C — `isFresh` is deleted and no
     // code path increments this any more (`state-table.js`, the retirement note). Kept in this list
@@ -269,6 +320,10 @@ export const KNOWN_RULES = Object.freeze([
     // Adjudication. The band distribution is the measurement that settles CLEAR_AT and SETBACK_AT:
     // a band that never fires is a threshold set wrong, and one that fires every time is worse.
     'verdict:clear', 'verdict:cost', 'verdict:setback',
+    // The two axes, counted separately so play can settle them the way the old single-sum
+    // thresholds never were — see `verdict-table.js`'s "a band that never fires is a band set wrong".
+    'verdict:controlled', 'verdict:risky', 'verdict:desperate',
+    'verdict:limited', 'verdict:standard', 'verdict:great', 'verdict:resisted', 'verdict:regard-spent',
     'verdict:unclassified', 'verdict:error', 'verdict:skipped', 'verdict:uncontested',
     // Verdicts writing state (§6, Phase E): `setback-aimed` — a setback ticked the thread it was
     // actually about rather than a random victim; `cost-note` — a COST verdict told the next

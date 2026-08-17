@@ -18,6 +18,7 @@ import {
     isFull,
     mergeThreads,
     nameTokens,
+    pruneThreads,
     nearIdentity,
     normalizeSize,
     normalizeStatus,
@@ -721,5 +722,43 @@ describe('calendar fronts tick in code (Phase W)', () => {
         foldThread(table, { name: 'filled', tick: 4, size: 4, kind: DOOM, per: '1 month', ticked: 0 });
         foldThread(table, { name: 'a lead', open: 'nobody has searched it', per: '1 month' });
         expect(tickCalendar(table, { now: MONTH }).ticked).toEqual([]);
+    });
+});
+
+describe('pruneThreads — a stake nobody has touched in a long time sheds to the cold store', () => {
+    // The other half of the stale repair. `reviewBlock` asks a stale line whether it is still a
+    // stake; this is what happens when nothing ever answers. `pruneEntities` has done exactly this
+    // for people since Phase C — "Deletion is at double the hide threshold, so anything the panel
+    // could still show survives" (`entities.js`) — and threads already had the demote sink wired
+    // (`clocks.js`, cold.demote) but it fired ONLY on the full-table cap. With three threads in the
+    // table, the live My Hero Academia RP never came close, so nothing was ever retired.
+    const row = (turn, extra = {}) => ({ name: 'a stake', open: 'unresolved', status: 'open', turn, ...extra });
+
+    test('past twice the hide threshold it is shed, and returned rather than deleted', () => {
+        const table = new Map([['old', row(0)], ['fresh', row(30)]]);
+        const dropped = pruneThreads(table, THREAD_STALE * 2 + 1);
+        expect(dropped.map(d => d.key)).toEqual(['old']);
+        expect(dropped[0].row.name).toBe('a stake');
+        expect([...table.keys()]).toEqual(['fresh']);
+    });
+
+    test('exactly at the threshold it survives — the panel could still show it', () => {
+        const table = new Map([['edge', row(0)]]);
+        expect(pruneThreads(table, THREAD_STALE * 2)).toEqual([]);
+        expect(table.size).toBe(1);
+    });
+
+    test('a dial is never shed for going unmentioned', () => {
+        // `threadsByKind` filters only DIAL-LESS threads by staleness, because a countdown is not
+        // stale for being quiet — it is the thing that goes on happening while nobody looks. The
+        // prune keeps the same rule, or it would delete the pressure it exists to preserve.
+        const table = new Map([['doom', row(0, { kind: DOOM, filled: 1, size: 4 })]]);
+        expect(pruneThreads(table, THREAD_STALE * 10)).toEqual([]);
+        expect(table.size).toBe(1);
+    });
+
+    test('a settled stake sheds too, once its completion has been witnessed', () => {
+        const table = new Map([['done', row(0, { status: CLOSED })]]);
+        expect(pruneThreads(table, THREAD_STALE * 2 + 1).map(d => d.key)).toEqual(['done']);
     });
 });

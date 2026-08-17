@@ -36,7 +36,7 @@ describe('Time Stop RPG replay — the rejected fragments, through the fixed gat
         });
         expect(text).toContain('[where now?] the widow');
         const id = [...index.keys()][0];
-        const plan = planReview({ lines: [], answers: [{ id, place: 'the inn', note: 'went to buy a room' }] }, index);
+        const plan = planReview({ lines: [{ id, place: 'the inn', note: 'went to buy a room' }] }, index);
         expect(plan.rejected).toEqual([]);
         expect(plan.places).toEqual([{ key: 'person\u0000widow', name: 'the widow', place: 'the inn', note: 'went to buy a room' }]);
     });
@@ -51,6 +51,10 @@ describe('Time Stop RPG replay — the rejected fragments, through the fixed gat
             deltas: [{ item: 'silver', dq: -10, at: 'money' }],
             windowText: 'Sol purchased a spear from the smith for ten silver.',
             contributors,
+            // The window this pass displayed: trailing six ending at its anchor. Mid 36 is in it,
+            // so the earlier bill is something the model can still read — which is the only
+            // evidence a re-tell refusal is allowed to rest on.
+            visible: new Set([33, 34, 35, 36, 37, 38]),
         });
         expect(accepted).toEqual([]);
         expect(rejected).toEqual([expect.objectContaining({ item: 'silver', reason: 'already-recorded' })]);
@@ -65,6 +69,7 @@ describe('Time Stop RPG replay — the rejected fragments, through the fixed gat
             deltas: [{ item: 'silver', dq: -2, at: 'money' }],
             windowText: 'Sol pays two silver for a room at The Spear & Thistle and gets a meal.',
             contributors,
+            visible: new Set([69, 70, 71, 72, 73, 74]),
         });
         expect(accepted).toEqual([]);
         expect(rejected).toEqual([expect.objectContaining({ item: 'silver', reason: 'already-recorded' })]);
@@ -132,6 +137,10 @@ describe('Time Stop RPG replay — the rejected fragments, through the fixed gat
             inv: new Map([[itemKey('silver', 'money'), { qty: 20 }]]),
             deltas: [{ item: 'silver', dq: -2, at: 'money' }],
             windowText: 'Sol: I nod to the woman once, and then turn off to head on down to the inn and purchase a room for the night.',
+            // The window names no coin and no amount, and the model's own report says so: it named
+            // nothing. That empty attestation is what refuses the inferred cost now — not a token
+            // test over the word "silver".
+            mentioned: new Set(),
         });
         expect(accepted).toEqual([]);
         expect(rejected).toEqual([expect.objectContaining({ reason: 'not-mentioned' })]);

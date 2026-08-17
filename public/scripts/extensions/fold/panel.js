@@ -23,18 +23,17 @@
  *     with no diff view and no extra text.
  *
  * Follows SillyTavern's own moving-panel convention (`#movingDivs`, `panelControlBar`,
- * `drag-grabber`, `dragElement`) so it drags, resizes and remembers its position exactly like the
- * Author's Note and World Info panels.
+ * `drag-grabber`) so it sits where the Author's Note and World Info panels sit. It moves itself
+ * rather than through `dragElement` — see `wireDrag`.
  */
 
 import { eventSource, event_types } from '../../../script.js';
-import { dragElement } from '../../RossAscends-mods.js';
-import { loadMovingUIState } from '../../power-user.js';
 import { t } from '../../i18n.js';
 import * as state from './state.js';
 import * as entities from './entities.js';
 import * as clocks from './clocks.js';
-import { LONG_STATEMENT } from './block-parse.js';
+import { LONG_STATEMENT, unwrapList } from './block-parse.js';
+import { SHEET_STATS } from './review-table.js';
 import { DISPOSITIONS, LEAD_LABELS, PERSON_LABELS, dispositionRank } from './entity-table.js';
 import {
     formatClock,
@@ -80,6 +79,8 @@ let onToggleOff = () => {};
 let onToggleOpen = () => {};
 /** Section headers the player collapsed this session, so a re-render keeps them collapsed. */
 const collapsedSections = new Set();
+/** Section headers whose default has already been applied once. See the `quiet` branch in `render`. */
+const decidedSections = new Set();
 /** Whether the diagnostics log is open this session; toggled by the footer's rejects/extract-fails counts. */
 let diagnosticsOpen = false;
 
@@ -169,13 +170,85 @@ function sentenceCase(text) {
 }
 
 /**
+ * How a card's own field label is set.
+ *
+ * `sentenceCase` gave `Hp`, `Mp` and `Bp`, which is not what any card wrote and not how anyone
+ * reads them. The block parser lowercases labels so they key reliably, so the original casing is
+ * gone by the time it gets here and has to be chosen rather than recovered.
+ *
+ * The rule is length, not vocabulary: a label of three characters or fewer is an initialism and is
+ * set in capitals; anything longer is a word and is sentence-cased. No list of known stat names,
+ * which is the enumerated judgement RULE 1 bans and which would be missing `SAN`, `AC` or `PP` the
+ * moment somebody loads a different card.
+ *
+ * @param {string} label A lowercased block-field label.
+ * @returns {string} The label as it should be displayed.
+ */
+function statLabel(label) {
+    const text = String(label ?? '');
+    return text.length <= 3 ? text.toUpperCase() : sentenceCase(text);
+}
+
+/**
+ * The card's own stat line, as a compact label/value grid.
+ *
+ * ── Eleven fields do not need eleven section headers ──
+ *
+ * These used to render at the BOTTOM of the panel, below Threads, one full `fold_sec` heading and
+ * one value block per field. For a card with a real character sheet — the live Isekai RPG reports
+ * HP, MP, Level, BP, Gold, Reputation, Class, Skills, Abilities, Bonds and Quests — that is
+ * twenty-two elements and most of a screen of scrolling, to show what is in total about eleven
+ * short numbers. A heading is for a section you might collapse; a stat is a label and a value.
+ *
+ * So they are a two-column grid directly under the scene header, which is also where they belong by
+ * meaning: the header says who and when and where, and this says what shape they are in.
+ *
+ * Multi-value fields are separated with a middot rather than left as the card's commas, because the
+ * comma is what made `[Journey to the Capital, The Sage's Mandate]` read as two broken fragments
+ * once the wrapper was stripped off only one end.
+ *
+ * @param {Array<{label: string, value: string}>} fields Unclaimed context fields.
+ * @returns {HTMLElement} The grid.
+ */
+function statGrid(fields) {
+    const grid = el('div', 'fold_stats');
+    for (const field of fields) {
+        // Unwrapped here as well as at absorb, so a chat whose block was read before that landed
+        // heals on the next render instead of needing its stored context rewritten.
+        const value = unwrapList(field.value);
+        const parts = String(value ?? '').split(/\s*[;,，、；]\s*/).map(part => part.trim()).filter(Boolean);
+        grid.appendChild(el('span', 'fold_stat_k', statLabel(field.label)));
+        grid.appendChild(el('span', 'fold_stat_v', parts.length > 1 ? parts.join(' · ') : String(value ?? '')));
+    }
+    return grid;
+}
+
+/**
  * A section heading, optionally with a count on the right.
+ *
+ * ── The label is the identity, and it is not the rendered text ──
+ *
+ * The collapse memory used to key on `sec.textContent.trim()`, which concatenates the heading and
+ * its count into `Carrying28`. So collapsing a section bound the choice to the size it happened to
+ * be, and the next item to arrive made it `Carrying29` — a key nobody had collapsed, so the section
+ * sprang open again. The one section guaranteed to change size is the one worth collapsing, which
+ * is why the feature read as not working.
+ *
+ * `dataset.label` carries the stable name, so identity survives a count and the count still renders.
+ *
  * @param {string} label The heading.
  * @param {number|string} [count] A count or annotation.
+ * @param {boolean} [quiet] Start collapsed the first time it is seen. For the sections §8 already
+ *   ranks last — property, capability, things left in another place — which are consulted between
+ *   scenes rather than during one.
  * @returns {HTMLElement} The heading row.
  */
-function section(label, count) {
+function section(label, count, quiet = false) {
     const head = el('div', 'fold_sec');
+    head.dataset.label = label;
+    if (quiet) {
+        head.dataset.quiet = '1';
+    }
     head.appendChild(el('span', null, label));
     if (count !== undefined && count !== '') {
         head.appendChild(el('span', 'fold_sec_n', String(count)));
@@ -195,7 +268,7 @@ function section(label, count) {
  */
 function chipsAndRest(value) {
     const parts = String(value ?? '')
-        .split(/[;,]/)
+        .split(/[;,，、；]/)
         .map(part => part.trim())
         .filter(Boolean);
 
@@ -253,7 +326,7 @@ function statementList(value) {
     // Punctuation split only — same discipline as `bulletsOrProse`: whether a fragment is a
     // separate statement is a reading the model answers (the threads probe reports leads
     // structurally), never the old `FINITE_VERB` English verb list.
-    const statements = String(value ?? '').split(/\s*[;,]\s+/).map(part => part.trim()).filter(Boolean);
+    const statements = String(value ?? '').split(/\s*[;,，、；]\s*/).map(part => part.trim()).filter(Boolean);
     for (const statement of statements) {
         const row = el('li', 'fold_row fold_stmt');
         row.appendChild(rail(1));
@@ -319,6 +392,12 @@ function sceneHeader(scene, clock) {
         const row = el('div', 'fold_pov');
         lockable(row, 'pov', clock?.locks, contests);
         row.appendChild(el('span', 'fold_pov_name', pov));
+        // What the card says they ARE — class, title, ancestry — set quietly beside the name rather
+        // than as its own labelled row further down. `Ike Kōtoku · Spellbrawler` is one fact about
+        // one person; two rows made it look like two.
+        if (clock?.subtitle) {
+            row.appendChild(el('span', 'fold_pov_is', clock.subtitle));
+        }
         head.appendChild(row);
     }
 
@@ -483,6 +562,9 @@ function rejectHelp(reason) {
         'not-mentioned': 'the window the model read does not name this — only record changes the excerpt actually shows.',
         'already-recorded': 'the ledger already covers this acquisition — it was shown in the pinned block; report only new changes.',
         'remove-unknown': 'removing something the ledger does not hold — you cannot remove what was never gained.',
+        'money:drift': 'the story stated a balance the ledger disagrees with — the gap is a transaction that went unrecorded, not a rounding error. The stated total was adopted.',
+        'unknown-id': 'answered a line the block never posed — use the ids exactly as printed.',
+        'duplicate-id': 'answered the same line twice — one answer per id.',
         'inventory-full': 'too many distinct items — the list is at its cap.',
         'implausible-delta': 'magnitude implausible for one turn — a change this large is a hallucination.',
         'clamped-underflow': 'the change would drive a count below zero — clamped instead of recorded.',
@@ -958,7 +1040,7 @@ function dialRow(thread) {
  * @param {string} kind 'person' or 'lead'.
  * @returns {HTMLElement} The row.
  */
-function entityRow(entity, kind, { showStatus = true, turn = 0, hedged = false, marks = [] } = {}) {
+function entityRow(entity, kind, { showStatus = true, turn = 0, hedged = false, marks = [], holds = [] } = {}) {
     const row = el('li', `fold_row fold_entity${hedged ? ' fold_unplaced' : ''}`);
     row.appendChild(rail(entity.stale));
     row.appendChild(el('span', 'fold_entity_name', entity.name));
@@ -1057,6 +1139,22 @@ function entityRow(entity, kind, { showStatus = true, turn = 0, hedged = false, 
         }
         row.appendChild(strip);
     }
+    // ── What they are carrying, on their row, for the marks argument exactly ──
+    //
+    // Before items had an owner, a companion's gear had two fates and both were wrong: dropped
+    // (New Eldoria's ironwood branch, chronicled at mid 82 and never recorded) or filed in the
+    // player's pockets (Vexia's stone sphere at mid 84, her cloth scrap at mid 90, and the 17 gold
+    // she was handed at mid 108). It renders exactly once now, beside whoever holds it.
+    if (holds.length) {
+        const strip = el('div', 'fold_holds');
+        for (const item of holds) {
+            const label = item.qty > 1 ? `${item.name} ×${item.qty}` : item.name;
+            const chip = el('span', 'fold_holds_item', label);
+            chip.title = item.place === CARRIED ? label : `${label} — ${item.place}`;
+            strip.appendChild(chip);
+        }
+        row.appendChild(strip);
+    }
     // One small integer, and only while they are actually dangerous. A dead hobgoblin's row carries
     // nothing (`entity-table.js` MAX_THREAT).
     if (entity.threat > 0) {
@@ -1107,6 +1205,14 @@ export function render() {
         marksBy.set(mark.owner, [...(marksBy.get(mark.owner) ?? []), mark]);
     }
     const marksFor = person => marksBy.get(person.key) ?? [];
+    // Belongings, grouped the same way and for the same reason. `owner` is a table key resolved in
+    // `state.snapshot()`, so the panel never has to know that a name and a title are one person.
+    const heldBy = new Map();
+    for (const item of snapshot.inventory ?? []) {
+        if (item.mine || !item.owner) continue;
+        heldBy.set(item.owner, [...(heldBy.get(item.owner) ?? []), item]);
+    }
+    const holdsFor = person => heldBy.get(person.key) ?? [];
     target.replaceChildren();
 
     const health = scene.get('health');
@@ -1122,9 +1228,77 @@ export function render() {
     if (cast.people.length || cast.unplaced.length) ENTITY_FIELDS.people.forEach(label => claimed.add(label));
     if (stakes.open.length || stakes.pressure.length) ENTITY_FIELDS.leads.forEach(label => claimed.add(label));
 
-    const head = sceneHeader(scene, { ...snapshot.clock, locks: snapshot.locks, contests: snapshot.contests });
+    // ── The card's own stat line, routed by what the model says each field IS ──
+    //
+    // See `review-table.js` `SHEET_KINDS`. Every field carries a `kind` and a `tempo` the review
+    // answered; fold never reads the label to decide where a field goes, because the label is the
+    // card author's English and the next card's will be different.
+    //
+    // `identity` rides in the header, `gauge`+`scene` joins the vitals, and everything else waits
+    // below the fold. A field the review has not reached yet has no `kind` at all and lands in the
+    // sheet — visible, never guessed at, and reclassified on the next pass.
+    const aside = snapshot.context.filter(field => !claimed.has(field.label));
+    const partsOf = value => String(unwrapList(value) ?? '').split(/\s*[;,，、；]\s*/).map(part => part.trim()).filter(Boolean);
+
+    // A card gauge the review says names a fold vital IS that vital. It renders once — as the bar
+    // the ledger computed — and the card's copy is dropped here rather than shown beside it. That
+    // duplication is the defect this whole routing exists to kill: `MP 30/50` appeared twice, in
+    // two different treatments, in two different places, and a glance surface that argues with
+    // itself has to be read instead of glanced at.
+    // What the character IS rides in the header, beside their name.
+    const identity = aside.filter(field => field.kind === 'identity');
+    const conditions = aside.filter(field => field.kind === 'condition');
+    // ── The stat line, at the top, whatever its tempo ──
+    //
+    // `SHEET_STATS` is the scalar half of the enum. An unclassified field falls back to the SHAPE
+    // it has — one short part is a stat, several parts or a long one is a list — because until the
+    // review has answered, the panel still has to put it somewhere, and "somewhere" must not be the
+    // bottom: everything is unclassified on the first render of every chat, and demoting the lot
+    // reproduces exactly the complaint this routing exists to fix.
+    const scalar = field => partsOf(field.value).length <= 1
+        && partsOf(field.value).every(part => part.length <= LONG_STATEMENT);
+    const isStat = field => (field.kind ? SHEET_STATS.includes(field.kind) : scalar(field));
+
+    // ── A `same_as` naming a row fold does not hold must do NOTHING ──
+    //
+    // `same_as` says "this card field is the fact your ledger already tracks", and the panel drops
+    // the card's copy so the fact renders once. That is only safe when the named row EXISTS — and
+    // `aliasMap` has always said so: "the `known` filter is what keeps a verdict naming a key the
+    // ledger does not hold from doing anything, silently and safely" (`crosswalk.js`).
+    //
+    // MEASURED here the moment the first real classification landed: the review answered
+    // `{label: 'hp', kind: 'gauge', same_as: 'hp'}` — correct in spirit, since HP is plainly a
+    // gauge — but this chat's ledger has no `hp` vital at all, only `mp`. Unfiltered, the card's
+    // copy was dropped in deference to a row that does not exist and HP vanished from the panel
+    // entirely. Deferring to nothing is worse than showing the card's own number.
+    const held = new Set([
+        ...snapshot.vitals.map(vital => vital.name),
+        ...snapshot.inventory.map(item => item.name),
+    ]);
+    const shadowsHeld = field => Boolean(field.same_as) && held.has(field.same_as);
+    // Ordered by tempo: what can move this scene reads first. This is all `tempo` decides — it
+    // never demotes a stat off the top, which was the mistake this replaces.
+    const stats = aside
+        .filter(field => isStat(field) && field.kind !== 'identity' && !shadowsHeld(field))
+        .sort((a, b) => Number(b.tempo === 'scene') - Number(a.tempo === 'scene'));
+    // Lists and prose wait below: capabilities, goals, bonds, and anything the review called `other`.
+    const routed = new Set([...identity, ...stats, ...conditions]);
+    const notes = aside.filter(field => !routed.has(field) && !shadowsHeld(field));
+
+    // The header carries `identity` as a subtitle, so it is built after the routing rather than
+    // before it — who you are belongs beside your name, not in a list below the fold.
+    const head = sceneHeader(scene, {
+        ...snapshot.clock, locks: snapshot.locks, contests: snapshot.contests,
+        subtitle: identity.map(field => unwrapList(field.value)).filter(Boolean).join(' · '),
+    });
     if (head) {
         target.appendChild(head);
+    }
+
+    // The card's stat line, immediately under the header. This is the "up the top next to name,
+    // time" the owner asked for, and the reason it is here rather than below Threads.
+    if (stats.length) {
+        target.appendChild(statGrid(stats));
     }
 
     // FOLD-SLA §2.1/2.3: the extraction lifecycle, always visible at the top of the panel. A stale
@@ -1145,7 +1319,10 @@ export function render() {
     // §8 restructures the glance to lead with the person at the centre — identity, vitals, marks,
     // money — before pressure or company. "How am I doing" is answered in one glance, and money
     // stops being a thing in a pocket under Stuff: it is a balance, not an inventory row.
-    const moneyItems = snapshot.inventory.filter(item => item.place === MONEY);
+    // `mine` only. An item can belong to a companion now (`state-table.js` `itemKey`), and this
+    // section is headed with the protagonist's name — putting Vexia's purse under it is the
+    // misattribution the owner was added to stop. Theirs render on their cast row below.
+    const moneyItems = snapshot.inventory.filter(item => item.mine && item.place === MONEY);
     const you = section(t`You`);
     if (scene.get('pov')) {
         you.appendChild(el('span', 'fold_meta', sentenceCase(scene.get('pov'))));
@@ -1244,7 +1421,7 @@ export function render() {
             hidden++;
             continue;
         }
-        if (item.place === MONEY) {
+        if (item.place === MONEY || !item.mine) {
             continue;
         }
         const list = places.get(item.place) ?? [];
@@ -1260,11 +1437,24 @@ export function render() {
 
     const HEADINGS = { [CARRIED]: t`Carrying`, [ASSETS]: t`Property`, [ABILITIES]: t`Abilities` };
 
+    // ── Everything but the pack starts folded away ──
+    //
+    // The split into pack / elsewhere / property / capability was already here and is the same axis
+    // RPG Companion gives four tabs (`src/systems/rendering/inventory.js` `renderInventorySubTabs`:
+    // On Person, Clothing, Stored, Assets). What fold lacked was not the axis but the FOLD — all of
+    // it rendered open at once, so a Wuxia pack of 28 things and a house and six techniques arrived
+    // as one undifferentiated column. Collapsing by default costs nothing new: the headers have been
+    // click-to-collapse all along, and `rank` already says which are the between-scene sections.
     for (const place of ordered) {
         const items = places.get(place);
-        stuff.appendChild(section(HEADINGS[place] ?? sentenceCase(place), items.length));
+        // Freshest first, the order `carriedLines` already uses to decide what the review can
+        // answer about: `since` counts events since a row was last touched, so what the story is
+        // actually handling rises to the top and the pendant from turn two sinks. The pack is a
+        // list you scan, not a list you read.
+        const rows = [...items].sort((a, b) => (a.since ?? 0) - (b.since ?? 0));
+        stuff.appendChild(section(HEADINGS[place] ?? sentenceCase(place), rows.length, rank(place) > 1));
         const list = el('ul', 'fold_list');
-        for (const item of items) {
+        for (const item of rows) {
             list.appendChild(itemRow(item));
         }
         stuff.appendChild(list);
@@ -1313,12 +1503,12 @@ export function render() {
         // the moment one person is remote or gone, the distinction is worth drawing and returns.
         const mixed = new Set(cast.people.map(person => person.status)).size > 1;
         for (const person of cast.people) {
-            list.appendChild(entityRow(person, 'person', { showStatus: mixed, turn: cast.turn, marks: marksFor(person) }));
+            list.appendChild(entityRow(person, 'person', { showStatus: mixed, turn: cast.turn, marks: marksFor(person), holds: holdsFor(person) }));
         }
         // After the people the scene actually contains, and visibly hedged. Sorting them last is
         // part of the honesty: the reader meets what is known before what is merely not retracted.
         for (const person of cast.unplaced) {
-            list.appendChild(entityRow(person, 'person', { showStatus: false, turn: cast.turn, hedged: true, marks: marksFor(person) }));
+            list.appendChild(entityRow(person, 'person', { showStatus: false, turn: cast.turn, hedged: true, marks: marksFor(person), holds: holdsFor(person) }));
         }
         target.appendChild(list);
     }
@@ -1336,7 +1526,7 @@ export function render() {
         target.appendChild(head);
         const list = el('ul', 'fold_list fold_list_quiet');
         for (const person of away) {
-            list.appendChild(entityRow(person, 'person', { showStatus: false, turn: cast.turn, marks: marksFor(person) }));
+            list.appendChild(entityRow(person, 'person', { showStatus: false, turn: cast.turn, marks: marksFor(person), holds: holdsFor(person) }));
         }
         target.appendChild(list);
     }
@@ -1377,15 +1567,34 @@ export function render() {
         target.appendChild(list);
     }
 
-    // Whatever else the card chose to report, shown as given rather than dropped for not fitting a
-    // schema — including contacts and leads when extraction has not yet produced structure.
-    const aside = snapshot.context.filter(field => !claimed.has(field.label));
-    for (const field of aside) {
-        const statements = String(field.value ?? '').split(/\s*[;,]\s+/).map(part => part.trim()).filter(Boolean);
-        target.appendChild(section(sentenceCase(field.label), statements.length > 1 ? statements.length : ''));
-        target.appendChild(statements.length > 1
-            ? statementList(field.value)
-            : bulletsOrProse(field.value));
+
+    // ── The sheet: everything that cannot change what you type this turn ──
+    //
+    // The LIST half of the card's sheet: capabilities, goals, bonds, and anything the review called
+    // `other`. These are the four the owner named as not belonging up top — `Abilities`, `Bonds`,
+    // `Skills`, `Quests` — and what they share is that each one is a set of things, not a number.
+    // The stat line is not here; it is under the header where it was asked for.
+    //
+    // A field the card wrote as PROSE — a lead, an objective in a sentence — keeps the statement
+    // treatment, because a paragraph crushed into a grid row is unreadable. The test is the length
+    // of the longest part against `LONG_STATEMENT`, the same threshold the statement list already
+    // uses for clamping. Structure, not a list of known stat names.
+    if (notes.length) {
+        const brief = notes.filter(field => partsOf(field.value).every(part => part.length <= LONG_STATEMENT));
+        const prose = notes.filter(field => !brief.includes(field));
+        const sheetHead = section(t`Sheet`, notes.length);
+        sheetHead.classList.add('fold_head_quiet');
+        target.appendChild(sheetHead);
+        if (brief.length) {
+            target.appendChild(statGrid(brief));
+        }
+        for (const field of prose) {
+            const statements = partsOf(field.value);
+            target.appendChild(section(statLabel(field.label), statements.length > 1 ? statements.length : ''));
+            target.appendChild(statements.length > 1
+                ? statementList(unwrapList(field.value))
+                : bulletsOrProse(unwrapList(field.value)));
+        }
     }
 
     // ── What the block-shadow routing could not parse, shown as the card wrote it ──
@@ -1498,8 +1707,16 @@ export function render() {
     // thinned without configuration (§8's "progressive disclosure must be structural"). The
     // choice is remembered for the session across re-renders, because every render rebuilds the
     // DOM and a collapse that forgets itself on the next message is a feature nobody will use.
+    //
+    // A `quiet` section starts collapsed the FIRST time it is seen and is the player's thereafter.
+    // `decided` is what makes that one-shot rather than sticky: without it, opening a quiet section
+    // would last exactly until the next render, which is the same broken feature by another route.
     for (const sec of target.querySelectorAll('.fold_sec')) {
-        const label = sec.textContent.trim();
+        const label = sec.dataset.label ?? sec.textContent.trim();
+        if (sec.dataset.quiet && !decidedSections.has(label)) {
+            decidedSections.add(label);
+            collapsedSections.add(label);
+        }
         sec.setAttribute('role', 'button');
         sec.setAttribute('tabindex', '0');
         if (collapsedSections.has(label)) {
@@ -1521,6 +1738,14 @@ export function render() {
             }
         });
     }
+
+    // A render changes the panel's HEIGHT — a chat with a cast and an inventory is several times
+    // the height of an empty one — and a taller panel at the same offset reaches further down the
+    // screen. Measured while testing this: an open panel sitting at 588px was 153px tall on the
+    // welcome screen and 709px tall once a chat loaded, so its bottom 284px, footer counters and
+    // all, was off the viewport with nothing having moved. Re-clamps the display only; the stored
+    // offset is untouched, so it returns to where it was put when the panel shrinks again.
+    applyTop();
 }
 
 /**
@@ -1636,6 +1861,182 @@ export function flashVerdict(band) {
     }, 4000);
 }
 
+/* ── moving the panel ────────────────────────────────────────────────────────
+ *
+ * ── Why fold moves itself instead of calling `dragElement` ──
+ *
+ * The panel used to be handed to SillyTavern's Moving UI (`dragElement` + `loadMovingUIState`),
+ * which is the right convention and did not work here, for three reasons that compound:
+ *
+ *   · The stylesheet pins the panel with `left: auto !important` so it hugs the right edge and the
+ *     collapse tab has somewhere to be. `dragElement` moves an element by writing an INLINE
+ *     `left`, and an inline declaration loses to `!important`. Horizontal drag was a no-op, and a
+ *     drag that only half-answers reads as a drag that is broken.
+ *   · Its only handle is `.drag-grabber` inside `.panelControlBar`, and the control bar is
+ *     `display: none` while collapsed. So the rail — the altitude the panel spends most of its
+ *     life at — had no handle at all.
+ *   · It is bound to `mousedown`/`mousemove`, gated on `power_user.movingUI`, and returns early on
+ *     `isMobile()`. A touchscreen could never move it, whatever the setting said.
+ *
+ * So this owns the one axis the layout actually leaves free. What is given up with it: the
+ * bottom-right resize corner, which could only ever have changed the HEIGHT — `width` is
+ * `!important` at both altitudes, so resize was half-blocked by the same rule as drag.
+ *
+ * The position is stored in fold's own settings rather than `power_user.movingUIState`, so it
+ * persists whether or not Moving UI is switched on.
+ */
+
+/** Pixels of travel before a press counts as a drag and stops counting as a click. */
+const DRAG_SLOP = 4;
+
+/** Pixels kept between the panel and the top or bottom of the viewport. */
+const EDGE_GAP = 4;
+
+/** Surfaces that begin a drag. One at each altitude: the tab and grip expanded, the rail collapsed. */
+const DRAG_HANDLES = '.fold_toggle, .drag-grabber, .fold_collapsed_body';
+
+/** Where the player put it, in px from the top of the viewport; null means the stylesheet's default. */
+let panelTop = null;
+
+/** Called with the new offset once a drag settles, so the setting can follow. */
+let onMoved = () => {};
+
+/**
+ * Hold an offset inside the viewport.
+ *
+ * The stored value is normalised once, when the drag settles — the player just put it there, so
+ * that is a position they can see. It is never rewritten by anything else, which matters because
+ * the two altitudes are different heights: the rail is 120px and the open panel is up to 70vh, so
+ * an offset that is legal collapsed can be illegal expanded. Clamping on every apply would let
+ * expanding the panel once permanently drag the rail back up the screen.
+ *
+ * @param {number} top The desired offset.
+ * @returns {number} An offset that keeps the panel on screen.
+ */
+function clampTop(top) {
+    const height = document.getElementById(PANEL_ID)?.getBoundingClientRect().height ?? 0;
+    const floor = Math.max(EDGE_GAP, window.innerHeight - height - EDGE_GAP);
+    return Math.min(Math.max(top, EDGE_GAP), floor);
+}
+
+/**
+ * Write the stored offset to the panel, or clear it and let the stylesheet's `top` stand.
+ *
+ * Called after every altitude change and on resize, because both change what "on screen" means.
+ */
+function applyTop() {
+    const panel = document.getElementById(PANEL_ID);
+    if (!panel) {
+        return;
+    }
+    panel.style.top = panelTop === null ? '' : `${clampTop(panelTop)}px`;
+}
+
+/**
+ * Set the panel's vertical offset from outside — the persisted value, at startup.
+ * @param {number|null} top Offset in px, or null for the default.
+ */
+export function setPanelTop(top) {
+    panelTop = Number.isFinite(top) ? Number(top) : null;
+    applyTop();
+}
+
+/**
+ * Make the panel draggable up and down from any of its handles.
+ *
+ * Pointer events rather than mouse events, so the same code path serves a mouse, a trackpad and a
+ * touchscreen. Every handle is also a button — the tab collapses, the rail expands — so a press
+ * only becomes a drag after `DRAG_SLOP` of travel, and a press that became a drag swallows the
+ * click it would otherwise have fired.
+ *
+ * @param {HTMLElement} panel The panel element.
+ */
+function wireDrag(panel) {
+    let from = 0;
+    let base = 0;
+    let handle = null;
+    let pointer = -1;
+    let moved = false;
+    let swallow = false;
+
+    const finish = () => {
+        if (!handle) {
+            return;
+        }
+        if (handle.hasPointerCapture?.(pointer)) {
+            handle.releasePointerCapture(pointer);
+        }
+        handle = null;
+        panel.classList.remove('fold_dragging');
+        if (moved) {
+            swallow = true;
+            panelTop = Math.round(clampTop(panelTop));
+            applyTop();
+            onMoved(panelTop);
+        }
+    };
+
+    panel.addEventListener('pointerdown', (e) => {
+        // Cleared here rather than by the click it suppresses, because that click is not guaranteed
+        // to arrive: let go of a drag with the cursor off the panel and no click is dispatched to it
+        // at all, and a flag waiting to be consumed would then swallow the next real press instead.
+        // Scoping it to the press that set it makes that impossible rather than unlikely.
+        swallow = false;
+        if (e.button > 0) {
+            return;
+        }
+        const target = e.target instanceof Element ? e.target.closest(DRAG_HANDLES) : null;
+        if (!target) {
+            return;
+        }
+        handle = target;
+        pointer = e.pointerId;
+        moved = false;
+        from = e.clientY;
+        // Measured, not remembered. The stored offset is the player's intent and the panel may be
+        // displaying a clamped version of it — grabbing an expanded panel that was pushed up to fit
+        // would otherwise snap it back down to the rail's offset on the first pixel of travel.
+        base = panel.getBoundingClientRect().top;
+        // Captured on the HANDLE, not the panel: capture retargets the pointer stream, and holding
+        // it on the panel would move the click off the button the player actually pressed.
+        handle.setPointerCapture?.(pointer);
+    });
+
+    panel.addEventListener('pointermove', (e) => {
+        if (!handle) {
+            return;
+        }
+        const travel = e.clientY - from;
+        if (!moved && Math.abs(travel) < DRAG_SLOP) {
+            return;
+        }
+        moved = true;
+        panel.classList.add('fold_dragging');
+        panelTop = base + travel;
+        applyTop();
+        // Only once it IS a drag: before that the press still belongs to the button underneath.
+        e.preventDefault();
+    });
+
+    panel.addEventListener('pointerup', finish);
+    panel.addEventListener('pointercancel', finish);
+
+    // Capture phase, so it runs before the tab's and the rail's own click handlers and can stop the
+    // drag from also collapsing or expanding the panel it just moved.
+    panel.addEventListener('click', (e) => {
+        if (!swallow) {
+            return;
+        }
+        swallow = false;
+        e.stopPropagation();
+        e.preventDefault();
+    }, true);
+
+    // A panel parked against the old bottom edge is off screen after the window shrinks, and the
+    // stored intent is still the right thing to re-clamp from.
+    window.addEventListener('resize', applyTop);
+}
+
 /** Point the collapse chevron the way the panel can move: `>` to push it right, `<` to pull it out. */
 function updateToggleIcon() {
     const panel = document.getElementById(PANEL_ID);
@@ -1664,6 +2065,9 @@ export function show() {
     panel?.classList.add('fold_mounted', 'fold_open');
     updateToggleIcon();
     render();
+    // The open panel is many times the rail's height, so an offset that was on screen collapsed can
+    // hang off the bottom expanded. Re-clamped from the stored intent, never overwriting it.
+    applyTop();
 }
 
 /** Hide the panel (fold it back to the collapsed rail). */
@@ -1671,6 +2075,7 @@ export function hide() {
     visible = false;
     document.getElementById(PANEL_ID)?.classList.remove('fold_open');
     updateToggleIcon();
+    applyTop();
 }
 
 /**
@@ -1695,13 +2100,16 @@ export function isVisible() {
  * @param {object} options Options.
  * @param {() => void} [options.onClose] Called when the user collapses the panel, so the setting can follow.
  * @param {() => void} [options.onOpen] Called when the user expands the panel, so the setting can follow.
+ * @param {(top: number) => void} [options.onMove] Called when the panel is dragged, so the position persists.
+ * @param {number|null} [options.top] The persisted vertical offset, in px from the top of the viewport.
  */
-export function initPanel({ onClose = () => {}, onOpen = () => {} } = {}) {
+export function initPanel({ onClose = () => {}, onOpen = () => {}, onMove = () => {}, top = null } = {}) {
     if (document.getElementById(PANEL_ID)) {
         return;
     }
     onToggleOff = onClose;
     onToggleOpen = onOpen;
+    onMoved = onMove;
 
     const host = document.getElementById('movingDivs') ?? document.body;
     host.appendChild(buildPanel());
@@ -1720,9 +2128,8 @@ export function initPanel({ onClose = () => {}, onOpen = () => {} } = {}) {
     });
     updateToggleIcon();
 
-    // Same treatment SillyTavern gives its own panels, so Moving UI position persists.
-    dragElement($(`#${PANEL_ID}`));
-    loadMovingUIState();
+    wireDrag(panel);
+    setPanelTop(top);
 
     // State is derived, so anything that changes which events are live changes what is shown —
     // including swipes, which is the whole point of deriving rather than storing.

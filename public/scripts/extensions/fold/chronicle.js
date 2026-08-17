@@ -28,7 +28,8 @@ import {
 } from './chronicle-table.js';
 import * as observe from './observe.js';
 import * as cold from './cold-store.js';
-import { commit, loadTable, registerPruner } from './store.js';
+import * as ledger from './ledger.js';
+import { PRUNE_MEMORY, commit, loadTable, registerPruner } from './store.js';
 
 const EVENTS_PATH = 'chronicle.events';
 const HITS_PATH = 'chronicle.hits';
@@ -85,9 +86,109 @@ export function liveHashes() {
     return table;
 }
 
-/** @returns {Map<string, import('./chronicle-table.js').ChronicleEvent>} The ledger. */
+/**
+ * The event table.
+ *
+ * ── One chokepoint, so the substrate can change without touching eight mutation sites ──
+ *
+ * Every read in the extension comes through here and every write goes through `saveEvents` below.
+ * That pair is why the durable ledger could be introduced without rewriting `applyExtraction`,
+ * `amend`, `forget`, the three `record*Event` functions or the pruners: they all still speak in
+ * whole tables, and the two functions underneath decide where the bytes live.
+ *
+ * When the ledger is hydrated it is the authority. Otherwise this falls back to `chat_metadata`,
+ * which is what keeps a chat playable when the server is unreachable, when the hydrate failed, and
+ * for every chat written before the ledger existed.
+ *
+ * @returns {Map<string, import('./chronicle-table.js').ChronicleEvent>} The ledger.
+ */
 export function loadEvents() {
-    return loadTable(EVENTS_PATH);
+    // ── A COPY, because `loadTable` returns one and callers rely on it ──
+    //
+    // `loadTable` rebuilds a fresh Map from the stored object on every call (`store.js:158-168`), so
+    // every site here treats what it gets as its own: `retireDeltas` calls `insert_with` straight
+    // onto the result, `forget` deletes from it, the pruners rebuild it. Handing back the live cache
+    // would break that contract twice over — callers would mutate hydrated state directly, and
+    // `saveEvents` would then diff the cache against itself, find nothing changed, and emit no ops
+    // at all. The ledger would look healthy and record nothing.
+    return ledger.isHydrated() ? new Map(table_entries(ledger.events())) : loadTable(EVENTS_PATH);
+}
+
+/**
+ * Move a chat's existing events into its ledger, once.
+ *
+ * ── Without this, turning the ledger on empties the chronicle ──
+ *
+ * `loadEvents` prefers the ledger the moment it hydrates. A chat played before the ledger existed
+ * has its events in `chat_metadata` and nothing on disk, so the first hydrate would swap 230 events
+ * for zero and every read — the panel, the prompt, the fold — would agree the campaign never
+ * happened. Nothing would be lost on disk, but everything would be lost on screen, which is the same
+ * thing to the person playing.
+ *
+ * Runs only when the ledger is genuinely empty, so it cannot re-seed a campaign that already has
+ * history, and reads the RAW metadata table rather than `loadEvents` — which by then is answering
+ * from the very ledger being seeded.
+ *
+ * @returns {number} How many events were carried over.
+ */
+export function seedLedger() {
+    if (!ledger.isHydrated() || ledger.events().size) {
+        return 0;
+    }
+    const stored = loadTable(EVENTS_PATH);
+    if (!stored.size) {
+        return 0;
+    }
+    const ops = table_entries(stored).map(([key, event]) => ({ op: 'ev', k: key, e: event }));
+    ledger.emit(ops);
+    observe.note('ledger:seeded', ops.length);
+    console.debug(`[fold] seeded ledger with ${ops.length} existing event(s)`);
+    return ops.length;
+}
+
+/**
+ * Persist an event table, emitting the ops that describe how it changed.
+ *
+ * ── The diff is derived, not remembered ──
+ *
+ * The alternative was to emit an op at each of the eight sites that mutate events. That spreads a
+ * correctness requirement — "every mutation must also emit" — across code whose authors have no
+ * reason to know the ledger exists, and the failure mode is silent: an event that changes in memory,
+ * renders correctly all session, and is simply absent after a reload. Diffing the table the caller
+ * hands back cannot miss a mutation, because the mutation is the only thing it looks at.
+ *
+ * A changed row emits a whole-row `ev` rather than an `amend`. `amend` is a byte optimisation for a
+ * summary rewrite; `ev` is last-write on the key and is correct for any change, so the reader keeps
+ * understanding `amend` (older lines, other writers) while the writer only ever needs one op.
+ *
+ * @param {Map<string, object>} next The table as it should now be.
+ */
+function saveEvents(next) {
+    // `chat_metadata` is still written while the ledger is the authority. It is one small table, it
+    // is what a downgrade or a failed hydrate falls back to, and the wall this design removes is the
+    // chronicle's GROWTH — a mirror that the pruner is free to shed costs nothing to keep correct.
+    commit(EVENTS_PATH, next);
+
+    if (!ledger.isHydrated()) {
+        return;
+    }
+    const before = ledger.events();
+    const ops = [];
+    for (const [key, event] of table_entries(next)) {
+        if (lookup(before, key, null) !== event) {
+            ops.push({ op: 'ev', k: key, e: event });
+        }
+    }
+    for (const [key] of table_entries(before)) {
+        if (!next.has(key)) {
+            ops.push({ op: 'forget', k: key });
+        }
+    }
+    if (ops.length) {
+        // Fire-and-forget: the local tables are already correct, and a queued op survives a failure
+        // to be retried. Awaiting here would make every event write block a render on the network.
+        ledger.emit(ops);
+    }
 }
 
 /**
@@ -172,7 +273,11 @@ export function extractionSchema({ deltaSchema = null } = {}) {
             // out. The model already READ the window; `mentions` is its structural answer for what
             // the excerpt actually names. A delta is admitted only when its item appears in this
             // set — the model's own report of what it saw, in any language.
-            description: 'Every item, vital or condition the NEW excerpt actually names, exactly as written: "silver", "the spear", "ribs". One entry per distinct name. An item the excerpt does not name is never listed.',
+            // The wording rule is the protocol half of the coverage fix (`state-table.js`
+            // `validateInventory`): fold no longer compares a delta's item name to this list, so
+            // the two only agree if the model makes them agree. Asking for one spelling costs a
+            // clause and removes every reason fold would ever need to guess at the correspondence.
+            description: 'Every item, vital or condition the NEW excerpt actually names, exactly as written: "silver", "the spear", "ribs". One entry per distinct name. An item the excerpt does not name is never listed. When this event also carries a delta, word the delta\'s "item" or "name" EXACTLY as you write it here — one spelling for one thing, in both places.',
             items: { type: 'string' },
         },
     };
@@ -225,9 +330,12 @@ export function extractionInstruction() {
  *   pass. Passed straight through to the validator; this module never inspects it, for the same
  *   reason it takes `validateDelta` as an argument rather than importing it — the chronicle knows
  *   nothing about state.
+ * @param {Set<number>|null} [context.visible] The mids this pass displayed. Passed through for
+ *   `shown`'s reason exactly: the already-recorded gate may only refuse a re-tell of something the
+ *   model can still see, and only the caller that built the window knows what that was.
  * @returns {{added: number, replaced: number, duplicates: number, deltas: number, rejected: number}} What happened.
  */
-export function applyExtraction(fragment, { sources = [], now = Date.now(), windowText = '', validateDelta = null, onRejections = null, shown = null } = {}) {
+export function applyExtraction(fragment, { sources = [], now = Date.now(), windowText = '', validateDelta = null, onRejections = null, shown = null, visible = null } = {}) {
     const raw = Array.isArray(fragment) ? fragment : [];
     if (!raw.length || !sources.length) {
         return { added: 0, replaced: 0, duplicates: 0, deltas: 0, rejected: 0 };
@@ -264,7 +372,7 @@ export function applyExtraction(fragment, { sources = [], now = Date.now(), wind
             // rejected never enters the ledger, which is what lets the fold stay a pure sum.
             let delta = null;
             if (validateDelta && candidate?.delta) {
-                const outcome = validateDelta(candidate.delta, { windowText, shown, mentioned });
+                const outcome = validateDelta(candidate.delta, { windowText, shown, mentioned, visible });
                 delta = outcome.delta;
                 rejections.push(...outcome.rejected);
                 if (delta) {
@@ -313,12 +421,25 @@ export function applyExtraction(fragment, { sources = [], now = Date.now(), wind
     const current = loadEvents();
     const outcome = applyEvents({ events: current, incoming });
 
-    const { events: pruned, evicted } = pruneEvents({
-        events: outcome.events,
-        hits: loadHits(),
-        liveHashes: liveHashes(),
-        max: MAX_EVENTS,
-    });
+    // ── With a durable ledger, MAX_EVENTS bounds what is HOT, not what exists ──
+    //
+    // `pruneEvents` decides what the chronicle forgets forever, and `saveEvents` turns a missing key
+    // into a `forget` op. Run against a hydrated ledger that combination is a permanent deletion
+    // from disk to satisfy a cap that only ever existed because the metadata blob was the store.
+    //
+    // So the cap becomes a view: every event stays, and what gets ranked into a prompt is already
+    // bounded by `topK` at retrieval. That is the hot/cold split moving from storage to selection,
+    // and it is what makes a year-long campaign hold its whole history — measured at 8k events the
+    // fold is single-digit milliseconds, so keeping them costs nothing worth saving.
+    const bounded = !ledger.isHydrated();
+    const { events: pruned, evicted } = bounded
+        ? pruneEvents({
+            events: outcome.events,
+            hits: loadHits(),
+            liveHashes: liveHashes(),
+            max: MAX_EVENTS,
+        })
+        : { events: outcome.events, evicted: [] };
 
     // Both of these used to happen silently. MAX_EVENTS decides what the chronicle forgets and
     // DUPLICATE_WINDOW decides what it declines to remember; neither left any evidence that it had
@@ -337,7 +458,7 @@ export function applyExtraction(fragment, { sources = [], now = Date.now(), wind
         observe.noteCap('duplicate-suppressed', outcome.duplicates.length);
     }
 
-    commit(EVENTS_PATH, pruned);
+    saveEvents(pruned);
     invalidateIndex();
 
     if (rejections.length && onRejections) {
@@ -372,8 +493,22 @@ export function liveEvents() {
     const live = liveHashes();
     return table_entries(loadEvents())
         .filter(([key, event]) => lookup(live, livenessKey(key, event), false))
-        .map(([, event]) => event)
-        .sort((a, b) => (a?.t ?? 0) - (b?.t ?? 0));
+        // ── The tiebreak, because `t` alone is not a total order ──
+        //
+        // `t` is a millisecond stamp and one extraction pass records several events inside one
+        // tick, so same-tick events compare equal and their order falls through to whatever order
+        // the table happened to enumerate. Nothing guarantees that across a reload: the table is
+        // rebuilt from a plain object each time the chat loads.
+        //
+        // The fold cares. `deriveState` applies a restated total as last-write and the duplicate
+        // guard compares against what it has already seen, so two same-tick deltas on one key can
+        // land in either order and produce different quantities from identical events. The key is
+        // content-derived and stable, which is exactly what a tiebreak needs — it carries no
+        // meaning, it just has to be the same every time. (When ops carry a server `seq`, that
+        // becomes the better second term: it is the clock `merge_max_converges` asks for, where
+        // this is only a deterministic stand-in.)
+        .sort(([keyA, a], [keyB, b]) => ((a?.t ?? 0) - (b?.t ?? 0)) || (keyA < keyB ? -1 : keyA > keyB ? 1 : 0))
+        .map(([, event]) => event);
 }
 
 /**
@@ -398,7 +533,7 @@ export function recordUserEvent({ summary, keywords = [], delta = null }) {
     }
     const events = loadEvents();
     insert_with(events, merge_b, `usr:${now}:${userEventSeq++}`, stored);
-    commit(EVENTS_PATH, events);
+    saveEvents(events);
     invalidateIndex();
     return true;
 }
@@ -434,7 +569,7 @@ export function recordWorldEvent({ summary, keywords = [], delta = null }) {
     }
     const events = loadEvents();
     insert_with(events, merge_b, `world:${now}:${worldEventSeq++}`, stored);
-    commit(EVENTS_PATH, events);
+    saveEvents(events);
     invalidateIndex();
     return true;
 }
@@ -482,7 +617,7 @@ export function recordVerdictEvent({ summary, keywords = [], outcome = null }) {
     }
     const events = loadEvents();
     insert_with(events, merge_b, `verdict:${now}:${worldEventSeq++}`, stored);
-    commit(EVENTS_PATH, events);
+    saveEvents(events);
     invalidateIndex();
     return true;
 }
@@ -529,7 +664,7 @@ export function recordReviewEvent({ summary, keywords = [], delta = null, srcKey
     // single-event batch, so a review firing on the same message would silently overwrite the
     // extraction's own event.
     insert_with(events, merge_b, `rev:${now}:${userEventSeq++}`, stored);
-    commit(EVENTS_PATH, events);
+    saveEvents(events);
     invalidateIndex();
     return true;
 }
@@ -632,7 +767,7 @@ export function clearDeltas() {
         }
     }
     if (changed) {
-        commit(EVENTS_PATH, events);
+        saveEvents(events);
         invalidateIndex();
     }
 }
@@ -644,7 +779,7 @@ export function clearDeltas() {
 export function forget(key) {
     const events = loadEvents();
     if (!events.delete(key)) return;
-    commit(EVENTS_PATH, events);
+    saveEvents(events);
     const hits = loadHits();
     if (hits.delete(key)) {
         commit(HITS_PATH, hits);
@@ -668,33 +803,73 @@ export function amend(key, summary) {
         observe.noteCap('keywords-dropped', dropped);
     }
     insert_with(events, merge_b, key, stored);
-    commit(EVENTS_PATH, events);
+    saveEvents(events);
     invalidateIndex();
+}
+
+/** Called with the keys about to be demoted, so their deltas can be carried forward. */
+let onEvict = null;
+
+/**
+ * Register the hook that carries evicted deltas into the state baseline.
+ * @param {(evicted: string[], before: Map<string, object>) => void} fn The hook.
+ */
+export function onEviction(fn) {
+    onEvict = fn;
 }
 
 // Over-budget pruning: shed the least valuable events until the blob fits.
 registerPruner((overBy) => {
-    const events = loadEvents();
-    if (!events.size) return;
+    // ── The MIRROR is pruned here, never the ledger ──
+    //
+    // `loadEvents()` answers from the ledger once it hydrates, and `saveEvents` diffs whatever it is
+    // handed against that ledger and emits `forget` ops for anything missing. So reading through
+    // either of them here would have made the budget pruner DELETE events from the durable store —
+    // to fit a metadata budget the durable store exists to escape. Read and write the raw table.
+    const stored = loadTable(EVENTS_PATH);
+    if (!stored.size) return;
     // Roughly 150 bytes per event; always drop at least a few so repeated passes converge.
     const target = Math.max(5, Math.ceil(overBy / 150));
+
+    if (ledger.isHydrated()) {
+        // ── Cache mode: shedding is free, because the ledger already holds these ──
+        //
+        // With a durable copy on disk, the metadata table stops being the chronicle and becomes a
+        // convenience: what a failed hydrate falls back to, and what a chat export carries. Both
+        // want RECENT memory, so this keeps the newest and drops the oldest — the opposite of
+        // `pruneEvents`, which ranks by retrieval value because it was choosing what to forget
+        // forever. Nothing is forgotten here, so value does not enter into it.
+        //
+        // No cold demote and no `carryForward`: both exist to survive an eviction that destroys
+        // data, and this one destroys none.
+        const keep = table_entries(stored)
+            .sort((a, b) => (a[1]?.t ?? 0) - (b[1]?.t ?? 0))
+            .slice(target);
+        const shed = stored.size - keep.length;
+        if (!shed) return;
+        commit(EVENTS_PATH, new Map(keep));
+        observe.noteCap('mirror-shed', shed);
+        console.debug(`[fold] shed ${shed} mirrored event(s); the ledger still holds them`);
+        return;
+    }
+
+    // ── Authority mode: no ledger, so the mirror IS the chronicle ──
+    //
+    // Unchanged, and it has to stay: an event shed to fit the blob is archived to the cold store,
+    // not destroyed ([EVICT]), and its deltas are carried into the state baseline first.
     const { events: pruned, evicted } = pruneEvents({
-        events,
+        events: stored,
         hits: loadHits(),
         liveHashes: liveHashes(),
-        max: Math.max(0, events.size - target),
+        max: Math.max(0, stored.size - target),
     });
     if (!evicted.length) return;
-    // ── The registered pruner demotes too ──
-    //
-    // This is the budget path, not the MAX_EVENTS path, but the discipline is the same: an event
-    // shed to fit the metadata blob is archived to the cold store, not destroyed ([EVICT]).
-    demoteEvents(evicted, events);
+    demoteEvents(evicted, stored);
     observe.noteCap('events-evicted', evicted.length);
     commit(EVENTS_PATH, pruned);
     invalidateIndex();
     console.debug(`[fold] chronicle pruned ${evicted.length} event(s) to fit the metadata budget`);
-});
+}, PRUNE_MEMORY);
 
 /**
  * Archive a list of evicted events to the cold store, whole.
@@ -708,6 +883,19 @@ registerPruner((overBy) => {
  * @param {Map<string, object>} before The ledger BEFORE pruning, to read the rows from.
  */
 function demoteEvents(evicted, before) {
+    // ── Last chance to keep what the fold is about to lose ──
+    //
+    // The rows below carry `s`, `kw`, `t` and `src` into cold and drop `d`. That is right for
+    // recall, which wants the summary, and wrong for state, which IS the deltas: once this runs the
+    // contribution is unrecoverable and the balance quietly rewinds. Injected rather than imported
+    // because `state.js` imports this module, the same direction `validateDelta` already runs.
+    try {
+        onEvict?.(evicted, before);
+    } catch (error) {
+        // A failure here must not stop the eviction, or a chat over budget can never get under it.
+        // Losing the carry-forward is bad; refusing to prune is unrecoverable.
+        console.error('[fold] failed to carry evicted deltas forward', error);
+    }
     for (const key of evicted) {
         const event = before.get(key);
         if (!event) {

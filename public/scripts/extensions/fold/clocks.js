@@ -35,7 +35,9 @@ import {
     THREAD_STATUSES,
     foldThread,
     foldThreads,
+    dialOf,
     foldTicks,
+    pruneThreads,
     identityPairs,
     isFull,
     mergeThreads,
@@ -85,6 +87,42 @@ export function load() {
  */
 export function view() {
     return overlayClosures(load(), chronicle.threadClosures());
+}
+
+/**
+ * Advance a dial from off-screen, by key rather than by name.
+ *
+ * The on-screen path (`applyExtraction` → `foldTicks`) gates every tick behind the mention rule: a
+ * dial may only move when the excerpt actually names it. Off-screen there is no excerpt to name
+ * anything, which is what off-screen means — so the evidence is different in kind, and so is the
+ * gate. The world turn earns its tick two other ways instead: the pass must be armed by a declared
+ * elapsed span (`world.js`, `WORLD_TRIGGERS`), and the dial must be one fold itself printed on the
+ * block, addressed by the id it was printed under. The model cannot name a dial into moving here;
+ * it can only answer a line.
+ *
+ * Bypassing `foldTicks` is therefore deliberate and not a shortcut: `foldTicks` implements the
+ * mention gate, and running an off-screen advance through it would refuse every honest one.
+ *
+ * @param {string} key The thread key.
+ * @param {number} steps How far to advance.
+ * @param {number} [turn] The turn, for staleness.
+ * @returns {{filled: number, size: number, full: boolean}|null} The new position, or null.
+ */
+export function advance(key, steps, turn = 0) {
+    const table = load();
+    const thread = lookup(table, key, null);
+    const dial = thread ? dialOf(thread) : null;
+    const move = Math.trunc(Number(steps) || 0);
+    if (!dial || move <= 0) {
+        return null;
+    }
+    const filled = Math.min(dial.size, Math.max(0, dial.filled) + move);
+    if (filled === dial.filled) {
+        return null;
+    }
+    table.set(key, { ...thread, filled, turn });
+    commit(THREADS_PATH, table);
+    return { filled, size: dial.size, full: filled >= dial.size };
 }
 
 /**
@@ -257,7 +295,17 @@ export function applyExtraction(fragment, { turn = 0, windowText = '', sources =
 
     const ticks = foldTicks(table, proposed ?? [], { turn, windowText, mentioned });
     const opened = foldThreads(table, fragment?.leads ?? [], { turn, windowText });
+    // ── The stakes the story walked away from ──
+    //
+    // Run AFTER the folds, so a thread this very pass touched carries its fresh turn and cannot be
+    // shed by its own update. Sheds to the cold store like everything else here — see
+    // `pruneThreads` for why a dial is exempt and why the threshold is twice the hide one.
+    const stale = pruneThreads(table, turn);
     commit(THREADS_PATH, table);
+    for (const shed of stale) {
+        cold.demote({ kind: 'thread', key: shed.key, row: shed.row, at: turn });
+        observe.noteCap('threads-pruned');
+    }
 
     // ── A full table sheds to the cold store, not to oblivion ──
     //

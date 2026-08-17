@@ -32,8 +32,10 @@
  * at the pure layer — code decides when to ask, the fixture supplies what the model would say.
  */
 
-import { CONTEST_AT, MONEY } from './state-table.js';
-import { CLOSED, DOOM, HIDDEN, MOOT, OPEN_STATUS, PROGRESS, normalizeThreadName } from './thread-table.js';
+import { table_entries } from './lib/hash.js';
+import { windowSnippet } from './diag.js';
+import { CONTEST_AT, MONEY, itemKey, splitItemKey } from './state-table.js';
+import { CLOSED, DOOM, HIDDEN, MOOT, OPEN_STATUS, PROGRESS, THREAD_STALE, normalizeThreadName } from './thread-table.js';
 
 /**
  * What a review may say about an open line.
@@ -57,6 +59,72 @@ export const SAME = 'same';
 export const DIFFERENT = 'different';
 
 /**
+ * What a card's own status field IS, answered by the model rather than decided by fold.
+ *
+ * ── Why this is a schema enum and not a lookup table ──
+ *
+ * A card invents its own stat line. `HP`, `MP`, `SAN`, `AC`, `BP`, `Corruption`, `Heat`,
+ * `Reputation`, `Bonds`, `Battle Power` — fold has no idea what any of them mean, and the one thing
+ * it must never do is carry a list saying `['hp','mp','health','mana']` are vitals. That list is
+ * missing a word the moment somebody loads a different card, in a different genre, in a different
+ * language, and RULE 1 bans it outright as an enumerated judgement about English.
+ *
+ * So fold asks. The model is already reading the block in the prompt; naming what a field is, is a
+ * reading, and a reading is exactly what RULE 1 says to request through the schema rather than
+ * derive. This is the same licence `same_currency` and `same_thread` are built on, and it arrives
+ * on the pass that already runs.
+ *
+ * The set is deliberately small and each member earns a DISTINCT rendering — a kind that renders
+ * the same as another kind is not a kind, it is a synonym, and it would only give the model a
+ * coin-flip to get wrong:
+ *
+ *   · `identity`   what the character IS (class, title, ancestry)  -> a subtitle under their name
+ *   · `gauge`      a pool with a current and a maximum             -> a bar, beside fold's vitals
+ *   · `counter`    an unbounded quantity                           -> a value chip, or the money row
+ *   · `condition`  a temporary state on the character              -> the Condition list
+ *   · `capability` something they can DO                           -> the Abilities rows
+ *   · `goal`       an objective                                    -> Threads
+ *   · `rating`     a slow score or tier                            -> the sheet
+ *   · `other`      the honest escape hatch                         -> the sheet, counted
+ */
+export const SHEET_KINDS = ['identity', 'gauge', 'counter', 'rating', 'condition', 'capability', 'goal', 'bond', 'other'];
+
+/**
+ * The kinds that are a stat: one label, one value.
+ *
+ * ── The split is scalar-versus-list, and it is not tempo ──
+ *
+ * The first cut of this demoted everything `arc`-tempo below the fold, on the reasoning that a
+ * level moves over a campaign and health moves in a scene. That is true and it is not what the
+ * panel is being asked. `Level 1 (30/100 EXP)`, `Gold 15G`, `BP 10` and `Reputation 0 "Nobody"` are
+ * the character sheet — the owner asked for exactly these "up the top next to name, time", and
+ * routing them by tempo put them back at the bottom, which was the original complaint verbatim.
+ *
+ * What he did NOT want up there was `Abilities`, `Bonds`, `Skills` and `Quests` — and the thing
+ * those four share is not their tempo either. They are LISTS. A stat is a number you read at a
+ * glance; a list is content you read a line at a time, and four of them is most of a screen.
+ *
+ * So `gauge`, `counter` and `rating` ride at the top whatever their tempo, and `capability`,
+ * `goal` and `bond` sit in the sheet whatever theirs. `tempo` stays in the schema because it is
+ * real and cheap, and it orders the top grid — what can change this scene reads first.
+ */
+export const SHEET_STATS = ['gauge', 'counter', 'rating'];
+
+/**
+ * How fast a field moves, which is a different question from what it is.
+ *
+ * `Level 1 (30/100 EXP)` is structurally a gauge and belongs nowhere near the top of the panel;
+ * `HP 100/100` is the same shape and belongs at the very top. What separates them is not their type
+ * but their TEMPO — whether the number can plausibly change inside one scene. Multiplying this into
+ * `SHEET_KINDS` would double the enum and ask the model to keep two ideas in one answer; asking it
+ * twice is cheaper and the answers are independent.
+ *
+ * This is the axis that answers the owner's own complaint: "Abilities, bonds, skills, quests should
+ * not be up the top like that unless it's like your currently active quest."
+ */
+export const SHEET_TEMPO = ['scene', 'arc'];
+
+/**
  * Id prefixes, one per question kind.
  *
  * Letters rather than a flat numbering, because the model has to answer a heterogeneous list and a
@@ -64,7 +132,7 @@ export const DIFFERENT = 'different';
  * about a lock. They are also what the note in a `review` event cites, so they end up in the audit
  * trail a reader scrolls past.
  */
-export const PREFIX = { thread: 'T', place: 'P', mark: 'M', adversary: 'A', lock: 'L', ask: 'Q' };
+export const PREFIX = { thread: 'T', place: 'P', mark: 'M', adversary: 'A', lock: 'L', ask: 'Q', item: 'I' };
 
 /**
  * How many DIRECTED questions one pass may carry.
@@ -135,6 +203,15 @@ export const REVIEW_EVERY = 8;
 export const MAX_MARK_LINES = 10;
 
 /**
+ * How many unclassified card fields one pass may pose.
+ *
+ * A card's whole stat line is bounded by the card — the live Isekai block carries eleven labels,
+ * which is the largest in the corpus — and every one classified is one that never has to be asked
+ * again. Twelve clears it, and a card with more simply finishes over two passes instead of one.
+ */
+export const MAX_SHEET_LINES = 12;
+
+/**
  * Build the review section of the pinned ledger, and the index that reads its answers back.
  *
  * ── Ids are assigned deterministically, not incrementally ──
@@ -149,6 +226,7 @@ export const MAX_MARK_LINES = 10;
  * @param {object[]} [params.threads] Open threads, from `threads()`/`threadsByKind`.
  * @param {object[]} [params.unplaced] Cast rows whose whereabouts are unstated (`castAt`).
  * @param {object[]} [params.marks] Live marks: `{key, name, phrase, severity, mine}`.
+ * @param {object[]} [params.carried] Items on the ledger: `{key, name, qty}`.
  * @param {object[]} [params.threats] Cast rows carrying a threat: `{key, name, threat}`.
  * @param {object[]} [params.contests] Contested locks: `{field, locked, value, count}`.
  * @param {object[]} [params.identity] Identity pairs: `{a, b, why, kind, names}`.
@@ -159,17 +237,21 @@ export const MAX_MARK_LINES = 10;
  */
 export function reviewBlock({
     threads = [], unplaced = [], marks = [], threats = [], contests = [], identity = [],
-    polarity = [], owed = null, budget = MAX_QUESTIONS,
+    polarity = [], owed = null, carried = [], sheet = [], budget = MAX_QUESTIONS,
 } = {}) {
     const index = new Map();
-    // Two sections, rendered apart, because the model kept filing them together. Everything under
-    // `dispositions` is a T/M/A line answered in the fragment's `lines` array with a `still` value;
-    // everything under `questions` is a P/L/Q answered in the `answers` array with an `answer`.
-    // Before the split they shared one header and one flat list, and the model read a `[where now?]`
-    // place question as a line to dispose of — every `P` answer landed in `lines`, where
-    // `planReview` refuses it as `review-wrong-shape` (measured: 19 rejects, all P1-P10, in the Time
-    // Stop RPG chat). Two sections make the schema's two arrays visible in the block the model reads.
+    // Two sections, rendered apart, because they want two different kinds of answer: everything
+    // under `dispositions` is a T/M/A line judged with a `still` value, everything under `questions`
+    // is a P/L/Q answered in the field its kind names.
+    //
+    // They no longer imply two DESTINATIONS, and that is the repair. The sections were added when
+    // the schema had two arrays and the model was filing `[where now?]` answers into the
+    // dispositions one — 19 refusals in the Time Stop chat, every one a P id. Splitting the block
+    // did not close it; 7 more landed in New Eldoria. The array was the redundant half: the id
+    // already names the kind, so `reviewSchema` now asks for one list and `planReview` routes.
     const dispositions = [];
+    /** Stale lines, asked of the record rather than the excerpt. See the push site. */
+    const forgotten = [];
     const questions = [];
 
     const sorted = list => [...list].sort((a, b) => String(a?.key ?? a?.field ?? '').localeCompare(String(b?.key ?? b?.field ?? '')));
@@ -185,11 +267,48 @@ export function reviewBlock({
         // narrator knows something is closing in and how near it is stays theirs to decide. The
         // review can still be asked whether it is moot — which is the exit a hidden threat most
         // needs, since nobody is watching it fill.
-        const face = !thread.dial ? OPEN
-            : thread.seen === HIDDEN ? 'closing in'
-                : `${thread.dial.filled}/${thread.dial.size}`;
+        //
+        // ── A stale line is asked a DIFFERENT question, because the excerpt cannot answer the old one ──
+        //
+        // Past THREAD_STALE a dial-less thread has left the narrator's prompt (`threadsByKind`), so
+        // the story stops touching it, so `[open]` — "did this excerpt settle it?" — has exactly one
+        // honest answer forever, and the instruction says so outright: "a thread the excerpt does
+        // not touch is still open". Measured on the live My Hero Academia RP: review:kept 53 against
+        // review:settled 1, with all three of the chat's threads stale at 26, 31 and 35 turns and
+        // none of them rendered anywhere. One read "hero costume pickup — costume not yet picked up"
+        // while the inventory two lines above it held the costume.
+        //
+        // "Is this still a stake at all" is answerable from the RECORD rather than the excerpt,
+        // which is the same thing `same_currency` is answered from and the same licence: the model
+        // is already reading this list. `moot` then retires it through the path that exists.
+        //
+        // Dialled threads keep their number and never reach this state — `threadsByKind` filters
+        // only dial-less ones by staleness, because a countdown is not stale for going unmentioned.
+        // A dial prints its number whatever its age — a countdown is not stale for going unmentioned,
+        // and "still a thing?" invites a wrong moot on a live clock. Everything else asks of the
+        // record exactly when the excerpt cannot answer, which `reviewableWindow` already decided.
+        const face = thread.dial
+            ? (thread.seen === HIDDEN ? 'closing in' : `${thread.dial.filled}/${thread.dial.size}`)
+            : (thread.askedOfRecord || (thread.stale ?? 0) >= THREAD_STALE) ? STILL_A_THING : OPEN;
         const said = [thread.detail, thread.open, thread.about].filter(Boolean).join(' — ');
-        dispositions.push(`  ${id} [${face}] ${thread.name}${said ? ` — ${said}` : ''}`);
+        // ── A line asked of the RECORD does not belong in the list asked of the excerpt ──
+        //
+        // Both kinds used to render in one block under one header, and the instruction had to carry
+        // the contradiction: "a thread the excerpt does not touch is still open — say nothing about
+        // it", then, one line later, "a line marked [still a thing?] is the exception… this is one
+        // you should answer." The conservative rule wins that argument every time, because it is
+        // stated first and covers every line the model can see.
+        //
+        // MEASURED, live Wuxia World RPG at 133 messages: 14 lines posed per pass, 7 of them
+        // wearing the stale face, and 24 closures against 956 asks — a 2.5% closure rate, with
+        // `find a blacksmith shop` still open beside `collect forged spear` (the blacksmith is
+        // demonstrably found; he is forging the spear) and two duplicate spear-collection threads
+        // both 26+ turns cold.
+        //
+        // Separating them is what `Unsorted` already does for the sheet: a different question gets
+        // a different heading, so no line is under two instructions at once.
+        (face === STILL_A_THING ? forgotten : dispositions)
+            .push(`  ${id} [${face}] ${thread.name}${said ? ` — ${said}` : ''}`);
     });
 
     sorted(unplaced).forEach((person, at) => {
@@ -240,6 +359,20 @@ export function reviewBlock({
         dispositions.push(`  ${id} [threat ${row.threat}] ${row.name} — still fighting?`);
     });
 
+    // One line per carried item. The count rides along because "do you still have this" and "how
+    // many" are the same question about a pack, exactly as a dial prints its position — and a model
+    // that reads "spirit stones x8" and knows six were spent has somewhere to say so.
+    //
+    // `settled` and `moot` both drop it, and the vocabulary already means the right things: the
+    // thing it was tracking is over. Given away, sold, left on a body, broken, eaten — a pack does
+    // not distinguish those and neither does this.
+    carried.slice(0, MAX_ITEM_LINES).forEach((row, at) => {
+        const id = `${PREFIX.item}${at + 1}`;
+        index.set(id, { id, kind: 'item', key: row.key, name: row.name, qty: row.qty ?? 1 });
+        const count = (row.qty ?? 1) > 1 ? ` x${row.qty}` : '';
+        dispositions.push(`  ${id} [still carrying?] ${row.name}${count}`);
+    });
+
     // `kind` is spread LAST, deliberately. It was written first and the migration's own pairs carry
     // a `kind` of their own (`migrate.js` `identityQuestions` tags them 'thread' or 'cast'), so the
     // spread overwrote the question kind with the table name and four of the ten questions on the
@@ -262,7 +395,15 @@ export function reviewBlock({
         questions.push(`  ${id} ${questionText(question)}`);
     });
 
-    const all = [...dispositions, ...questions];
+    // ── The card fields nobody has classified yet ──
+    //
+    // Posed by LABEL rather than by id: the answer is keyed on the label, the label is what the
+    // card wrote, and it is stable across passes in a way an ordinal id is not. Only the unsorted
+    // ones are shown, so a chat whose sheet is fully classified pays nothing at all for this — the
+    // list is empty, the schema array comes back empty, and the section does not render.
+    const unsorted = sheet.slice(0, MAX_SHEET_LINES).map(field => `  ${field.label}: ${field.value}`);
+
+    const all = [...dispositions, ...forgotten, ...questions, ...unsorted];
     if (!all.length) {
         return { text: '', index };
     }
@@ -276,8 +417,14 @@ export function reviewBlock({
             ...(dispositions.length
                 ? ['Say which of these are settled — put your reading in the "lines" answers:', ...dispositions]
                 : []),
+            ...(forgotten.length
+                ? ['Nothing has touched these in a long time. Answer EVERY one from the record — has it quietly been done, has it stopped mattering, or is it genuinely still outstanding? Put your reading in the "lines" answers:', ...forgotten]
+                : []),
             ...(questions.length
                 ? ['Answer these — put your reading in the "answers" list:', ...questions]
+                : []),
+            ...(unsorted.length
+                ? ['Unsorted — say what each of these is, in the "sheet" list:', ...unsorted]
                 : []),
         ].join('\n'),
         index,
@@ -311,10 +458,29 @@ function questionText(question) {
 /**
  * The probe's schema fragment.
  *
- * Two arrays rather than one, because they are two different acts. A disposition is a judgement
- * about a line fold is already tracking and has a closed vocabulary; an answer is a reply to a
- * question code chose to ask and is free text this file then interprets. Collapsing them would mean
- * one `enum` covering `settled` and `₩120,000`, which is a schema that teaches the model nothing.
+ * ── ONE array, because the second routing decision was the defect ──
+ *
+ * This carried two: `lines` for dispositions and `answers` for questions. The stated reason was
+ * that they are two different acts with two different vocabularies, and "collapsing them would mean
+ * one `enum` covering `settled` and `₩120,000`, which is a schema that teaches the model nothing".
+ * That argument is against merging the FIELDS, and nothing here does: `still` is still its own enum,
+ * `amount` is still an integer, and each kind still fills exactly the field its question asks for —
+ * which is how `answers` already worked with five of them.
+ *
+ * What is gone is the requirement to pick an ARRAY. The model has already copied an id; `index` maps
+ * that id to its kind and `planReview` has always dispatched on it, so the array added a second
+ * routing decision that carried no information fold did not already have. It was the one being got
+ * wrong: `review-wrong-shape` fired 19 times in the Time Stop chat, every one a P id, and 7 more in
+ * New Eldoria after the BLOCK had been split into two sections to make the two arrays visible. The
+ * block split was a repair aimed at the symptom; twenty-six refusals say it did not reach the cause.
+ *
+ * And the misfiling was unrecoverable, which is why "read it from whichever array it arrives in"
+ * was not the fix: the old `lines` item was `{id, still, note}` under `additionalProperties: false`,
+ * so a `[where now?]` answer filed there had nowhere to put the place name. The answer was destroyed
+ * by the shape before fold ever saw it. One list is the only version that keeps it.
+ *
+ * The block still renders two SECTIONS, because grouping by what kind of answer is wanted is worth
+ * reading. It no longer implies two destinations.
  *
  * Every object carries `additionalProperties: false` and lists every property in `required`, because
  * OpenAI strict mode demands it on EVERY object and one omission fails the whole shared call for
@@ -329,32 +495,19 @@ export function reviewSchema() {
         properties: {
             lines: {
                 type: 'array',
-                description: 'One entry for each T, M or A line you can judge from this excerpt. Omit any the excerpt says nothing about.',
+                description: 'One entry for each id in the block you can judge or answer from this excerpt. Omit any the excerpt says nothing about. The id decides which field below to fill; the rest stay empty.',
                 items: {
                     type: 'object',
                     properties: {
-                        id: { type: 'string', description: 'The id exactly as listed, e.g. "T3", "M1", "A2".' },
+                        id: { type: 'string', description: 'The id exactly as listed, e.g. "T3", "M1", "A2", "P1", "L1", "Q1".' },
+                        // Each id's kind fills the field that names its answer shape; the others are
+                        // empty. `still` and `answer` are closed protocol vocabularies (the same
+                        // words the line itself offers), never free prose — language-independent.
                         still: {
                             type: 'string',
-                            enum: STILL,
-                            description: `${OPEN} if still unsettled; ${ADVANCED} if it moved closer without finishing; ${SETTLED} if this excerpt resolved it; ${MOOT} if it stopped being about anything.`,
+                            enum: ['', ...STILL],
+                            description: `For a T, M or A line: ${OPEN} if still unsettled; ${ADVANCED} if it moved closer without finishing; ${SETTLED} if this excerpt resolved it; ${MOOT} if it stopped being about anything. Empty for P, L and Q ids.`,
                         },
-                        note: { type: 'string', description: 'Five words at most saying why, quoting the excerpt where you can. Empty if nothing to add.' },
-                    },
-                    required: ['id', 'still', 'note'],
-                    additionalProperties: false,
-                },
-            },
-            answers: {
-                type: 'array',
-                description: 'One entry for each L, P or Q question you can answer from this excerpt. Omit any you cannot.',
-                items: {
-                    type: 'object',
-                    properties: {
-                        id: { type: 'string', description: 'The id exactly as listed, e.g. "Q1".' },
-                        // Each question kind fills the field that names its answer shape; the others
-                        // are empty. `answer` is a closed protocol vocabulary (the same words the
-                        // question itself offers), never free prose — a language-independent answer.
                         answer: {
                             type: 'string',
                             enum: [SAME, DIFFERENT, PROGRESS, DOOM, ''],
@@ -365,7 +518,7 @@ export function reviewSchema() {
                         nothing: { type: 'boolean', description: 'For a "paid?" question: true when nothing was paid (a gift, a find, loot). False for other kinds.' },
                         note: { type: 'string', description: 'Five words at most saying why, quoting the excerpt where you can. Empty if nothing to add.' },
                     },
-                    required: ['id', 'answer', 'place', 'amount', 'nothing', 'note'],
+                    required: ['id', 'still', 'answer', 'place', 'amount', 'nothing', 'note'],
                     additionalProperties: false,
                 },
             },
@@ -394,27 +547,129 @@ export function reviewSchema() {
                     additionalProperties: false,
                 },
             },
+            same_thread: {
+                type: 'array',
+                // ── The identity fold's own detector provably cannot raise ──
+                //
+                // `nearIdentity` is a token-subset test over names, which is the right shape under
+                // RULE 1 — pure algebra on fold's own keys, no morphology, no threshold — and is
+                // structurally incapable of pairing two names that share no token. Measured on the
+                // live New Eldoria table at turn 90: 22 threads, 231 possible pairs, ZERO raised.
+                // Among the ones it cannot see are "Musical language of the symbols" and "Musical
+                // language hypothesis", opened one turn apart, and five separate threads about one
+                // stone sphere. Two threads about one subject usually do not word it alike; that is
+                // exactly why they became two.
+                //
+                // Same answer as `same_currency` above: the model is already reading this list in
+                // this prompt, and "these two stakes are one stake" is a reading. A field on the
+                // pass that already runs, never a new request.
+                description: 'Look at the lines listed under "Say which of these are settled". If two of them are the same stake worded two ways — the same job, the same mystery, the same danger — list the pair by NAME, exactly as written above. Judge the stake, not the wording: two names that share no words can still be one thing. Never pair a line with itself. Empty when each is a distinct stake, which is the usual case.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        a: { type: 'string', description: 'One thread name, exactly as the block writes it.' },
+                        b: { type: 'string', description: 'The other name for the same stake.' },
+                    },
+                    required: ['a', 'b'],
+                    additionalProperties: false,
+                },
+            },
+            same_person: {
+                type: 'array',
+                // The cast half. `entities.questions()` walks the same token test and has the same
+                // blind spot; measured live, `Grimble` and `Armorer` are one merged row and two
+                // separate rows in the same chat, and no name-based test could raise either pair.
+                description: 'Look at the People listed in the record above. If two entries are the same person under two names or descriptions, list the pair by NAME, exactly as written. Never pair an entry with itself. Empty when each is a distinct person, which is the usual case.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        a: { type: 'string', description: 'One person, exactly as the record names them.' },
+                        b: { type: 'string', description: 'The other name for the same person.' },
+                    },
+                    required: ['a', 'b'],
+                    additionalProperties: false,
+                },
+            },
+            sheet: {
+                type: 'array',
+                // ── The card's own stat line, sorted by the only reader that can read it ──
+                //
+                // See `SHEET_KINDS`. fold parses a card's status block into labelled fields and has
+                // no idea what any label means; the alternative to asking is a word list, which
+                // RULE 1 bans and which would be wrong for the next card anyway.
+                //
+                // Answered from the RECORD, like `same_currency` — the block is pinned in this
+                // prompt, so no new request and no dependence on the card emitting a fresh block.
+                // That matters here: the live Isekai card only prints its block when the player
+                // types "status", and absorb STRIPS the block once it has read it, so a
+                // classification that waited for the next block would wait forever.
+                description: 'Look at the "Unsorted" list above, if there is one. For each line, say what kind of thing it is and how fast it moves. "kind": "identity" for what the character IS (class, title, species); "gauge" for a pool with a current and a maximum that fills and empties (health, mana, sanity, corruption); "counter" for an unbounded quantity (coin, ammo, charges); "rating" for a single score, grade or tier (level, experience, an armour class, a reputation standing); "condition" for a temporary state on their body or mind; "capability" for a LIST of things they can do (skills, spells, techniques); "goal" for objectives or quests; "bond" for standing with people or factions; "other" when none of these fit — say "other" rather than guessing. The first four are single values you could read at a glance; the next four are lists or sets. Judge which by whether one entry would need its own line. "tempo" is "scene" if the value could plausibly change during a single scene, "arc" if it moves over a whole campaign: health is "scene", a level or a reputation is "arc". Judge the thing, not the label — a card may call anything anything. Answer every line once. Empty when there is no Unsorted list.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        label: { type: 'string', description: 'The field label, exactly as the Unsorted list writes it.' },
+                        kind: { type: 'string', enum: SHEET_KINDS, description: 'What this field is.' },
+                        tempo: { type: 'string', enum: SHEET_TEMPO, description: 'Whether it can change within one scene.' },
+                        same_as: { type: 'string', description: 'If this names the SAME fact as a row the State block above ALREADY tracks, give that row\'s name exactly as the State block writes it. Check every part of the State block, not only the gauges: a card field "Gold: 15G" and a "Stored (money): gold" row are one balance, and a card field "MP: 30/50" and an "mp" gauge are one pool. Only ever name a row that actually appears above — if nothing up there holds this fact, leave it empty, which is the usual answer.' },
+                    },
+                    required: ['label', 'kind', 'tempo', 'same_as'],
+                    additionalProperties: false,
+                },
+            },
         },
-        required: ['lines', 'answers', 'same_currency'],
+        required: ['lines', 'same_currency', 'same_thread', 'same_person', 'sheet'],
         additionalProperties: false,
     };
 }
+
+/**
+ * How many carried items one review block may pose.
+ *
+ * ── The list that had no question at all ──
+ *
+ * Every other table fold keeps could be closed by the review; inventory could not. An item entered
+ * when the model volunteered a positive delta and left only if it volunteered a negative one, and
+ * the live Wuxia World RPG has THREE negative carried deltas in 143 messages, all from one selling
+ * scene. Gains are salient to a narrator. Putting something down, giving it away, leaving it on a
+ * body — none of those read as bookkeeping while you are writing them.
+ *
+ * What that cost: the Azure Dragon sword, taken off a dead disciple at mid 88 and laid down with him
+ * at mid 92, stayed on the ledger. The pinned block kept telling the narrator it was on the player's
+ * hip, and the village head asked "That's the sword you took off him, boy?" — fold's own stale
+ * record, read back to the player as an accusation.
+ *
+ * Ten, by the same house convention as `MAX_MARK_LINES`: twice the observed maximum. The live chats
+ * hold 13-18 rows at their fullest, most of them inert (a bedroll, a straw hat, a map), and this
+ * caps a QUEUE rather than the table — what does not fit is posed on a later pass.
+ */
+export const MAX_ITEM_LINES = 10;
+
+/**
+ * The face a stake wears once the story has stopped touching it.
+ *
+ * fold's own protocol vocabulary, in the block the model reads — the same category as `[open]` and
+ * `[where now?]`, and English by the same licence.
+ */
+export const STILL_A_THING = 'still a thing?';
 
 /** @returns {string} Prompt guidance for the probe. */
 export function reviewInstruction() {
     return [
         'Read the tracked lines and say, for each you can judge, whether it is still open.',
-        'The block has two sections, and they are answered in two different lists.',
-        'Under "Say which of these are settled" — the T, M and A lines — give each in the "lines" list with a "still" value: whether it is open, advanced, settled or moot.',
-        'Under "Answer these" — the P, L and Q questions — give each in the "answers" list. Each question kind fills its own field: an identity question answers "same" or "different" in "answer"; a polarity question answers "progress" or "doom" in "answer"; a "where now?" question puts the place in "place"; a "paid?" question puts the amount in "amount" or sets "nothing" true when nothing was paid. The other fields stay empty.',
+        'Everything goes in ONE list, "lines" — one entry per id, and the id decides which field to fill.',
+        'Under "Say which of these are settled" — the T, M and A lines — fill "still": whether it is open, advanced, settled or moot.',
+        'Under "Answer these" — the P, L and Q questions — fill the field that question asks for: an identity question answers "same" or "different" in "answer"; a polarity question answers "progress" or "doom" in "answer"; a "where now?" question puts the place in "place"; a "paid?" question puts the amount in "amount" or sets "nothing" true when nothing was paid. The other fields stay empty.',
         'Judge from what the excerpt says. A thread the excerpt does not touch is still open — say nothing about it rather than guessing.',
+        `The lines under "Nothing has touched these in a long time" are the exception, and they are asked of the RECORD rather than the excerpt. That rule above does not apply to them: leaving one unanswered is not caution, it is the reason a finished errand is still on the list forty turns later. Read what each says it is waiting on and answer whether the story still has it outstanding. ${MOOT} if it stopped being about anything or was quietly overtaken — a task already done, a danger long past, an errand nobody is on any more, a place already reached. ${SETTLED} if it has in fact been resolved. ${OPEN} only if it is genuinely still pending and somebody would still act on it. Answer every one of them.`,
         `A thread is ${SETTLED} when the thing it was waiting on has happened, whether or not anyone announced it.`,
         `It is ${MOOT} when it stopped being about anything — the danger is gone, the errand no longer matters.`,
         `An M line is an injury: ${SETTLED} once healed or treated, ${ADVANCED} while mending, ${OPEN} otherwise. Nobody announces a bruise has faded — judge from time and treatment.`,
         `An A line is somebody dangerous: ${SETTLED} once beaten, ${MOOT} once the fight stopped being a fight, ${OPEN} while it continues.`,
+        `An I line is something the record says the character is carrying: ${SETTLED} or ${MOOT} if this excerpt shows them without it — put down, given away, sold, spent, eaten, broken, left behind — and ${OPEN} while they still have it. Say nothing about the ones the excerpt does not touch. This is how something LEAVES the record; nothing else removes it, and a thing the character no longer has goes on being described as theirs until you say so.`,
         'The questions were asked because something is ambiguous in the record, not in the fiction.',
         'Never answer a question the excerpt and your reading cannot settle. An omitted answer is asked again; a wrong one is acted on.',
         'One more, and it is about the Money block rather than the excerpt: if two of its entries are the same currency written two ways, list the pair in "same_currency" by currency name, without the amounts. Leave it empty when they are genuinely different currencies, or when the block has only one entry. This is the one thing here you read from the record rather than from the story.',
+        'Two more of the same kind, and they are also about the record rather than the excerpt: "same_thread" for two tracked lines that are one stake worded two ways, and "same_person" for two entries in the record that are one person. Judge the thing, not the wording — two names sharing no words can still be one stake. Both are usually empty; a pair you list is asked back for confirmation before anything is merged, so name one when you see it.',
     ].join(' ');
 }
 
@@ -429,19 +684,32 @@ export function reviewInstruction() {
  * @param {Map<string, object>} index The id index `reviewBlock` returned for this pass.
  * @returns {object} The plan: closures, merges, placements, polarity, contests, money, counters.
  */
-export function planReview(fragment, index) {
+export function planReview(fragment, index, { windowText = '' } = {}) {
     const plan = {
         closures: [], advanced: [], kept: 0,
-        places: [], merges: [], different: [], polarity: [], locks: [], money: null, currency: [],
+        places: [], merges: [], different: [], polarity: [], locks: [], money: null, currency: [], suspected: [], sheet: [],
+        dropped: [],
         cleared: [], disarmed: [],
         rejected: [],
     };
     const seen = new Map(index ?? []);
+    // The window excerpt every refusal records, the same one the inventory and mark validators
+    // attach. A rejection without it is a tally rather than a diagnostic: twenty-six
+    // `review-wrong-shape` refusals were recorded across two chats and not one of them says what
+    // the model sent, so the only way to read them was to reason about the schema.
+    const snippet = windowSnippet(windowText);
 
+    // ── One list, and the id routes it ──
+    //
+    // `lines` used to be dispositions only, with a second `answers` array for questions. See
+    // `reviewSchema`'s docblock: the split asked the model to choose a destination it had already
+    // named by copying the id, and that choice was the thing being got wrong.
     for (const raw of Array.isArray(fragment?.lines) ? fragment.lines : []) {
         const question = seen.get(String(raw?.id ?? '').trim().toUpperCase());
         if (!question) {
-            plan.rejected.push({ item: String(raw?.id ?? ''), reason: 'review-unknown-id' });
+            // The one refusal left in this loop, and it is unroutable by construction: an id fold
+            // never minted maps to no kind. Everything else is dispatched.
+            plan.rejected.push({ item: String(raw?.id ?? ''), reason: 'review-unknown-id', raw, snippet });
             continue;
         }
         const still = String(raw?.still ?? '').trim().toLowerCase();
@@ -461,6 +729,16 @@ export function planReview(fragment, index) {
             }
             continue;
         }
+        if (question.kind === 'item') {
+            // The disposal the story already showed and nobody wrote down. `settled` and `moot`
+            // both mean the pack no longer holds it; anything else leaves it exactly where it is.
+            if (still === SETTLED || still === MOOT) {
+                plan.dropped.push({ key: question.key, name: question.name, qty: question.qty, note });
+            } else {
+                plan.kept++;
+            }
+            continue;
+        }
         if (question.kind === 'adversary') {
             if (still === SETTLED || still === MOOT) {
                 plan.disarmed.push({ key: question.key, name: question.name, note });
@@ -470,11 +748,11 @@ export function planReview(fragment, index) {
             continue;
         }
         if (question.kind !== 'thread') {
-            // A disposition against a question is a category error the schema cannot prevent
-            // (`still` and `answer` are separate arrays, but a model may still misfile). Counted
-            // rather than silently reinterpreted: guessing which array it meant is the kind of
-            // repair that hides a prompt defect.
-            plan.rejected.push({ item: question.id, reason: 'review-wrong-shape' });
+            // A P, L or Q id. Not a misfiling any more and not a category error — the id says what
+            // kind of answer this is, so it is routed to the handler for that kind. This is where
+            // the twenty-six refusals went; `planAnswer` is the same code that used to read the
+            // second array, moved rather than rewritten.
+            planAnswer(plan, question, raw, note, snippet);
             continue;
         }
         if (still === SETTLED || still === MOOT) {
@@ -494,87 +772,6 @@ export function planReview(fragment, index) {
         plan.kept++;
     }
 
-    for (const raw of Array.isArray(fragment?.answers) ? fragment.answers : []) {
-        const question = seen.get(String(raw?.id ?? '').trim().toUpperCase());
-        if (!question) {
-            plan.rejected.push({ item: String(raw?.id ?? ''), reason: 'review-unknown-id' });
-            continue;
-        }
-        const note = String(raw?.note ?? '').trim().slice(0, 80);
-        switch (question.kind) {
-            case 'place': {
-                // An empty place is "the excerpt does not say" — asked again next pass, never turned
-                // into a location named after a refusal word. The model writes the place name, not a
-                // judgement about it; the schema's free-text field is a name, not an interpretation.
-                const place = String(raw?.place ?? '').trim();
-                if (!place) {
-                    plan.kept++;
-                    break;
-                }
-                plan.places.push({ key: question.key, name: question.name, place: place.slice(0, 64), note });
-                break;
-            }
-            case 'lock': {
-                // The lock still wins; this only refreshes what the narrative is said to claim, so
-                // the panel can offer a one-click accept with the model's reading rather than with
-                // whichever blocked write happened to be last. See `FOLD-REDESIGN.md` §5.
-                const value = String(raw?.place ?? '').trim();
-                if (!value) {
-                    plan.kept++;
-                    break;
-                }
-                plan.locks.push({ field: question.field, value: value.slice(0, 120), note });
-                break;
-            }
-            case 'identity': {
-                // The schema's `answer` is the closed protocol vocabulary — SAME or DIFFERENT — so
-                // no English synonym needs to be recognised here. A model that answers anything else
-                // leaves the pair outstanding, which is the safe failure.
-                if (String(raw?.answer ?? '').trim().toLowerCase() === SAME) {
-                    plan.merges.push({ of: question.of, a: question.a, b: question.b, note });
-                } else if (String(raw?.answer ?? '').trim().toLowerCase() === DIFFERENT) {
-                    // Remembered, not discarded. A pair the reader has separated must never be
-                    // asked about again — the detector is loose by design, so a `different` that is
-                    // forgotten is a question that returns every pass forever and trains the reader
-                    // to ignore the whole mechanism.
-                    plan.different.push({ of: question.of, a: question.a, b: question.b, note });
-                } else {
-                    plan.kept++;
-                }
-                break;
-            }
-            case 'polarity': {
-                // Same closed vocabulary: PROGRESS or DOOM, answered directly. No "good"/"bad".
-                const said = String(raw?.answer ?? '').trim().toLowerCase();
-                if (said === PROGRESS) {
-                    plan.polarity.push({ key: question.thread, kind: PROGRESS, note });
-                } else if (said === DOOM) {
-                    plan.polarity.push({ key: question.thread, kind: DOOM, note });
-                } else {
-                    plan.kept++;
-                }
-                break;
-            }
-            case 'money': {
-                // A real answer either way: "nothing" clears the question, an amount debits it. The
-                // model states the amount as a number or sets `nothing`; no amount word-list.
-                if (raw?.nothing === true) {
-                    plan.money = { amount: 0, currency: question.currency, note };
-                    break;
-                }
-                const amount = Number(raw?.amount);
-                if (!Number.isInteger(amount) || amount <= 0) {
-                    plan.rejected.push({ item: question.id, reason: 'review-unreadable-amount' });
-                    break;
-                }
-                plan.money = { amount, currency: question.currency, at: MONEY, note };
-                break;
-            }
-            default:
-                plan.rejected.push({ item: question.id, reason: 'review-wrong-shape' });
-        }
-    }
-
     // ── The model's currency reading, taken as a PAIR and not as a merge ──
     //
     // Same discipline as every other identity answer: this names two lines it believes are one
@@ -588,7 +785,7 @@ export function planReview(fragment, index) {
         const a = String(raw?.a ?? '').trim();
         const b = String(raw?.b ?? '').trim();
         if (!a || !b) {
-            plan.rejected.push({ item: `${a}${b}`, reason: 'review-wrong-shape' });
+            plan.rejected.push({ item: `${a}${b}`, reason: 'review-wrong-shape', raw, snippet });
             continue;
         }
         if (a.toLowerCase() === b.toLowerCase()) {
@@ -597,7 +794,228 @@ export function planReview(fragment, index) {
         plan.currency.push({ a, b });
     }
 
+    // ── Volunteered pairs are SUSPICIONS, and the asymmetry with currency is deliberate ──
+    //
+    // A currency answer writes a witness into `state.answers`; the crosswalk relabels on it and
+    // nothing is destroyed. A thread or cast answer REWRITES a stored table, and `entities.js` says
+    // why that is a different risk: "a wrong merge cannot be undone by silence". So these do not
+    // become `plan.merges`. They are carried out as candidates, stored, and asked back with an id on
+    // the next pass — where the confirmed-merge path that already exists does the write. Two
+    // independent readings before a destructive one, at no extra request.
+    // ── The model answers with the LABEL fold printed, and fold has to read its own label ──
+    //
+    // Every review line is rendered `T3 [open] Reach the capital city`, so when the model volunteers
+    // a pair it names them the way it saw them — `"T3 [open] Reach the capital city"`, or just
+    // `"M3"`. `suspectedPairs` then resolved that whole string as a thread NAME, found nothing, and
+    // dropped the pair without a word.
+    //
+    // MEASURED in the live Isekai RPG chat, against the shipped resolver:
+    //
+    //   DROPPED  "T3 [open] Reach the capital city" -> null  |  "travel to capital" -> ok
+    //   DROPPED  "M3" -> null                                |  "M4" -> null
+    //   ASKED    "Reach the capital city" -> ok               |  "travel to capital" -> ok
+    //
+    // Three pairs volunteered, `review:merged` 1 — and that one came from a different path. The
+    // panel still shows `travel to capital` beside `Reach the capital city`, and `deal with wolves`
+    // beside `Wolves east pastures`, because the confirmations were never asked.
+    //
+    // The prefix is fold's OWN protocol (`PREFIX`, and the `[open]`/`[still a thing?]` faces), so
+    // reading it back is token algebra on fold's own keys — RULE 1's STRUCTURE clause, the same
+    // permission every other id lookup in this file relies on.
+    const lineFor = (said) => {
+        const at = String(said).match(/^([A-Za-z])(\d+)\b/);
+        return at ? (index.get(`${at[1].toUpperCase()}${at[2]}`) ?? null) : null;
+    };
+    // Which table a line belongs to. A `mark`, `item`, `lock` or `ask` line has no merge path at
+    // all, so a pair naming one is refused loudly rather than stored to be dropped later.
+    const MERGEABLE = { thread: 'thread', place: 'cast', adversary: 'cast' };
+    for (const [field, of] of [['same_thread', 'thread'], ['same_person', 'cast']]) {
+        for (const raw of Array.isArray(fragment?.[field]) ? fragment[field] : []) {
+            const a = String(raw?.a ?? '').trim();
+            const b = String(raw?.b ?? '').trim();
+            if (!a || !b) {
+                plan.rejected.push({ item: `${a}${b}`, reason: 'review-wrong-shape', raw, snippet });
+                continue;
+            }
+            // A model naming one line twice has volunteered nothing — `same_currency`'s rule.
+            if (a.toLowerCase() === b.toLowerCase()) {
+                continue;
+            }
+            const rowA = lineFor(a);
+            const rowB = lineFor(b);
+            // A side the model named by id becomes the key that id stands for; a side it named in
+            // words is passed through for the caller's name resolver, exactly as before.
+            const keyA = rowA?.key ?? a;
+            const keyB = rowB?.key ?? b;
+            if (keyA.toLowerCase() === keyB.toLowerCase()) {
+                continue;
+            }
+            // When both sides resolved, the LINES say which table this is about — the model put a
+            // pair of marks in `same_thread` and fold would otherwise hunt for threads by that name
+            // on every pass forever.
+            const settled = rowA && rowB && rowA.kind === rowB.kind ? MERGEABLE[rowA.kind] : of;
+            if (!settled) {
+                plan.rejected.push({ item: `${a} / ${b}`, reason: 'review-unmergeable', raw, snippet });
+                continue;
+            }
+            plan.suspected.push({ of: settled, a: keyA, b: keyB });
+        }
+    }
+
+    // ── What each card field IS, as the model read it ──
+    //
+    // Keyed on the label because that is what the card wrote and what the panel will look up. A
+    // classification is permanent until the card renames the field, so a label answered once is
+    // never posed again — which is why the cost of this decays to nothing.
+    for (const raw of Array.isArray(fragment?.sheet) ? fragment.sheet : []) {
+        const label = String(raw?.label ?? '').trim().toLowerCase();
+        const kind = String(raw?.kind ?? '').trim().toLowerCase();
+        const tempo = String(raw?.tempo ?? '').trim().toLowerCase();
+        if (!label) {
+            plan.rejected.push({ item: '', reason: 'sheet-unnamed', raw, snippet });
+            continue;
+        }
+        // An answer outside the enum is the model inventing a category. Refused with the word it
+        // invented, so the reason says WHICH rather than only how often.
+        if (!SHEET_KINDS.includes(kind) || !SHEET_TEMPO.includes(tempo)) {
+            plan.rejected.push({ item: `${label}: ${kind || '?'}/${tempo || '?'}`, reason: 'sheet-unknown-kind', raw, snippet });
+            continue;
+        }
+        plan.sheet.push({ label, kind, tempo, same_as: String(raw?.same_as ?? '').trim().toLowerCase() });
+    }
+
     return plan;
+}
+
+/**
+ * Apply one answer to a P, L or Q question.
+ *
+ * Extracted from the second loop `planReview` used to run, unchanged apart from the refusals now
+ * carrying their raw. Its caller is the single list: the id names the kind, this routes on it.
+ *
+ * @param {object} plan The plan being built, mutated.
+ * @param {object} question The question this id was minted for.
+ * @param {object} raw The entry the model sent.
+ * @param {string} note The trimmed note.
+ * @param {string} snippet The window excerpt, for the diagnostics log.
+ */
+function planAnswer(plan, question, raw, note, snippet) {
+    switch (question.kind) {
+        case 'place': {
+            // An empty place is "the excerpt does not say" — asked again next pass, never turned
+            // into a location named after a refusal word. The model writes the place name, not a
+            // judgement about it; the schema's free-text field is a name, not an interpretation.
+            const place = String(raw?.place ?? '').trim();
+            if (!place) {
+                plan.kept++;
+                break;
+            }
+            plan.places.push({ key: question.key, name: question.name, place: place.slice(0, 64), note });
+            break;
+        }
+        case 'lock': {
+            // The lock still wins; this only refreshes what the narrative is said to claim, so
+            // the panel can offer a one-click accept with the model's reading rather than with
+            // whichever blocked write happened to be last. See `FOLD-REDESIGN.md` §5.
+            const value = String(raw?.place ?? '').trim();
+            if (!value) {
+                plan.kept++;
+                break;
+            }
+            plan.locks.push({ field: question.field, value: value.slice(0, 120), note });
+            break;
+        }
+        case 'identity': {
+            // The schema's `answer` is the closed protocol vocabulary — SAME or DIFFERENT — so
+            // no English synonym needs to be recognised here. A model that answers anything else
+            // leaves the pair outstanding, which is the safe failure.
+            if (String(raw?.answer ?? '').trim().toLowerCase() === SAME) {
+                plan.merges.push({ of: question.of, a: question.a, b: question.b, note });
+            } else if (String(raw?.answer ?? '').trim().toLowerCase() === DIFFERENT) {
+                // Remembered, not discarded. A pair the reader has separated must never be
+                // asked about again — the detector is loose by design, so a `different` that is
+                // forgotten is a question that returns every pass forever and trains the reader
+                // to ignore the whole mechanism.
+                plan.different.push({ of: question.of, a: question.a, b: question.b, note });
+            } else {
+                plan.kept++;
+            }
+            break;
+        }
+        case 'polarity': {
+            // Same closed vocabulary: PROGRESS or DOOM, answered directly. No "good"/"bad".
+            const said = String(raw?.answer ?? '').trim().toLowerCase();
+            if (said === PROGRESS) {
+                plan.polarity.push({ key: question.thread, kind: PROGRESS, note });
+            } else if (said === DOOM) {
+                plan.polarity.push({ key: question.thread, kind: DOOM, note });
+            } else {
+                plan.kept++;
+            }
+            break;
+        }
+        case 'money': {
+            // A real answer either way: "nothing" clears the question, an amount debits it. The
+            // model states the amount as a number or sets `nothing`; no amount word-list.
+            if (raw?.nothing === true) {
+                plan.money = { amount: 0, currency: question.currency, note };
+                break;
+            }
+            const amount = Number(raw?.amount);
+            if (!Number.isInteger(amount) || amount <= 0) {
+                plan.rejected.push({ item: question.id, reason: 'review-unreadable-amount', raw, snippet });
+                break;
+            }
+            plan.money = { amount, currency: question.currency, at: MONEY, note };
+            break;
+        }
+        default:
+            // A kind with no handler. Unreachable while every kind `reviewBlock` mints has a
+            // case above; kept so adding a question kind without an answer path is loud.
+            plan.rejected.push({ item: question.id, reason: 'review-wrong-shape', raw, snippet });
+    }
+}
+
+/**
+ * Resolve a currency NAME the model volunteered to the ledger row it names.
+ *
+ * ── Why this is a lookup and not an assumption ──
+ *
+ * `same_currency` reports names, not keys. The first version of the consumer assumed both names were
+ * money-place, because the `Money:` block only renders money-place rows. Two live measurements say
+ * that assumption is unsafe:
+ *
+ *   · The model answered `{"a":"silver wen","b":"silver"}` on a pass whose prompt contained no Money
+ *     line at all — only `Carrying: dagger, bow`. It answered from the story. The answer was right;
+ *     the inferred place was invented.
+ *   · Wuxia's real split is cross-place: `silver wen` at `carried`, `silver` at `money`. Forcing both
+ *     to `money` built `money␀silver wen`, a key the ledger never held, and the crosswalk's `known`
+ *     filter then discarded a correct answer without a trace.
+ *
+ * So the name is matched against fold's own key space by EXACT equality on the normalized item name.
+ * No tokenizing, no substring, no morphology — the same operation in every script. `money` wins a tie
+ * because that is where a currency belongs and it is a protocol place, not an English word being
+ * interpreted. A name held at two or more non-money places is ambiguous and returns '': fold has no
+ * way to choose, and guessing would turn an unresolvable answer into a confident merge.
+ *
+ * @param {string} name The name as the model wrote it, possibly with a leading amount.
+ * @param {Set<string>} keys Inventory keys the ledger holds.
+ * @returns {string} The resolved inventory key, or '' when it cannot be resolved.
+ */
+export function resolveCurrencyKey(name, keys) {
+    // The block renders "20 silver wen", so a model quoting it "exactly as written" returns the
+    // amount too — measured, on the run where a one-entry block produced the self-pair
+    // `20 silver wen` / `silver wen`. Stripping a leading count is number parsing: STRUCTURE, and
+    // the same meaning in every language.
+    const wanted = String(name ?? '').trim().replace(/^[0-9.,\s]+/, '').trim().toLowerCase();
+    if (!wanted || !keys?.size) {
+        return '';
+    }
+    if (keys.has(itemKey(wanted, MONEY))) {
+        return itemKey(wanted, MONEY);
+    }
+    const held = [...keys].filter(key => splitItemKey(key).name === wanted);
+    return held.length === 1 ? held[0] : '';
 }
 
 /**
@@ -711,9 +1129,28 @@ export function reviewableWindow(reviewable, coveredOrText, turn = 0, every = RE
             stale.push(thread);
         }
     }
-    // Touched first (the ones the window may settle), then the stale safety valve, so a pass with
-    // a hot window poses only what it can actually act on.
-    return [...touched, ...stale];
+    // ── One threshold decides both "pose it" and "ask it of the record" ──
+    //
+    // A thread reaches the second list precisely because the excerpt does NOT touch it. That is the
+    // same fact the review instruction turns into "say nothing about it rather than guessing" — so
+    // every line here is one the excerpt cannot settle, and asking about the excerpt is the wrong
+    // question for all of them.
+    //
+    // The block used to decide that separately, from `stale >= THREAD_STALE` (20), while this list
+    // is built at `REVIEW_EVERY` (8). Everything between the two was posed under a rule that told
+    // the model to stay silent about it: posed, never answerable, never closed.
+    //
+    // MEASURED in the live Wuxia chat twice. First pass: seven finished stakes sitting at ages
+    // 4-12 — crystal taken, cave found, bear killed and butchered, cores refined, level fifty
+    // reached. Closed by hand; the story ran on; and the band refilled with four more — the
+    // Earth-Spiritual Liquid drunk at mid 205 and still open at stale 12, Blazing Sun City reached
+    // at mid 216 and still open at stale 8, the mission taken at mid 220, the Lava Scorpion slain
+    // at mid 226. The dead zone is not an edge case; it is where finished threads go.
+    //
+    // So the tag travels with the row instead of being recomputed from a second number. Subtraction:
+    // `THREAD_STALE` keeps its own job (hiding a cold thread from the narrator's prompt) and stops
+    // being consulted about a question it was never about.
+    return [...touched, ...stale.map(thread => ({ ...thread, askedOfRecord: true }))];
 }
 
 /** Statuses a thread may be left in by a closure. Re-exported so `review.js` need not reach past. */
@@ -743,6 +1180,38 @@ export { CLOSED, MOOT, OPEN_STATUS };
  * @param {(pair: object, side: string) => boolean} params.exists Does this side's row still exist?
  * @returns {object[]} The pairs still worth asking, deduplicated.
  */
+/**
+ * The pairs the model volunteered, resolved into fold's own key space.
+ *
+ * Pure, and here rather than in `review.js`, for this file's standing reason: the resolution rule is
+ * the interesting part and a rule that cannot be replayed cannot be argued with. The caller supplies
+ * `resolve`, because only it holds the thread and cast tables.
+ *
+ * The model names each side the way the block PRINTS it — a display name, not a key — so each is
+ * looked up through the same one-hop alias resolution every other consumer uses. Three ways a pair
+ * is dropped rather than asked, and all three are the rule `resolveCurrencyKey` already keeps: a
+ * side that resolves to nothing, a pair whose sides resolve to the SAME row (already merged, or the
+ * model naming one thing twice in two spellings), and a side whose kind has no resolver.
+ * An unresolvable answer must not become a confident question.
+ *
+ * @param {Map<string, {of: string, a: string, b: string}>} stored The suspected table.
+ * @param {Function} resolve `(of, name) => key|null`, over the caller's tables.
+ * @returns {Array<{a: string, b: string, of: string, why: string}>} Pairs, ready for `outstanding`.
+ */
+export function suspectedPairs(stored, { resolve = () => null } = {}) {
+    const out = [];
+    for (const [, pair] of table_entries(stored ?? new Map())) {
+        const of = pair?.of === 'cast' ? 'cast' : 'thread';
+        const a = resolve(of, pair?.a) ?? null;
+        const b = resolve(of, pair?.b) ?? null;
+        if (!a || !b || a === b) {
+            continue;
+        }
+        out.push({ a, b, of, why: 'the model reports these are one' });
+    }
+    return out;
+}
+
 export function outstanding(pairs, { answers = new Map(), exists = () => true } = {}) {
     const seen = new Set();
     const out = [];

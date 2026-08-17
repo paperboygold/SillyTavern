@@ -1274,3 +1274,75 @@ describe('cachingAtDepthForOpenRouterClaude', () => {
         expect(typeof messages[1].content).toBe('string');
     });
 });
+
+describe('toGeminiSchema — an empty enum member is how a schema says "no answer"', () => {
+    // ── The measured failure ──
+    //
+    // Google answers a schema containing an empty enum member with
+    //
+    //     400 INVALID_ARGUMENT
+    //     * ...response_schema.properties[scene].properties[phase].enum[0]: cannot be empty
+    //
+    // and fails the WHOLE request, so the caller gets no answer at all rather than a worse one.
+    // The member cannot simply be removed from the schema: OpenAI's strict structured output puts
+    // every property in `required`, so "unset" has to be a value, and a model forced to choose
+    // would have to assert a time of day or a disposition it was never told.
+
+    test('the blank becomes nullable and the real choices survive', () => {
+        expect(mod.toGeminiSchema({
+            type: 'object',
+            properties: {
+                phase: { type: 'string', enum: ['', 'morning', 'afternoon', 'evening', 'night'] },
+            },
+        })).toEqual({
+            type: 'object',
+            properties: {
+                phase: { type: 'string', enum: ['morning', 'afternoon', 'evening', 'night'], nullable: true },
+            },
+        });
+    });
+
+    test('it reaches enums at any depth, including inside array items', () => {
+        const converted = mod.toGeminiSchema({
+            type: 'object',
+            properties: {
+                people: {
+                    type: 'array',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            feels: { type: 'string', enum: ['hostile', 'wary', 'neutral', ''] },
+                        },
+                    },
+                },
+            },
+        });
+        expect(converted.properties.people.items.properties.feels)
+            .toEqual({ type: 'string', enum: ['hostile', 'wary', 'neutral'], nullable: true });
+    });
+
+    test('an enum with nothing but blanks was only ever a free string', () => {
+        expect(mod.toGeminiSchema({ type: 'string', enum: [''] }))
+            .toEqual({ type: 'string', nullable: true });
+    });
+
+    test('a schema Google already accepts is passed through unchanged', () => {
+        const clean = {
+            type: 'object',
+            properties: {
+                status: { type: 'string', enum: ['open', 'settled'] },
+                count: { type: 'integer' },
+            },
+            required: ['status', 'count'],
+        };
+        expect(mod.toGeminiSchema(clean)).toEqual(clean);
+    });
+
+    test('the input is never mutated', () => {
+        // The same schema object is reused across requests by the caller, so a destructive
+        // conversion would corrupt every later call to a different backend.
+        const source = { type: 'string', enum: ['', 'morning'] };
+        mod.toGeminiSchema(source);
+        expect(source).toEqual({ type: 'string', enum: ['', 'morning'] });
+    });
+});

@@ -72,9 +72,23 @@ export const DUPLICATE_WINDOW = 8;
  * @returns {string[]} Lowercased tokens of more than two characters.
  */
 export function tokenize(text) {
+    // ── The class was `[^a-z0-9']`, which is ASCII, which is English ──
+    //
+    // Splitting on "not an ASCII letter or digit" treats every other script as a separator, so a
+    // name is shredded or erased. Measured on the live chats before this changed:
+    //
+    //   "Chí Guāngdé"       -> ["ngd"]     the Wuxia protagonist, 38 events, filed under a fragment
+    //   "Ike Kōtoku"        -> ["ike","toku"]
+    //   "серебряных монет"  -> []          nothing at all
+    //   "은화 스무닢"          -> []
+    //
+    // `ngd` was the third most common index term in a 277-message campaign. It retrieves anything
+    // today only because query and index mangle identically; a Cyrillic or Hangul campaign has zero
+    // retrievable memory. `\p{L}\p{N}` is the same rule stated over Unicode instead of ASCII —
+    // FORMAT, not prose judgement, and it means the same thing in every script.
     return String(text ?? '')
         .toLowerCase()
-        .split(/[^a-z0-9']+/)
+        .split(/[^\p{L}\p{N}']+/u)
         .filter(token => token.length > 2);
 }
 
@@ -211,11 +225,73 @@ export function indexTerms(keyword) {
 }
 
 /**
+ * BM25 constants, taken from the reference implementation rather than chosen.
+ *
+ * `../ref/qdrant/lib/bm25/src/lib.rs:29-30`. `k1` is where term frequency saturates; `b` is how
+ * hard length normalisation bites. Copied so the formula below is a port and not an invention.
+ */
+export const BM25_K1 = 1.2;
+export const BM25_B = 0.75;
+
+/**
+ * How much of its score an event keeps for being fold talking about itself.
+ *
+ * ── Derived, not dialled ──
+ *
+ * A closure (`Confirmed one thread: X = ...`) or an adjudication is a record of what FOLD decided.
+ * It has real value — it says a stake is settled — but it is not evidence of the world, and it
+ * competes for a bounded prompt against the scene it is about. It also duplicates that scene's
+ * keywords, which is why it wins: it repeats both the subject and the resolution.
+ *
+ * The number is the measured plateau, not a preference. Swept over all nine campaigns, counting how
+ * many of the 48 top-5 slots go to bookkeeping:
+ *
+ *   1.0 (off) 23%   ·   0.9 → 19%   ·   0.7 → 10%   ·   0.3 → 4%   ·   0.1 → 4%   ·   0.0 → 4%
+ *
+ * 0.3 is where the curve flattens: below it nothing changes, so it is the smallest demotion that
+ * achieves everything demotion can achieve. The residual 4% survives even at zero — two slots in
+ * chats where nothing but bookkeeping matches the query at all, which no weight can fix and no
+ * weight should, because an empty slot is worse than a closure.
+ *
+ * A demotion, never an exclusion: "the nest raid is settled" is sometimes exactly the right memory,
+ * and at 0.3 a closure that dominates on relevance still wins.
+ */
+export const SELF_WEIGHT = 0.3;
+
+/**
  * Rank events against a query.
  *
- * Scoring is keyword overlap accumulated in the Count face, tie-broken by recency. Events whose
- * key is not in `liveHashes` are dropped: an event extracted from a swipe you have navigated away
- * from is not part of the current branch's history.
+ * ── Okapi BM25 over the keyword index, not raw overlap ──
+ *
+ * This scored +1 per matching token, which made the ranking a function of HOW MANY query tokens an
+ * event matched. Two consequences, both measured on the live chats:
+ *
+ *   · A term in half the ledger counted as much as one in two events. `sol` appeared in 61 of 107
+ *     events, `solomon` in 104 of 286 — they shifted every score and separated nothing.
+ *   · Long, keyword-dense events won on volume. fold's own closures repeat a thread's name AND its
+ *     resolution, so they matched more tokens than the scene they closed and took 44% of all top-5
+ *     slots — 5 of 5 in the Star Wars chat, four of them the same condition line.
+ *
+ * BM25 fixes both, and the second is the half an earlier attempt here missed: IDF alone was measured
+ * and changed 0–1 results of 5, because scaling every score by rarity leaves the volume effect
+ * intact. It is the LENGTH NORMALISATION — `b · len/avg` — that demotes a dense summary against a
+ * short specific memory. Ported verbatim:
+ *
+ *     idf = ln((N − df + 0.5) / (df + 0.5) + 1)         query_context.rs:279
+ *     tf  = c(k1 + 1) / (k1(1 − b + b·len/avg) + c)     bm25/src/lib.rs:156-157
+ *
+ * Measured, bookkeeping share of top-5 across the corpus: **44% → 23%** on BM25 alone, → **4%**
+ * with `SELF_WEIGHT`. `len` is the event's KEYWORD count (4.6–6.7 average across the live chats),
+ * not prose length — a short model-authored field, so the normalisation is gentler than in document
+ * retrieval and should be re-measured if keyword emission ever changes.
+ *
+ * No index is built for this. The corpus is ~8k events after a year and the whole fold takes
+ * single-digit milliseconds, so the exact scan IS the fast path — an ANN structure would approximate
+ * an answer fold can afford to compute exactly. The Graph face is the inverted index; the
+ * Accumulator face is the scorer; nothing else is needed.
+ *
+ * Events whose key is not in `liveHashes` are dropped: an event extracted from a swipe you have
+ * navigated away from is not part of the current branch's history.
  *
  * @param {object} params Parameters.
  * @param {Map<string, ChronicleEvent>} params.events The event table.
@@ -223,18 +299,57 @@ export function indexTerms(keyword) {
  * @param {string} params.queryText Text to match against.
  * @param {Map<string, boolean>} [params.liveHashes] Keys currently present in the chat.
  * @param {number} [params.topK] Maximum results.
- * @returns {Array<{key: string, event: ChronicleEvent, overlap: number}>} Ranked, best first.
+ * @returns {Array<{key: string, event: ChronicleEvent, score: number, overlap: number}>} Ranked, best first.
  */
 export function rankEvents({ events, kwIndex, queryText, liveHashes = null, topK = 5 }) {
-    const scores = fold(tokenize(queryText), new Map(), (acc, token) =>
-        fold(lookup(kwIndex, token, []), acc, (inner, key) =>
-            insert_with(inner, merge_bu, key, 1)));
+    const total = events?.size ?? 0;
+    if (!total) {
+        return [];
+    }
+
+    // Per-event term counts and length, from the same keywords the index was built on, so `df` and
+    // `tf` describe one corpus rather than two.
+    const bags = new Map();
+    let lengthSum = 0;
+    for (const [key, event] of table_entries(events)) {
+        const terms = fold(event?.kw ?? [], [], (acc, keyword) => acc.concat(indexTerms(keyword)));
+        const counts = fold(terms, new Map(), (acc, term) => insert_with(acc, merge_bu, term, 1));
+        bags.set(key, { counts, length: terms.length });
+        lengthSum += terms.length;
+    }
+    const average = lengthSum / total || 1;
+
+    // One query term counted once: a word repeated in the window is not stronger evidence about
+    // which memory is wanted, and letting it accumulate would reintroduce the volume effect.
+    const scores = fold(new Set(tokenize(queryText)), new Map(), (acc, token) => {
+        const keys = lookup(kwIndex, token, []);
+        if (!keys.length) {
+            return acc;
+        }
+        const idf = Math.log((total - keys.length + 0.5) / (keys.length + 0.5) + 1);
+        return fold(keys, acc, (inner, key) => {
+            const bag = bags.get(key);
+            const count = bag ? lookup(bag.counts, token, 0) : 0;
+            if (!count) {
+                return inner;
+            }
+            const tf = (count * (BM25_K1 + 1))
+                / (BM25_K1 * (1 - BM25_B + BM25_B * (bag.length / average)) + count);
+            return insert_with(inner, merge_bu, key, idf * tf);
+        });
+    });
 
     return table_entries(scores)
         .filter(([key]) => events.has(key)
             && (!liveHashes || lookup(liveHashes, livenessKey(key, events.get(key)), false)))
-        .map(([key, overlap]) => ({ key, event: events.get(key), overlap }))
-        .sort((a, b) => b.overlap - a.overlap || (b.event?.t ?? 0) - (a.event?.t ?? 0))
+        .map(([key, score]) => {
+            const event = events.get(key);
+            // Provenance is a signal no vector store could have: fold knows which events it wrote
+            // about its own decisions, and used to throw that away.
+            const weighted = event?.src === 'llm' ? score : score * SELF_WEIGHT;
+            return { key, event, score: weighted, overlap: weighted };
+        })
+        .sort((a, b) => b.score - a.score || (b.event?.t ?? 0) - (a.event?.t ?? 0))
         .slice(0, Math.max(0, topK));
 }
 

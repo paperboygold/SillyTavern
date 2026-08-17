@@ -432,3 +432,65 @@ describe('skipClock', () => {
         expect(skipClock({ day: 0, minutes: NaN, seen: 3, moved: 0 }, 60).accepted).toBe(false);
     });
 });
+
+describe('one night is one day, however many ways the model says so', () => {
+    // ── The live My Hero Academia RP, measured ──
+    //
+    // Three narrative days — day 1 classroom and costume, day 2 Ground Beta, day 3 the endurance
+    // test — and the panel read DAY 5. Two night transitions, each rolling twice, because
+    // `dateChanged` was added on top of `days` and on top of the minutes overflow instead of being
+    // the fallback `advanceSceneClock`'s own docblock describes: "The correct reading is
+    // complementary, not additive … `dateChanged` rolls the day EVEN WHEN no duration or marker
+    // said so — a named day is the one unambiguous signal that a full day has passed."
+    //
+    // A model narrating "the alarm cuts through the dark at 6:30 AM" has three true things to
+    // report about it at once, and reporting all three must not mean three days.
+    const night = { day: 1, minutes: 23 * 60, raw: '23:00', seen: 10, moved: 10, date: '' };
+    const said = extra => ({ days: 0, minutes: 0, phase: '', clockHour: NaN, clockMinute: NaN, dateChanged: false, ...extra });
+
+    test('every way of reporting one night rolls exactly one day', () => {
+        // The model narrating "the alarm cuts through the dark at 6:30 AM" has three true things to
+        // say about it at once. Saying all three must not mean three days.
+        const rolled = {
+            'all three signals at once': { days: 1, clockHour: 6, clockMinute: 30, dateChanged: true },
+            'days and a clock face': { days: 1, clockHour: 6, clockMinute: 30 },
+            'dateChanged and a clock face': { clockHour: 6, clockMinute: 30, dateChanged: true },
+            'days alone': { days: 1 },
+            'dateChanged alone': { dateChanged: true },
+            'an overnight duration': { minutes: 450 },
+            'an overnight duration and dateChanged': { minutes: 450, dateChanged: true },
+        };
+        const days = Object.fromEntries(Object.entries(rolled)
+            .map(([label, extra]) => [label, advanceSceneClock(night, said(extra)).day]));
+        expect(days).toEqual(Object.fromEntries(Object.keys(rolled).map(label => [label, 2])));
+    });
+
+    test('a real span is never swallowed by the fallback', () => {
+        // `dateChanged` only fills in for a boundary nothing else accounted for. When the span
+        // itself rolls the day, the span wins and keeps its full size.
+        expect(advanceSceneClock(night, said({ days: 2, dateChanged: true })).day).toBe(3);
+        // 23:00 + 2 days + 7.5h crosses three midnights; the arithmetic is the span's, not a count
+        // of how many ways the boundary was mentioned.
+        expect(advanceSceneClock(night, said({ minutes: 60 * 24 * 2 + 450, dateChanged: true })).day).toBe(4);
+    });
+
+    test('`days` AND a sub-day duration are complementary, not a double-report', () => {
+        // NOT collapsed, and deliberately. The docblock's rule is "a duration's `minutes` are added
+        // to the running face; `days` roll the day" — so `days: 1` with `minutes: 450` is one day
+        // and seven and a half hours, which from 23:00 is two midnights. Nothing in a fragment
+        // distinguishes that from a model reporting one night twice, and collapsing it would
+        // silently shorten every genuine multi-day span that also states a time of day.
+        expect(advanceSceneClock(night, said({ days: 1, minutes: 450, dateChanged: true })).day).toBe(3);
+    });
+
+    test('the whole MHA chat, replayed: three days, not five', () => {
+        // Day 1 evening -> the mid-47/48 night -> day 2 evening -> the mid-77/79 night -> day 3.
+        let clock = { day: 1, minutes: 23 * 60, raw: '23:00', seen: 0, moved: 0, date: '' };
+        for (const night of [1, 2]) {
+            expect(night).toBeGreaterThan(0);
+            clock = advanceSceneClock(clock, said({ days: 1, clockHour: 6, clockMinute: 30, dateChanged: true }));
+            clock = advanceSceneClock(clock, said({ minutes: 16 * 60 + 30 }));
+        }
+        expect(clock.day).toBe(3);
+    });
+});

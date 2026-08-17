@@ -24,7 +24,7 @@
  */
 
 import { insert_with, merge_b, table_entries } from './lib/hash.js';
-import { commit, loadTable, registerPruner } from './store.js';
+import { PRUNE_DIAGNOSTICS, commit, loadTable, registerPruner } from './store.js';
 
 const LOG_PATH = 'state.log';
 
@@ -96,4 +96,4 @@ registerPruner((overBy) => {
     }
     commit(LOG_PATH, table);
     console.debug(`[fold] diagnostics log pruned to ${kept} entry/entries to fit the metadata budget`);
-});
+}, PRUNE_DIAGNOSTICS);

@@ -115,13 +115,16 @@ body[data-swiping] .fold_steer_bar {
     padding: 0.4em 0.7em 0.7em;
 }
 
-/* Collapsed: a slim vertical rail stuck to the right edge — the old top bar, relocated and repainted. */
+/* Collapsed: a slim rail stuck to the right edge — the old top bar, relocated and repainted.
+   Wide enough to set its labels the way they are read. It was 42px and the text ran top-to-bottom
+   to fit; a rail you have to tilt your head to read is not a glance, which is the only thing the
+   collapsed altitude is for. See `.fold_strip_seg`. */
 #foldTracker:not(.fold_open) {
-    width: 42px !important;
-    min-width: 42px !important;
+    width: 108px !important;
+    min-width: 108px !important;
     min-height: 120px !important;
     max-height: 70vh;
-    padding: 0.6em 0;
+    padding: 0.6em 0.5em;
     cursor: pointer;
 }
 #foldTracker:not(.fold_open) .fold_tracker_body,
@@ -163,9 +166,9 @@ body[data-swiping] .fold_steer_bar {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 0.4em;
+    gap: 0.35em;
     overflow: hidden;
-    font-size: 10px;
+    font-size: 11px;
     line-height: 1.3;
     color: var(--SmartThemeMainColor, #ddd);
 }
@@ -175,18 +178,33 @@ body[data-swiping] .fold_steer_bar {
 .fold_collapsed_body.fold_collapsed_empty {
     display: none;
 }
+/* Segments stack as rows and read left-to-right, like every other label in the panel.
+   They used to be set `writing-mode: vertical-lr` so a long place name could not widen a 42px
+   rail. That bought the width at the cost of the reading: the rail exists so a glance answers
+   "when, where, how much" without opening anything, and rotated text is not glanceable. The rail
+   is wider instead, and the one segment that can run long is clamped rather than turned. */
 .fold_collapsed_body .fold_strip_seg {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
+    display: block;
+    max-width: 100%;
+    text-align: center;
     overflow: hidden;
-    text-overflow: ellipsis;
-    /* Spine labels: text runs top-to-bottom so the rail stays one column no matter how long the
-       place name is. */
-    writing-mode: vertical-lr;
+    overflow-wrap: anywhere;
 }
-.fold_collapsed_body .fold_strip_seg + .fold_strip_seg::before {
-    content: none;
+/* The place is the only free-text segment — a name can be four words long, and unclamped it would
+   push the clock and the balance off the bottom of the rail. Three lines, then an ellipsis. */
+.fold_collapsed_body .fold_strip_place {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    -webkit-box-orient: vertical;
+    opacity: 0.9;
+}
+/* Rows need a seam now that they are rows: stacked horizontal text with no rule between reads as
+   one wrapped paragraph. */
+.fold_collapsed_body .fold_strip_seg + .fold_strip_seg {
+    border-top: 1px solid var(--fold-hair);
+    padding-top: 0.35em;
+    width: 100%;
 }
 .fold_collapsed_body .fold_strip_time,
 .fold_collapsed_body .fold_strip_money,
@@ -219,9 +237,39 @@ body[data-swiping] .fold_steer_bar {
         min-width: 0 !important;
     }
     #foldTracker:not(.fold_open) {
-        width: 34px !important;
+        width: 92px !important;
         min-width: 0 !important;
     }
+}
+
+/* ── dragging ────────────────────────────────────────────────────────────────
+ *
+ * The panel is `position: fixed` with `left: auto !important`, so it is pinned to the right edge
+ * and only its vertical position is the player's to choose. These are the surfaces that move it —
+ * the chevron tab and the grip while expanded, the whole rail while collapsed, so there is a
+ * handle at BOTH altitudes rather than only inside a control bar the rail hides.
+ *
+ * `touch-action: none` is what makes it work on a touchscreen: without it the browser claims the
+ * gesture as a scroll before the first pointermove arrives, and the panel never sees the drag.
+ */
+#foldTracker .fold_toggle,
+#foldTracker .drag-grabber,
+#foldTracker:not(.fold_open) .fold_collapsed_body {
+    touch-action: none;
+}
+/* SillyTavern hides `.drag-grabber` unless Moving UI is switched on, because Moving UI is what
+   would have moved it. Fold's panel moves without it, so the grip is shown regardless — an
+   affordance that is there but invisible is not an affordance. The mobile sheet still hides it with
+   `!important`, which is correct: the tab and the rail are the handles on a touchscreen. */
+#foldTracker .drag-grabber {
+    display: inline;
+    cursor: grab;
+}
+/* While a drag is live the cursor must not flicker back to `pointer` as it crosses a child. */
+#foldTracker.fold_dragging,
+#foldTracker.fold_dragging * {
+    cursor: grabbing !important;
+    user-select: none;
 }
 
 .fold_tracker_body {
@@ -267,6 +315,46 @@ body[data-swiping] .fold_steer_bar {
    assert a stale hour with full confidence, which is how an entire afternoon went missing. */
 .fold_clock.fold_clock_stale .fold_hh { opacity: 0.45; }
 .fold_clock_age { color: var(--fold-warn); opacity: 0.85; }
+
+/* ── The card's own stat line ──
+ *
+ * A label/value grid, not a stack of sections. `auto 1fr` lets the labels form a column that is
+ * exactly as wide as the longest of them, so the values line up without a fixed width that a card
+ * with a longer label would break. Values are set in the mono face for the same reason every other
+ * derived number is: you can see at a glance that the card reported it rather than wrote it. */
+.fold_stats {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.15em 0.7em;
+    align-items: baseline;
+    font-size: calc(var(--mainFontSize) * 0.86);
+    line-height: 1.35;
+    padding: 0.15em 0 0.1em;
+}
+.fold_stat_k {
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 0.86em;
+    opacity: 0.55;
+    white-space: nowrap;
+}
+/* What the card says the character IS, beside their name. Quiet, because it is the one line on the
+   panel that will not change for a hundred turns. */
+.fold_pov_is {
+    opacity: 0.55;
+    font-size: 0.86em;
+}
+.fold_pov_is::before {
+    content: "·";
+    margin: 0 0.4em;
+    opacity: 0.7;
+}
+
+.fold_stat_v {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+}
 
 /* A pinned scene field. The rail is the same two pixels the rest of the panel uses for recency,
    reused here for authorship: gold on the left means "you said this, not the narrator". */
@@ -380,6 +468,17 @@ body[data-swiping] .fold_steer_bar {
     align-items: baseline;
     font-size: calc(var(--mainFontSize) * 0.9);
     line-height: 1.35;
+}
+
+/* ── A row with one child must not land in the 2px rail column ──
+ *
+ * The template above starts with the recency rail, so a row built from a single span put that span
+ * in a 2px box. With `overflow-wrap: anywhere` a 2px box does not overflow, it wraps — once per
+ * CHARACTER. Measured on the "Not parsed" list, which renders exactly one span per entry: the
+ * card's `Threat: Moderate` came out as M/o/d/e/r/a/t/e, one letter per line. Spanning every column
+ * fixes it for any single-child row rather than for that list. */
+.fold_row > :only-child {
+    grid-column: 1 / -1;
 }
 
 .fold_rail {
@@ -886,6 +985,30 @@ body[data-swiping] .fold_steer_bar {
 
 .fold_mark_moderate { border-color: var(--fold-warn); }
 
+/*
+ * What a companion is carrying, on their row. Same strip geometry as the marks above — it answers
+ * the same shape of question about the same person — but unbordered and dimmer, because a wound is
+ * a consequence you have to act on and a satchel is a fact you have to remember.
+ */
+.fold_holds {
+    grid-column: 2 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25em;
+    margin-top: 0.15em;
+}
+
+.fold_holds_item {
+    font-size: calc(var(--mainFontSize) * 0.7);
+    font-family: var(--monoFontFamily);
+    opacity: 0.7;
+}
+
+.fold_holds_item::before {
+    content: '· ';
+    opacity: 0.5;
+}
+
 /* The pov's own marks keep the Condition row's shape; only the severity word is new. */
 li.fold_cond.fold_mark_severe { color: var(--fold-crit); }
 .fold_sev { color: var(--fold-crit); opacity: 0.9; }
@@ -1285,3 +1408,21 @@ li.fold_cond.fold_mark_severe { color: var(--fold-crit); }
 .fold_sec { cursor: pointer; user-select: none; }
 .fold_sec:hover { color: var(--SmartThemeQuoteColor, #d4a753); }
 .fold_sec.fold_collapsed + .fold_list { display: none; }
+
+/* A collapsed section needs to look folded, not empty. Sections now start collapsed by default
+   (property, capability, things left in another place), so "Abilities 6" with nothing under it has
+   to read as "six, folded away" rather than as a heading whose list failed to render. On the header
+   rather than on the count, so a section rendered without one gets the affordance too. */
+.fold_sec::after {
+    content: '';
+    flex: none;
+    margin-left: 0.5em;
+    border: 0.3em solid transparent;
+    border-top-color: currentColor;
+    transform: translateY(0.15em);
+    transition: transform 0.12s ease;
+}
+
+.fold_sec.fold_collapsed::after {
+    transform: rotate(-90deg) translateY(0.15em);
+}

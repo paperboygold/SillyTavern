@@ -129,6 +129,32 @@ const PASSES = [
     },
 ];
 
+/** The trailing window size `buildWindow` used for these passes, per the fixture's header. */
+const WINDOW = 6;
+
+/**
+ * Every mid a pass DISPLAYED — `splitWindow`'s `seen`, both halves.
+ *
+ * `newMids` above is the fresh half only (mid 52's is `[51, 52]`), which is what may anchor an
+ * event. What the already-recorded gate needs is the whole trailing window, because the context
+ * half is exactly where a re-tell comes from. The fixture's mids are the contiguous message
+ * indices of the real chat, so the trailing six ending at the anchor IS the window — and it agrees
+ * with every `newMids` in the fixture that had no mark ahead of it.
+ *
+ * @param {number} mid The pass anchor.
+ * @returns {Set<number>} The mids that pass showed the model.
+ */
+const seenBy = mid => new Set(Array.from({ length: WINDOW }, (_, i) => mid - (WINDOW - 1) + i));
+
+/**
+ * Every mid in the replay, which is how "the model can always see everything" is spelled.
+ *
+ * `visible: null` turns the already-recorded gates OFF, so it cannot express the OLD behaviour —
+ * gates that fired on unbounded history. This can: hand them a sight set with no horizon in it and
+ * they behave exactly as they did before the bound, which is what the control tests measure.
+ */
+const EVERYTHING = new Set(PASSES.flatMap(pass => [...seenBy(pass.mid)]));
+
 /**
  * Replay the recorded proposals through the validator and the fold.
  *
@@ -140,11 +166,13 @@ const PASSES = [
  * @param {object} options Options.
  * @param {boolean} options.split Whether to use the new half as the window (this phase) or the
  *   whole trailing window (before it).
- * @param {boolean} options.pinned Whether the pinned ledger was shown, which arms
- *   `reject:already-recorded`.
+ * @param {boolean} options.pinned Whether the already-recorded machinery ran at all — the pinned
+ *   ledger and the contributor trail it reads. False is "no ledger gate", the control.
+ * @param {boolean} [options.bounded] Whether refusals are bounded to what the pass displayed.
+ *   False replays the behaviour before this bound existed: unbounded history.
  * @returns {{inv: Map, rejected: object[]}} The folded inventory and every refusal.
  */
-function replay({ split, pinned }) {
+function replay({ split, pinned, bounded = true }) {
     const events = [];
     const rejected = [];
     let t = 0;
@@ -166,10 +194,22 @@ function replay({ split, pinned }) {
             // the items it proposes, in any language. The fallback `isMentioned` (exact substring)
             // only runs when no report exists — the block path.
             const mentioned = new Set((proposal.inv ?? []).map(d => d.item));
-            const outcome = validateInventory({ inv: state.inv, deltas: proposal.inv, windowText, shown, mentioned });
+            // Production passes both, so the replay does too. `contributors` is the ledger's own
+            // record of what put each row there; `visible` is the window this pass displayed —
+            // `newMids`, which this fixture has carried since it was written. Without the second
+            // one the already-recorded gate refuses on unbounded history, which is the defect
+            // `state-table.js` `validateInventory` now documents.
+            const outcome = validateInventory({
+                inv: state.inv, deltas: proposal.inv, windowText, shown, mentioned,
+                contributors: pinned ? state.contributors : null,
+                visible: bounded ? seenBy(pass.mid) : EVERYTHING,
+            });
             rejected.push(...outcome.rejected.map(r => ({ ...r, mid: pass.mid })));
             if (outcome.accepted.length) {
-                events.push({ s: proposal.s, kw: [], t: ++t, src: 'llm', d: { inv: outcome.accepted } });
+                // Anchored on the pass's newest message, exactly as `chronicle.applyExtraction`
+                // stamps it. The mid is what `deriveState` puts on the contributor trail, and the
+                // trail is what the next pass's `visible` set is checked against.
+                events.push({ s: proposal.s, kw: [], t: ++t, src: 'llm', mid: pass.mid, d: { inv: outcome.accepted } });
             }
         }
     }
@@ -240,15 +280,46 @@ describe('replaying the real proposals — each beat once', () => {
         expect(qty(inv, 'wrapped candy')).toBe(2);
     });
 
-    test('the knife is one knife', () => {
-        expect(qty(inv, 'rusty hunter\'s knife with sheath')).toBe(1);
+    test('the two knives are two knives — the fixture\'s flagship duplicate is not one', () => {
+        // CORRECTED. The header above called this "the goblin knife recorded twice (22 and 38)".
+        // Read back against the live chat, they are two beats sixteen messages apart:
+        //
+        //   mid 18: "It's reaching weakly for the knife in its belt — the rusted hunter's knife,
+        //            the trophy… the knife comes free with a tug."
+        //   mid 34: "Solomon's hands find whatever the dead goblins left behind — a jagged knife
+        //            with a broken tip, a hand-axe chipped along the blade, a crude spear…"
+        //            followed by "The first knife misses entirely, clanging off the limestone wall."
+        //
+        // One trophy taken off its owner; one armful of junk picked up to throw. The model gave
+        // both the same name, which is a naming error the `[same?]` review exists for — not a
+        // double bill. The gate was suppressing a real second acquisition on sixteen messages of
+        // unbounded history, and citing it as the reason the gate had to be unbounded.
+        expect(qty(inv, 'rusty hunter\'s knife with sheath')).toBe(2);
     });
 
-    test('the weapons bought once are held once', () => {
-        expect(qty(inv, 'darkwood staff')).toBe(1);
-        expect(qty(inv, 'shortsword')).toBe(1);
+    test('one purchase billed three times is now billed twice, and the residual is the premature bill', () => {
+        // REGRESSION, measured and stated rather than hidden. One transaction, three passes:
+        //
+        //   mid 60 — "The dungeon pull staff of darkwood was a no-brainer. As for the shorter
+        //             blade, I try out all three…"                          (selecting)
+        //   mid 66 — "…put the darkwood staff and the shortsword aside for purchase, returning
+        //             the rest."                                            (buying)
+        //   mid 68 — "He wraps the shortsword in oiled cloth and bundles everything together."
+        //
+        // 68 re-tells 66 at distance 2 and is refused. 66 is distance 6 from 60 — one message past
+        // a six-message window — so the two passes share no displayed text and no visibility rule
+        // can link them. The link is semantic, which under RULE 1 is the model's to answer.
+        //
+        // The honest reading is that mid 60 should never have been an acquisition at all: nothing
+        // was bought, a staff was picked up and weighed. The gate was masking a premature bill by
+        // refusing the correct one, and that masking cost twelve real acquisitions across the
+        // corpus. This count is wrong by one and wrong for a reason the ledger can now show.
+        expect(qty(inv, 'darkwood staff')).toBe(2);
+        expect(qty(inv, 'shortsword')).toBe(2);
+        // Items proposed only at 66 and 68 are unaffected: distance 2, refused as before.
         expect(qty(inv, 'reinforced bracers and greaves')).toBe(1);
         expect(qty(inv, 'trauma kit with extra coagulant')).toBe(1);
+        expect(qty(inv, 'gloves')).toBe(1);
     });
 
     test('both mechanisms carry weight, and the counters say which did what', () => {
@@ -265,21 +336,23 @@ describe('replaying the real proposals — each beat once', () => {
         expect(reasons.get('not-an-item')).toBeUndefined();
     });
 
-    test('the false positive is real and is the price, stated rather than hidden', () => {
-        // Solomon's mana-shackle bracers are destroyed at mid 38 ("the hobgoblin's cleaver destroys
-        // Solomon's bracer") and he buys new ones at 66. The destruction was never recorded as a
-        // delta, so the ledger still shows one pair — and the purchase is refused as a re-report.
-        // This is the "buy a second knife" cost named in `validateInventory`'s docblock, occurring
-        // in the real data. It is still an improvement on the alternative, which counted three.
-        expect(qty(inv, 'mana-shackle bracers')).toBe(1);
-        // Both re-bills (mids 66 and 68) are now refused by the ledger gate: coverage by report
-        // admits the model's re-mention, and the held row is shown, so `already-recorded` catches
-        // each one. The old mention gate let the second slip on a substring miss.
-        expect(rejected.filter(r => r.item === 'mana-shackle bracers' && r.reason === 'already-recorded')).toHaveLength(2);
+    test('the named false positive is gone, and what is left is an unrecorded loss', () => {
+        // WAS: "the false positive is real and is the price, stated rather than hidden", asserting
+        // one pair of bracers. Solomon's mana-shackle bracers are destroyed at mid 38 ("the
+        // hobgoblin's cleaver destroys Solomon's bracer") and he buys new ones at 66 — fifty-two
+        // messages later, nothing about the first pair in sight. Refusing that purchase was the
+        // "buy a second knife" cost the docblock named, and it is no longer paid.
+        //
+        // Two pairs is what the ledger honestly holds: two acquisitions recorded, one destruction
+        // never recorded. The remaining error is the missing loss, which is visible as a missing
+        // delta rather than hidden inside a refusal that made the count look right.
+        expect(qty(inv, 'mana-shackle bracers')).toBe(2);
+        // Only the mid-68 re-tell is refused now — distance 2 from the mid-66 purchase.
+        expect(rejected.filter(r => r.item === 'mana-shackle bracers' && r.reason === 'already-recorded')).toHaveLength(1);
     });
 });
 
-describe('what each half of the fix is worth on its own', () => {
+describe('what each part of the fix is worth on its own', () => {
     test('the window split alone still double-bills whatever the new half re-narrates', () => {
         const { inv } = replay({ split: true, pinned: false });
         // The old substring mention gate used to refuse the phone and candy re-reports whose window
@@ -295,11 +368,29 @@ describe('what each half of the fix is worth on its own', () => {
     });
 
     test('the ledger gate alone still double-bills across an unshown line', () => {
-        const { inv } = replay({ split: false, pinned: true });
+        const { inv } = replay({ split: false, pinned: true, bounded: false });
         // Every one of these is caught, because the item was held and shown when re-proposed —
         // which is what makes the gate the load-bearing half and the split the cheap half.
         expect(qty(inv, 'kang\'s phone number')).toBe(1);
         expect(qty(inv, 'wrapped candy')).toBe(2);
         expect(qty(inv, 'rusty hunter\'s knife with sheath')).toBe(1);
+    });
+
+    test('the bound: what it buys and what it costs, in one comparison', () => {
+        const before = replay({ split: true, pinned: true, bounded: false }).inv;
+        const after = replay({ split: true, pinned: true, bounded: true }).inv;
+
+        // Unchanged — every real re-tell in this chat is within four messages, so bounding the
+        // refusal to the window it was displayed in does not release one of them.
+        for (const [name, place] of [['kang\'s phone number'], ['jin-woo\'s phone number'], ['wrapped candy']]) {
+            expect(qty(after, name, place)).toBe(qty(before, name, place));
+        }
+
+        // Released — three acquisitions the unbounded trail refused on evidence sixteen, six and
+        // fifty-two messages out of sight. Two of the three are genuinely two things (the knives,
+        // the bracers); one is the premature staff bill documented above.
+        expect([qty(before, 'rusty hunter\'s knife with sheath'), qty(after, 'rusty hunter\'s knife with sheath')]).toEqual([1, 2]);
+        expect([qty(before, 'mana-shackle bracers'), qty(after, 'mana-shackle bracers')]).toEqual([1, 2]);
+        expect([qty(before, 'darkwood staff'), qty(after, 'darkwood staff')]).toEqual([1, 2]);
     });
 });

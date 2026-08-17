@@ -7,7 +7,7 @@
  * of what steering is for.
  */
 
-import { chat, is_send_press } from '../../../script.js';
+import { chat, chat_metadata, getCurrentChatId, is_send_press, saveMetadata } from '../../../script.js';
 import { extension_settings } from '../../extensions.js';
 import { is_group_generating } from '../../group-chats.js';
 import { t } from '../../i18n.js';
@@ -15,11 +15,13 @@ import { SlashCommand } from '../../slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from '../../slash-commands/SlashCommandArgument.js';
 import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
 import { isTrueBoolean, waitUntilCondition } from '../../utils.js';
+import { METADATA_KEY, createNewWorldInfo, createWorldInfoEntry, loadWorldInfo, saveWorldInfo, world_names } from '../../world-info.js';
 import * as chronicle from './chronicle.js';
 import * as clocks from './clocks.js';
 import * as plot from './plot.js';
 import * as verdict from './verdict.js';
 import * as entities from './entities.js';
+import { PERSON, resolveEntity } from './entity-table.js';
 import * as observe from './observe.js';
 import * as state from './state.js';
 import * as trace from './trace.js';
@@ -136,6 +138,37 @@ export function registerFoldSlashCommands() {
         </div>
         <div>
             ${t`A card's status block reports what you have, not where it is, so it will not undo this — a restated total lands wherever the item already is.`}
+        </div>
+    `,
+    }));
+
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'fold-lore',
+        callback: loreCallback,
+        returns: 'the lorebook the entry was written to',
+        unnamedArgumentList: [
+            SlashCommandArgument.fromProps({
+                description: t`the name of someone fold is tracking`,
+                typeList: [ARGUMENT_TYPE.STRING],
+                isRequired: true,
+            }),
+        ],
+        helpString: `
+        <div>
+            ${t`Writes a tracked character into the chat's lorebook, so the narrator keeps them straight after they leave the scene.`}
+        </div>
+        <div>
+            ${t`The entry is keyed on every name the story has called them, and its body is what fold already holds — appearance and standing facts, what they want, what they know about you, how to reach them. Run it again to update.`}
+        </div>
+        <div>
+            <strong>${t`Example:`}</strong>
+            <ul>
+                <li><pre><code class="language-stscript">/fold-lore Takeda</code></pre></li>
+                <li><pre><code class="language-stscript">/fold-lore the shaved-head boy</code></pre> ${t`any name they answer to works`}</li>
+            </ul>
+        </div>
+        <div>
+            ${t`fold's cast table holds who is HERE and ages people out as they leave; a lorebook entry holds who EXISTS and costs nothing until somebody says their name.`}
         </div>
     `,
     }));
@@ -398,6 +431,96 @@ export function registerFoldSlashCommands() {
         </div>
     `,
     }));
+}
+
+/**
+ * Promote a cast member into a World Info entry.
+ *
+ * ── Why a lorebook entry and not another fold field ──
+ *
+ * fold's cast table answers "who is in this scene, and what do they want from you right now". It is
+ * deliberately bounded and it ages: people who leave are demoted to the cold store so the injected
+ * block stays a glance rather than a directory. That is the right behaviour for a scene tracker and
+ * the wrong behaviour for a character who walks out and comes back two hundred messages later — by
+ * then the narrator has nothing, and re-invents them.
+ *
+ * A World Info entry is exactly the missing half: keyed on their names, it costs nothing until
+ * somebody says one, and it outlives the chat. So the two surfaces split by lifetime — fold holds
+ * who is HERE, the lorebook holds who EXISTS.
+ *
+ * Written on request rather than automatically. These are the player's own world files, and an
+ * extension that silently edits them is an extension nobody can trust with them.
+ *
+ * @param {object} _args Named arguments.
+ * @param {string} value The character's name.
+ * @returns {Promise<string>} What happened.
+ */
+async function loreCallback(_args, value) {
+    const said = String(value ?? '').trim();
+    if (!said) {
+        toastr.warning(t`/fold-lore needs a name — /fold-lore Takeda`);
+        return '';
+    }
+
+    const found = resolveEntity(entities.load(), PERSON, said);
+    if (!found) {
+        toastr.warning(t`fold has no cast row for "${said}".`);
+        return '';
+    }
+    const row = found.entity ?? {};
+
+    // The chat's own lorebook, or a new one named after it. Never an existing world the player
+    // curates for something else.
+    let book = chat_metadata[METADATA_KEY];
+    if (!book || !world_names.includes(book)) {
+        book = `fold — ${getCurrentChatId() ?? 'campaign'}`.replace(/[^\w \-—]/g, '_').slice(0, 64);
+        if (!world_names.includes(book)) {
+            await createNewWorldInfo(book);
+        }
+        chat_metadata[METADATA_KEY] = book;
+        await saveMetadata();
+    }
+
+    const data = await loadWorldInfo(book);
+    if (!data) {
+        toastr.error(t`Could not open the lorebook "${book}".`);
+        return '';
+    }
+
+    // Their names ARE the trigger. `aka` is the alias set fold already maintains for exactly this
+    // question — every form the story has called them — so the entry fires on "the shaved-head boy"
+    // as well as on "Takeda".
+    const keys = [row.name, ...String(row.aka ?? '').split(',')]
+        .map(part => String(part).trim())
+        .filter(Boolean);
+
+    // Standing truths first, then the social state, because that is the order the panel and the
+    // injected block both use: what they are, then what they want from you.
+    const body = [
+        row.facts,
+        row.wants ? `Wants: ${row.wants}` : '',
+        row.knows ? `Knows about you: ${row.knows}` : '',
+        row.reach ? `Reachable: ${row.reach}` : '',
+    ].filter(Boolean).join('. ');
+
+    // Update the entry fold wrote before rather than stacking duplicates of one person.
+    const existing = Object.values(data.entries ?? {})
+        .find(entry => entry?.comment === `fold: ${row.name}`);
+    const entry = existing ?? createWorldInfoEntry(book, data);
+    if (!entry) {
+        toastr.error(t`Could not create an entry in "${book}".`);
+        return '';
+    }
+    Object.assign(entry, {
+        key: keys,
+        content: body || row.name,
+        comment: `fold: ${row.name}`,
+        disable: false,
+    });
+
+    await saveWorldInfo(book, data, true);
+    toastr.success(t`${existing ? 'Updated' : 'Added'} "${row.name}" in ${book}.`);
+    return book;
 }
 
 function plotCallback(_args, text) {

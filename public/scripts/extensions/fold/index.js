@@ -36,12 +36,15 @@ import * as clocks from './clocks.js';
 import * as observe from './observe.js';
 import * as review from './review.js';
 import { reviewInstruction, reviewSchema } from './review-table.js';
-import { MIN_INTERVAL, looksLikeAttempt, nextInterval, shouldExtract } from './trigger-table.js';
+import { MIN_INTERVAL, TIME_SKIPPED, looksLikeAttempt, nextInterval, shouldExtract } from './trigger-table.js';
 import * as verdict from './verdict.js';
 import * as world from './world.js';
 import * as plot from './plot.js';
+import * as bilingual from './bilingual.js';
+import { DEFAULT_LANGUAGE } from './bilingual.js';
 import * as trace from './trace.js';
 import * as panel from './panel.js';
+import * as ledger from './ledger.js';
 import { initPanel } from './panel.js';
 import { absorbStateBlock } from './absorb.js';
 import { registerProbe, runExtraction } from './extract.js';
@@ -61,6 +64,12 @@ const RECALL_INJECT_KEY = '5_fold_recall';
  * The per-message steer is forgotten the moment a reply lands; this is the direction that is not.
  */
 const PLOT_INJECT_KEY = '4_fold_plot';
+
+/**
+ * The language-learning directive. Sorted BEFORE the plot guide so a narrator reads how to write
+ * before it reads what to write — the format contract governs every later block's prose.
+ */
+const LANG_INJECT_KEY = '3_fold_language';
 
 /**
  * How deep the story direction is injected. Depth 0: read immediately before generation, AFTER the
@@ -109,6 +118,22 @@ const defaultSettings = Object.freeze({
     enabled: true,
     /** Whether the tracker panel is on screen. */
     panel: false,
+    /**
+     * Where the player dragged the panel to, in px from the top of the viewport.
+     *
+     * null means "wherever the stylesheet puts it". Kept here rather than in
+     * `power_user.movingUIState` because fold moves the panel itself — see `panel.js` `wireDrag`
+     * for why Moving UI could not — and this way the position holds whether or not Moving UI is on.
+     */
+    panel_top: null,
+    /**
+     * Dialogue in a language you are learning, with English underneath. See `bilingual.js` for
+     * why the narration deliberately stays English and why names do not.
+     */
+    bilingual: Object.freeze({
+        enabled: false,
+        language: '',
+    }),
     steer: Object.freeze({
         enabled: true,
         template: DEFAULT_STEER_TEMPLATE,
@@ -231,7 +256,7 @@ function loadSettings() {
         extension_settings[MODULE_NAME] = {};
     }
     const settings = extension_settings[MODULE_NAME];
-    for (const key of ['enabled', 'panel']) {
+    for (const key of ['enabled', 'panel', 'panel_top']) {
         if (settings[key] === undefined) {
             settings[key] = defaultSettings[key];
         }
@@ -268,7 +293,7 @@ function loadSettings() {
         settings.chronicle.response_length = MIN_RESPONSE_LENGTH;
     }
 
-    for (const section of ['steer', 'chronicle', 'state']) {
+    for (const section of ['steer', 'chronicle', 'state', 'bilingual']) {
         if (!settings[section] || typeof settings[section] !== 'object') {
             settings[section] = {};
         }
@@ -408,6 +433,16 @@ export async function interceptGeneration(messages, contextSize, abort, type) {
     setExtensionPrompt(STATE_INJECT_KEY, '', extension_prompt_types.IN_CHAT, settings.state.depth, false, extension_prompt_roles.SYSTEM);
     pendingPlan = null;
     creditedThisGeneration = new Set();
+
+    // ── The language mode, injected before everything it governs ──
+    //
+    // A format contract for the narrator's prose, so it rides ahead of the plot guide and the state
+    // block. Empty and therefore free when the toggle is off.
+    try {
+        setExtensionPrompt(LANG_INJECT_KEY, bilingual.render(), extension_prompt_types.IN_CHAT, PLOT_DEPTH, false, extension_prompt_roles.SYSTEM);
+    } catch (error) {
+        console.error('[fold] language mode injection failed', error);
+    }
 
     // ── The story direction, injected before recall and state ──
     //
@@ -593,9 +628,23 @@ async function onAssistantMessage({ force = false } = {}) {
             text: lastExchange(),
             block: state.turnsSinceBlock() === 0,
         });
+    // ── A reported time skip arms this pass, whatever cadence brought it here ──
+    //
+    // Read-and-cleared regardless of whether the pass runs, and that is deliberate: the flag means
+    // "the last look saw time move", which stops being true the moment anything else looks. Leaving
+    // it set through a declined pass would arm a later, unrelated one and attribute a world move to
+    // a turn that skipped nothing.
+    //
+    // It escalates `why` rather than forcing `run`, because a skip is not a reason to breach the
+    // cadence — `shouldExtract` already decides THAT. This decides what the pass is FOR.
+    const skipped = isStateEnabled() ? state.takeTimeSkip() : false;
     if (!decision.run) {
         observe.note('extract:waiting');
         return;
+    }
+    if (skipped) {
+        decision.why = TIME_SKIPPED;
+        observe.note('extract:armed-by-elapsed');
     }
     observe.note(`extract:on-${decision.why.replace(/\s+/g, '-')}`);
     // Stamped before the call, not after. The pass is async and takes seconds; without this, every
@@ -669,6 +718,14 @@ async function renderSettingsUi() {
     bindCheckbox('#fold_steer_remember', () => settings.steer.remember_last, v => { settings.steer.remember_last = v; });
     bindCheckbox('#fold_steer_badge', () => settings.steer.show_badge, v => { settings.steer.show_badge = v; });
     bindCheckbox('#fold_chronicle_enabled', () => settings.chronicle.enabled, v => { settings.chronicle.enabled = v; });
+    bindCheckbox('#fold_bilingual', () => settings.bilingual.enabled, v => { settings.bilingual.enabled = v; });
+    $('#fold_bilingual_language')
+        .attr('placeholder', DEFAULT_LANGUAGE)
+        .val(settings.bilingual.language)
+        .on('input', function () {
+            settings.bilingual.language = String($(this).val() ?? '').trim();
+            saveSettingsDebounced();
+        });
 
     // The Connection Manager owns profiles, and throws rather than returning when it is disabled.
     try {
@@ -886,9 +943,25 @@ export async function init() {
             $('#fold_panel').prop('checked', true);
             saveSettingsDebounced();
         },
+        // Where it sits is a decision too, and one made far more often than opening it.
+        top: foldSettings().panel_top,
+        onMove: (offset) => {
+            foldSettings().panel_top = offset;
+            saveSettingsDebounced();
+        },
     });
     panel.setVisible(!!foldSettings().panel);
     panel.setStripVisible(isStateEnabled() || !!foldSettings().panel);
+
+    // Deltas are carried into the state baseline before their events are demoted, because
+    // `demoteEvents` drops `d` and state is a fold over what remains. Registered unconditionally:
+    // the hook reads whether state tracking is on for itself, and a chat that had it on yesterday
+    // still needs yesterday's balances carried when it prunes today.
+    chronicle.onEviction((evicted, before) => {
+        if (isStateEnabled()) {
+            state.carryForward(evicted, before);
+        }
+    });
 
     // One probe, not two. State is a fold over the chronicle's own events, so the delta rides on
     // the event that caused it rather than arriving as a parallel structure to be reconciled.
@@ -989,6 +1062,13 @@ export async function init() {
             // Same injection, same reason: clearing a mark appends an `st` event through
             // `state.js`, which this module cannot import.
             onClearMark: isStateEnabled() ? state.clearMark : null,
+            // And again: a currency name the model volunteered has to be matched against the rows
+            // the ledger actually holds, or it is filed under a key nothing will ever look up.
+            ledgerKeys: state.ledgerKeys,
+            // And once more: what each card-invented status field IS, stored in `state.js` so the
+            // panel can route it. See `review-table.js` `SHEET_KINDS` for why the model answers this
+            // rather than fold deciding it from the label.
+            onClassify: isStateEnabled() ? state.classifySheet : null,
         }),
     });
 
@@ -1013,6 +1093,9 @@ export async function init() {
         schemaKey: 'world',
         schema: () => world.schema(),
         instruction: () => world.instruction(),
+        // The numbered agenda lines. Per-pass, so they ride `context()` below the prefix-cache
+        // breakpoint rather than churning the static instruction block every turn.
+        context: () => world.context(),
         apply: (fragment, context) => {
             const outcome = world.applyExtraction(fragment, context);
             state.noteRejections(outcome.rejected);
@@ -1041,6 +1124,27 @@ export async function init() {
         // it follows the chat instead of being cleared by the act of opening one.
         chronicle.invalidateIndex();
         recall.clearActivatedWorldInfo();
+
+        // ── The ledger is per-campaign, so it must be dropped BEFORE the new chat can read it ──
+        //
+        // `reset` is synchronous and `hydrate` is not, which is the ordering that matters: between
+        // them, `loadEvents` falls back to `chat_metadata` for the chat now loaded. Leaving the old
+        // tables in place instead would serve the PREVIOUS campaign's events to this chat for the
+        // length of a round trip — every read in that window wrong, and wrong in the most confusing
+        // possible way. Hydration is idempotent per campaign, so a CHAT_CHANGED that fires twice
+        // costs one fetch.
+        ledger.reset();
+        void ledger.hydrate().then((ok) => {
+            if (!ok) {
+                return;
+            }
+            // A chat played before the ledger existed keeps its events in `chat_metadata`; carry
+            // them over on the first hydrate or the swap to ledger-backed reads shows an empty
+            // chronicle. No-op for a campaign that already has history.
+            chronicle.seedLedger();
+            chronicle.invalidateIndex();
+            panel.render();
+        });
     });
 
     // ── `acknowledged` (pending) stuck on an idle chat is a READ gap, not a hang ──

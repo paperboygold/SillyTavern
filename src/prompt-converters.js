@@ -1443,3 +1443,68 @@ export function addOpenRouterSignatures(messages, model) {
         }
     }
 }
+
+/**
+ * Rewrite a JSON schema into the dialect Google's `response_schema` accepts.
+ *
+ * ── An empty string is a legal enum member everywhere except here ──
+ *
+ * A structured-output schema is written once and sent to whichever backend the user picked. The
+ * shape below is common and, until now, silently fatal on Google:
+ *
+ *     phase: { type: 'string', enum: ['', 'morning', 'afternoon', 'evening', 'night'] }
+ *
+ * The empty member is how a schema says "this field may have no answer". It has to be expressed
+ * that way rather than by omitting the property, because OpenAI's strict structured output requires
+ * every property to appear in `required` — so there is no such thing as an optional field, and
+ * "unset" must be a VALUE.
+ *
+ * Google rejects it outright:
+ *
+ *     400 INVALID_ARGUMENT
+ *     * GenerateContentRequest.generation_config.response_schema.properties[scene]
+ *       .properties[phase].enum[0]: cannot be empty
+ *
+ * The whole request fails, so it is not a degraded answer — it is no answer. MEASURED against this
+ * install: every extraction pass the fold extension made to Google AI Studio failed this way, four
+ * enums at a time, and the failure reaches the caller as an opaque 500 that reads like the model
+ * refusing to answer.
+ *
+ * The conversion preserves the meaning rather than dropping the member: an enum of "one of these,
+ * or nothing" becomes an enum of "one of these" that is `nullable`. A model with nothing to say
+ * returns null, and a reader doing `value ?? ''` — which is what code written against the empty
+ * member already does — cannot tell the difference. Dropping the member alone would be worse than
+ * the error, because it would force the model to assert a phase, a disposition or a verdict it does
+ * not have.
+ *
+ * @param {any} schema A JSON schema, or any node inside one.
+ * @returns {any} A copy in Google's dialect. The input is never mutated.
+ */
+export function toGeminiSchema(schema) {
+    if (Array.isArray(schema)) {
+        return schema.map(toGeminiSchema);
+    }
+    if (!schema || typeof schema !== 'object') {
+        return schema;
+    }
+
+    const next = {};
+    for (const [key, value] of Object.entries(schema)) {
+        next[key] = key === 'enum' ? value : toGeminiSchema(value);
+    }
+
+    if (Array.isArray(next.enum)) {
+        const named = next.enum.filter(member => String(member ?? '').length > 0);
+        if (named.length !== next.enum.length) {
+            // Nothing to choose from once the blanks are gone: it was only ever a free string.
+            if (named.length) {
+                next.enum = named;
+            } else {
+                delete next.enum;
+            }
+            next.nullable = true;
+        }
+    }
+
+    return next;
+}
