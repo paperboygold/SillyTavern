@@ -53,9 +53,9 @@ async function steerCallback(args, instruction) {
 }
 
 /**
- * Register fold's slash commands. Called once from init().
+ * Register sanguine's slash commands. Called once from init().
  */
-export function registerFoldSlashCommands() {
+export function registerSanguineSlashCommands() {
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'steer',
         callback: steerCallback,
@@ -101,3 +101,5 @@ export function registerFoldSlashCommands() {
     `,
     }));
 }
+
+export const registerFoldSlashCommands = registerSanguineSlashCommands;

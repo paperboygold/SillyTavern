@@ -1,4 +1,4 @@
-import { describe, expect, test } from '@jest/globals';
+import { describe, expect, test } from './test-harness.js';
 
 import {
     applyEvents,
@@ -13,7 +13,7 @@ import {
     renderEvents,
     selectEvictions,
     tokenize,
-} from '../public/scripts/extensions/fold/chronicle-table.js';
+} from '../public/scripts/extensions/sanguine/chronicle-table.js';
 
 /**
  * Build an event table from [key, summary, keywords] triples.

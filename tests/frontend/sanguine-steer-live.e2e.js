@@ -12,7 +12,7 @@ import {
     steerLastMessage,
     useExtractionProfile,
     useLiveBackend,
-} from './fold-test-utils.js';
+} from './sanguine-test-utils.js';
 
 /**
  * Directed retry against REAL models. Opt-in, because it costs money and needs network.

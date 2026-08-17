@@ -1,4 +1,4 @@
-import { describe, expect, test } from '@jest/globals';
+import { describe, expect, test } from './test-harness.js';
 
 import {
     buildSteerTable,
@@ -9,7 +9,7 @@ import {
     STEER_FLOOR,
     steerForMessage,
     steerForSwipe,
-} from '../public/scripts/extensions/fold/steer-table.js';
+} from '../public/scripts/extensions/sanguine/steer-table.js';
 
 /**
  * Build a synthetic chat message. `steers` is one entry per swipe: a string means that swipe was

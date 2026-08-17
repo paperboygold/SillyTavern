@@ -16,7 +16,7 @@
 import { insert_with, lookup, merge_graph, fold } from './lib/hash.js';
 
 /** How a given swipe came to exist. */
-export const FOLD_STEER_DIRECTION = Object.freeze({
+export const SANGUINE_STEER_DIRECTION = Object.freeze({
     /** Generated under an explicit user instruction. */
     STEER: 'steer',
     /** A plain swipe — the floor, never written to disk. */
@@ -24,25 +24,27 @@ export const FOLD_STEER_DIRECTION = Object.freeze({
     /** Reserved for OVERSWIPE_BEHAVIOR.EDIT_GENERATE. */
     EDIT: 'edit',
 });
+export const FOLD_STEER_DIRECTION = SANGUINE_STEER_DIRECTION;
 
 /**
  * The absent-value floor for the Map-face read. Un-steered swipes cost zero bytes
  * on disk precisely because this is materialised on read instead of being stored.
- * @type {Readonly<FoldSteer>}
+ * @type {Readonly<SanguineSteer>}
  */
 export const STEER_FLOOR = Object.freeze({
     text: '',
-    direction: FOLD_STEER_DIRECTION.RETRY,
+    direction: SANGUINE_STEER_DIRECTION.RETRY,
 });
 
 /**
- * @typedef {object} FoldSteer
+ * @typedef {object} SanguineSteer
  * @property {string} text The raw user instruction, verbatim.
  * @property {'steer'|'retry'|'edit'} direction How this swipe was produced.
  * @property {number} [at] Epoch ms at which the instruction was issued.
  * @property {string} [template] The steering template in effect at the time.
  * @property {string} [source] Which surface issued it: 'ui' | 'slash' | 'swipe_cmd'.
  */
+/** @typedef {SanguineSteer} FoldSteer */
 
 /**
  * Build the Graph face over a chat: message id -> ordered steer records, one per swipe.
@@ -51,7 +53,7 @@ export const STEER_FLOOR = Object.freeze({
  * via `lookup`, so callers never branch on existence).
  *
  * @param {object[]} chat The chat array.
- * @returns {Map<number, FoldSteer[]>} mesId -> steer record per swipe, in swipe order.
+ * @returns {Map<number, SanguineSteer[]>} mesId -> steer record per swipe, in swipe order.
  */
 export function buildSteerTable(chat) {
     return fold(chat, new Map(), (table, message, mesId) => {
@@ -59,7 +61,7 @@ export function buildSteerTable(chat) {
             return table;
         }
         return fold(message.swipe_info, table, (acc, info) =>
-            insert_with(acc, merge_graph, mesId, [normalizeSteer(info?.extra?.fold_steer)]));
+            insert_with(acc, merge_graph, mesId, [normalizeSteer(info?.extra?.sanguine_steer ?? info?.extra?.fold_steer)]));
     });
 }
 

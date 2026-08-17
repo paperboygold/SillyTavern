@@ -1,10 +1,11 @@
 /**
- * fold/store.js — the only module that touches `chat_metadata`.
+ * sanguine/store.js — the only module that touches `chat_metadata`.
  *
- * Everything fold persists lives under `chat_metadata.fold`, which rides inside the chat's own
- * JSONL file. That file is rewritten wholesale on every save, so size discipline is not optional:
+ * Everything sanguine persists lives under `chat_metadata.sanguine` (with backwards compatibility
+ * for `chat_metadata.fold`), which rides inside the chat's own JSONL file. That file is rewritten
+ * wholesale on every save, so size discipline is not optional:
  * `enforceBudget()` runs after every commit and hands control to registered pruners once the blob
- * crosses MAX_FOLD_BYTES.
+ * crosses MAX_SANGUINE_BYTES.
  *
  * Tables are `Map`s in memory and plain objects on disk. This module is the only place that
  * conversion happens, so no other module has to think about it.
@@ -14,17 +15,20 @@ import { chat_metadata } from '../../../script.js';
 import { saveMetadataDebounced } from '../../extensions.js';
 import { table_entries } from './lib/hash.js';
 
-export const FOLD_METADATA_KEY = 'fold';
-export const FOLD_SCHEMA_VERSION = 1;
+export const SANGUINE_METADATA_KEY = 'sanguine';
+export const FOLD_METADATA_KEY = SANGUINE_METADATA_KEY;
+export const SANGUINE_SCHEMA_VERSION = 1;
+export const FOLD_SCHEMA_VERSION = SANGUINE_SCHEMA_VERSION;
 
-/** Hard ceiling on the serialized fold blob. Past this, pruners run until it fits. */
-export const MAX_FOLD_BYTES = 128 * 1024;
+/** Hard ceiling on the serialized sanguine blob. Past this, pruners run until it fits. */
+export const MAX_SANGUINE_BYTES = 128 * 1024;
+export const MAX_FOLD_BYTES = MAX_SANGUINE_BYTES;
 
 /** @type {Array<(overBy: number) => void>} */
 const pruners = [];
 
 /**
- * Register a pruner, called when the fold blob exceeds its budget. Pruners should remove the
+ * Register a pruner, called when the sanguine blob exceeds its budget. Pruners should remove the
  * least valuable entries they own and commit the result.
  * @param {(overBy: number) => void} pruner Called with how many bytes over budget we are.
  */
@@ -33,29 +37,34 @@ export function registerPruner(pruner) {
 }
 
 /**
- * The fold blob for the current chat, created on first use.
- * @returns {object} The mutable fold blob.
+ * The sanguine blob for the current chat, created on first use.
+ * @returns {object} The mutable sanguine blob.
  */
-export function getFold() {
-    if (!chat_metadata[FOLD_METADATA_KEY] || typeof chat_metadata[FOLD_METADATA_KEY] !== 'object') {
-        chat_metadata[FOLD_METADATA_KEY] = { v: FOLD_SCHEMA_VERSION };
+export function getSanguine() {
+    if (!chat_metadata[SANGUINE_METADATA_KEY] || typeof chat_metadata[SANGUINE_METADATA_KEY] !== 'object') {
+        if (chat_metadata.fold && typeof chat_metadata.fold === 'object') {
+            chat_metadata[SANGUINE_METADATA_KEY] = chat_metadata.fold;
+        } else {
+            chat_metadata[SANGUINE_METADATA_KEY] = { v: SANGUINE_SCHEMA_VERSION };
+        }
     }
-    const fold = chat_metadata[FOLD_METADATA_KEY];
-    if (fold.v !== FOLD_SCHEMA_VERSION) {
-        fold.v = FOLD_SCHEMA_VERSION;
+    const sanguine = chat_metadata[SANGUINE_METADATA_KEY];
+    if (sanguine.v !== SANGUINE_SCHEMA_VERSION) {
+        sanguine.v = SANGUINE_SCHEMA_VERSION;
     }
-    return fold;
+    return sanguine;
 }
+export const getFold = getSanguine;
 
 /**
- * Resolve a dotted path inside the fold blob, creating intermediate objects.
+ * Resolve a dotted path inside the sanguine blob, creating intermediate objects.
  * @param {string} path Dotted path, e.g. 'chronicle.events'.
  * @param {boolean} create Whether to create missing containers.
  * @returns {{parent: object, key: string}|null} The owning object and final key.
  */
 function resolve(path, create) {
     const parts = String(path).split('.');
-    let node = getFold();
+    let node = getSanguine();
     for (let i = 0; i < parts.length - 1; i++) {
         const part = parts[i];
         if (!node[part] || typeof node[part] !== 'object') {

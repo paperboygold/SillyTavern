@@ -1,9 +1,8 @@
 {
-    "display_name": "Fold",
-    "loading_order": 200,
+    "display_name": "Sanguine Gloss",
+    "loading_order": 210,
     "requires": [],
     "optional": [],
-    "generate_interceptor": "fold_interceptGeneration",
     "js": "index.js",
     "css": "style.css",
     "author": "socol",

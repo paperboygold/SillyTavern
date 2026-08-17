@@ -80,6 +80,8 @@ module.exports = {
         'public/scripts/extensions/quick-reply/lib/**',
         'public/scripts/extensions/tts/lib/**',
         // Vendored verbatim from the Sanguine proof corpus — do not lint or reformat.
+        'public/scripts/extensions/sanguine/lib/**',
+        'public/scripts/extensions/sanguine-gloss/lib/**',
         'public/scripts/extensions/fold/lib/**',
     ],
     rules: {

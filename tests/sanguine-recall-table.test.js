@@ -1,4 +1,4 @@
-import { describe, expect, test } from '@jest/globals';
+import { describe, expect, test } from './test-harness.js';
 
 import {
     fuse,
@@ -8,7 +8,7 @@ import {
     renderEvidence,
     RRF_K,
     selectEvidence,
-} from '../public/scripts/extensions/fold/recall-table.js';
+} from '../public/scripts/extensions/sanguine/recall-table.js';
 
 /** Cost one token per word, so budgets in tests are readable. */
 const wordCost = (_key, text) => String(text).split(/\s+/).filter(Boolean).length;

@@ -12,7 +12,7 @@ import {
     sendMessage,
     steerLastMessage,
     useMockBackend,
-} from './fold-test-utils.js';
+} from './sanguine-test-utils.js';
 
 /**
  * End-to-end verification of fold's directed retry (Pillar C).
@@ -167,7 +167,7 @@ test.describe('fold — directed retry', () => {
         mockServer.reset();
         const rejected = await page.evaluate(async () => {
             const { chat } = await import('./script.js');
-            const { requestSteer } = await import('./scripts/extensions/fold/steer.js');
+            const { requestSteer } = await import('./scripts/extensions/sanguine/steer.js');
             return await requestSteer(chat.length - 1, '   ', { source: 'ui' });
         });
         expect(rejected).toBe(false);

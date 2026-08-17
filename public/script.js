@@ -10077,6 +10077,7 @@ export async function swipe(event, direction, { source, repeated, message = chat
             // A steering instruction belongs to the swipe it produced. Without this, syncSwipeToMes
             // restores it when navigating onto a steered swipe and the next plain overswipe would
             // silently inherit an instruction it was never generated under.
+            delete message.extra.sanguine_steer;
             delete message.extra.fold_steer;
         }
         delete message.gen_started;

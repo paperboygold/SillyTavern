@@ -1,4 +1,4 @@
-import { describe, expect, test } from '@jest/globals';
+import { describe, expect, test } from './test-harness.js';
 
 import {
     analyzeJson,
@@ -6,7 +6,7 @@ import {
     coerceExtraction,
     looksTruncated,
     parseLooseJson,
-} from '../public/scripts/extensions/fold/json-parse.js';
+} from '../public/scripts/extensions/sanguine/json-parse.js';
 
 describe('parseLooseJson', () => {
     test('tier 1: plain JSON', () => {

@@ -1,4 +1,4 @@
-import { describe, expect, test } from '@jest/globals';
+import { describe, expect, test } from './test-harness.js';
 
 import {
     fold,
@@ -13,7 +13,7 @@ import {
     table_entries,
     table_from,
     table_values,
-} from '../public/scripts/extensions/fold/lib/hash.js';
+} from '../public/scripts/extensions/sanguine/lib/hash.js';
 
 /**
  * hash.js is vendored verbatim from the Sanguine proof corpus — it is the JavaScript mirror of

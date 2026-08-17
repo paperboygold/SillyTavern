@@ -16,7 +16,7 @@ import { loadMovingUIState } from '../../power-user.js';
 import { t } from '../../i18n.js';
 import * as state from './state.js';
 
-const PANEL_ID = 'foldTracker';
+const PANEL_ID = 'sanguineTracker';
 
 let visible = false;
 let onToggleOff = () => {};

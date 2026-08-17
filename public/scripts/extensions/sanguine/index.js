@@ -1,5 +1,5 @@
 /**
- * fold — Scribe's ideas, ported onto the hashtrinity basis.
+ * Sanguine — Scribe's ideas, ported onto the hashtrinity basis.
  *
  * One structure (the K -> V table), one operation (`insert_with`), and the merge is the only
  * freedom. See ./lib/hash.js for the algebra and SCRIBE-PORT.md for what is being ported and why.
@@ -22,7 +22,7 @@ import { ConnectionManagerRequestService } from '../shared.js';
 import { callGenericPopup, POPUP_RESULT, POPUP_TYPE } from '../../popup.js';
 import { self_test } from './lib/hash.js';
 import { initSteerUi } from './ui.js';
-import { registerFoldSlashCommands } from './slash-commands.js';
+import { registerFoldSlashCommands, registerSanguineSlashCommands } from './slash-commands.js';
 import * as chronicle from './chronicle.js';
 import * as recall from './recall.js';
 import * as state from './state.js';
@@ -30,21 +30,21 @@ import * as panel from './panel.js';
 import { initPanel } from './panel.js';
 import { registerProbe, runExtraction } from './extract.js';
 
-export const MODULE_NAME = 'fold';
+export const MODULE_NAME = 'sanguine';
 
 /**
  * Injection key. `getExtensionPrompt` sorts keys alphabetically, which is why the built-ins are
  * numbered (1_memory, 2_floating_prompt, 3_vectors, 4_vectors_data_bank). 5_ puts the chronicle
  * after them. When recall fusion lands it takes over the contents of this same key.
  */
-const RECALL_INJECT_KEY = '5_fold_recall';
+const RECALL_INJECT_KEY = '5_sanguine_recall';
 
 /**
  * State sits closer to the response than recall does — 6_ sorts after 5_, and it is injected at a
  * shallower depth. What the character is carrying right now matters more to the next sentence
  * than what happened three scenes ago.
  */
-const STATE_INJECT_KEY = '6_fold_state';
+const STATE_INJECT_KEY = '6_sanguine_state';
 
 const DEFAULT_STEER_TEMPLATE = '[Instruction for the next reply: {{instruction}}]';
 const DEFAULT_CHRONICLE_TEMPLATE = 'Relevant past events:\n{{text}}';
@@ -106,16 +106,17 @@ let creditedThisGeneration = new Set();
  * Accessor for this extension's settings bag, guaranteed to be fully populated.
  * @returns {typeof defaultSettings} The settings object (live, mutable).
  */
-export function foldSettings() {
+export function sanguineSettings() {
     return extension_settings[MODULE_NAME];
 }
+export const foldSettings = sanguineSettings;
 
 /**
  * Is swipe steering currently available?
  * @returns {boolean} True if both the extension and the steer feature are enabled.
  */
 export function isSteerEnabled() {
-    const settings = foldSettings();
+    const settings = sanguineSettings();
     return !!settings?.enabled && !!settings?.steer?.enabled;
 }
 
@@ -124,7 +125,7 @@ export function isSteerEnabled() {
  * @returns {boolean} True if both the extension and the chronicle are enabled.
  */
 export function isChronicleEnabled() {
-    const settings = foldSettings();
+    const settings = sanguineSettings();
     return !!settings?.enabled && !!settings?.chronicle?.enabled;
 }
 
@@ -133,7 +134,7 @@ export function isChronicleEnabled() {
  * @returns {boolean} True if both the extension and state tracking are enabled.
  */
 export function isStateEnabled() {
-    const settings = foldSettings();
+    const settings = sanguineSettings();
     return !!settings?.enabled && !!settings?.state?.enabled;
 }
 
@@ -147,7 +148,9 @@ export function isExtractionNeeded() {
 
 function loadSettings() {
     if (!extension_settings[MODULE_NAME] || typeof extension_settings[MODULE_NAME] !== 'object') {
-        extension_settings[MODULE_NAME] = {};
+        extension_settings[MODULE_NAME] = extension_settings.fold && typeof extension_settings.fold === 'object'
+            ? { ...extension_settings.fold }
+            : {};
     }
     const settings = extension_settings[MODULE_NAME];
     for (const key of ['enabled', 'panel']) {
@@ -173,7 +176,9 @@ function loadSettings() {
  * the message template on every swipe, with no per-message bookkeeping.
  */
 export function syncSteerBodyClass() {
-    document.body.classList.toggle('fold-steer-enabled', isSteerEnabled());
+    const enabled = isSteerEnabled();
+    document.body.classList.toggle('sanguine-steer-enabled', enabled);
+    document.body.classList.toggle('fold-steer-enabled', enabled);
 }
 
 /**
@@ -512,17 +517,17 @@ export async function init() {
     await renderSettingsUi();
     syncSteerBodyClass();
     initSteerUi();
-    registerFoldSlashCommands();
+    registerSanguineSlashCommands();
     initPanel({
         // Closing the panel is a decision, so make the setting follow rather than having it
         // reappear on the next redraw.
         onClose: () => {
-            foldSettings().panel = false;
-            $('#fold_panel').prop('checked', false);
+            sanguineSettings().panel = false;
+            $('#fold_panel, #sanguine_panel').prop('checked', false);
             saveSettingsDebounced();
         },
     });
-    panel.setVisible(!!foldSettings().panel);
+    panel.setVisible(!!sanguineSettings().panel);
 
     // One probe, not two. State is a fold over the chronicle's own events, so the delta rides on
     // the event that caused it rather than arriving as a parallel structure to be reconciled.
@@ -562,7 +567,7 @@ export async function init() {
             try {
                 applyRecallBlock(recall.select(pendingPlan));
             } catch (error) {
-                console.error('[fold] recall re-selection failed', error);
+                console.error('[sanguine] recall re-selection failed', error);
             }
         }
     });
@@ -573,4 +578,5 @@ export async function init() {
 }
 
 // Named in manifest.generate_interceptor.
+globalThis.sanguine_interceptGeneration = interceptGeneration;
 globalThis.fold_interceptGeneration = interceptGeneration;

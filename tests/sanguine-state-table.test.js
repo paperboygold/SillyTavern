@@ -1,4 +1,4 @@
-import { describe, expect, test } from '@jest/globals';
+import { describe, expect, test } from './test-harness.js';
 
 import {
     deriveState,
@@ -12,7 +12,7 @@ import {
     validateInventory,
     validateStatus,
     validateVitals,
-} from '../public/scripts/extensions/fold/state-table.js';
+} from '../public/scripts/extensions/sanguine/state-table.js';
 
 /**
  * Build an event carrying a delta.

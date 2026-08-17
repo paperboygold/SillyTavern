@@ -7,16 +7,21 @@
  * from #message_template on every single swipe.
  */
 
-.fold_hidden {
+.fold_hidden,
+.sanguine_hidden {
     display: none;
 }
 
 /* The wand button: last AI message only, and only while steering is enabled. */
+body.sanguine-steer-enabled #chat .mes.last_mes:not([is_user="true"]):not([is_system="true"]) .mes_steer.fold_hidden,
+body.sanguine-steer-enabled #chat .mes.last_mes:not([is_user="true"]):not([is_system="true"]) .mes_steer.sanguine_hidden,
 body.fold-steer-enabled #chat .mes.last_mes:not([is_user="true"]):not([is_system="true"]) .mes_steer.fold_hidden {
     display: flex;
 }
 
 /* The inline bar, opened per-message by removing .fold_hidden. */
+body.sanguine-steer-enabled #chat .mes.last_mes .fold_steer_bar:not(.fold_hidden):not(.sanguine_hidden),
+body.sanguine-steer-enabled #chat .mes.last_mes .sanguine_steer_bar:not(.sanguine_hidden),
 body.fold-steer-enabled #chat .mes.last_mes .fold_steer_bar:not(.fold_hidden) {
     display: flex;
     align-items: center;
@@ -24,26 +29,30 @@ body.fold-steer-enabled #chat .mes.last_mes .fold_steer_bar:not(.fold_hidden) {
     margin-top: 5px;
 }
 
-.fold_steer_bar .fold_steer_input {
+.fold_steer_bar .fold_steer_input,
+.sanguine_steer_bar .sanguine_steer_input {
     flex: 1;
     resize: vertical;
     min-height: 2em;
     margin: 0;
 }
 
-.fold_steer_bar .menu_button {
+.fold_steer_bar .menu_button,
+.sanguine_steer_bar .menu_button {
     flex: 0 0 auto;
     margin: 0;
 }
 
 /* Follow core's generation lock: script.js sets data-swiping on <body> while a swipe runs. */
 body[data-swiping] .mes_steer,
-body[data-swiping] .fold_steer_bar {
+body[data-swiping] .fold_steer_bar,
+body[data-swiping] .sanguine_steer_bar {
     display: none !important;
 }
 
 /* Badge on a message whose active swipe was steered. */
-.fold_steer_badge {
+.fold_steer_badge,
+.sanguine_steer_badge {
     opacity: 0.6;
     margin-left: 0.5em;
     cursor: help;
@@ -56,6 +65,7 @@ body[data-swiping] .fold_steer_bar {
 /* .drawer-content supplies the tint, border and radius, but is sized for a full-width drawer —
    these override its 450px minimum. The blur is what turns the semi-transparent tint into a
    readable surface rather than a ghost over the chat. */
+#sanguineTracker,
 #foldTracker {
     position: fixed;
     /* .drawer-content sets left:0; right:0; margin:0 auto to centre a full-width drawer. Setting
@@ -77,11 +87,14 @@ body[data-swiping] .fold_steer_bar {
 
 /* Toggled by a class rather than jQuery show/hide: .show() writes an inline `display: block`,
    which beats the stylesheet and collapses the flex column into stacked blocks. */
+#sanguineTracker.sanguine_open,
+#sanguineTracker.fold_open,
 #foldTracker.fold_open {
     display: flex;
     flex-direction: column;
 }
 
+.sanguine_tracker_title,
 .fold_tracker_title {
     font-size: calc(var(--mainFontSize) * 0.75);
     text-transform: uppercase;
@@ -91,6 +104,7 @@ body[data-swiping] .fold_steer_bar {
     padding-right: 3.5em;
 }
 
+.sanguine_tracker_body,
 .fold_tracker_body {
     display: flex;
     flex-direction: column;

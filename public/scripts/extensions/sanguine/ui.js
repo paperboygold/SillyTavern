@@ -22,29 +22,29 @@ function mesIdOf(element) {
 }
 
 function barFor(mesId) {
-    return $(`#chat .mes[mesid="${mesId}"] .fold_steer_bar`);
+    return $(`#chat .mes[mesid="${mesId}"] .sanguine_steer_bar, #chat .mes[mesid="${mesId}"] .fold_steer_bar`).first();
 }
 
 function openSteerBar(mesId) {
     const settings = foldSettings();
     const bar = barFor(mesId);
-    const input = bar.find('.fold_steer_input');
+    const input = bar.find('.sanguine_steer_input, .fold_steer_input').first();
 
     if (settings.steer.remember_last && settings.steer.last_instruction && !String(input.val())) {
         input.val(settings.steer.last_instruction);
     }
 
-    bar.removeClass('fold_hidden');
+    bar.removeClass('sanguine_hidden fold_hidden');
     input.trigger('focus').trigger('select');
 }
 
 function closeSteerBar(mesId) {
-    barFor(mesId).addClass('fold_hidden');
+    barFor(mesId).addClass('sanguine_hidden fold_hidden');
 }
 
 async function submitSteer(mesId) {
     const bar = barFor(mesId);
-    const input = bar.find('.fold_steer_input');
+    const input = bar.find('.sanguine_steer_input, .fold_steer_input').first();
     const text = String(input.val() ?? '').trim();
 
     if (!text) {
@@ -67,7 +67,7 @@ function refreshBadges() {
 
     $('#chat .mes').each(function () {
         const element = $(this);
-        element.find('.fold_steer_badge').remove();
+        element.find('.sanguine_steer_badge, .fold_steer_badge').remove();
 
         if (!settings?.steer?.show_badge || !isSteerEnabled()) {
             return;
@@ -87,7 +87,7 @@ function refreshBadges() {
         }
 
         const badge = document.createElement('i');
-        badge.classList.add('fold_steer_badge', 'fa-solid', 'fa-wand-magic-sparkles');
+        badge.classList.add('sanguine_steer_badge', 'fold_steer_badge', 'fa-solid', 'fa-wand-magic-sparkles');
         // Never innerHTML: the instruction is user input.
         badge.title = t`Steered:` + ' ' + steer.text;
         element.find('.ch_name .flex-container.alignItemsBaseline').first().append(badge);
@@ -101,18 +101,18 @@ export function initSteerUi() {
     $(document).on('click', '.last_mes .mes_steer', function () {
         const mesId = mesIdOf(this);
         const bar = barFor(mesId);
-        bar.hasClass('fold_hidden') ? openSteerBar(mesId) : closeSteerBar(mesId);
+        (bar.hasClass('fold_hidden') || bar.hasClass('sanguine_hidden')) ? openSteerBar(mesId) : closeSteerBar(mesId);
     });
 
-    $(document).on('click', '.last_mes .fold_steer_send', async function () {
+    $(document).on('click', '.last_mes .sanguine_steer_send, .last_mes .fold_steer_send', async function () {
         await submitSteer(mesIdOf(this));
     });
 
-    $(document).on('click', '.last_mes .fold_steer_cancel', function () {
+    $(document).on('click', '.last_mes .sanguine_steer_cancel, .last_mes .fold_steer_cancel', function () {
         closeSteerBar(mesIdOf(this));
     });
 
-    $(document).on('keydown', '.last_mes .fold_steer_input', async function (event) {
+    $(document).on('keydown', '.last_mes .sanguine_steer_input, .last_mes .fold_steer_input', async function (event) {
         if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
             await submitSteer(mesIdOf(this));

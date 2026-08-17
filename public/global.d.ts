@@ -104,7 +104,14 @@ declare global {
         /** When false, the message cannot be swiped. */
         swipeable?: boolean;
         overswipe_behavior?: OVERSWIPE_BEHAVIOR;
-        /** The instruction this swipe was generated under. See scripts/extensions/fold/steer-table.js. */
+        /** The instruction this swipe was generated under. See scripts/extensions/sanguine/steer-table.js. */
+        sanguine_steer?: {
+            text: string;
+            direction: 'steer' | 'retry' | 'edit';
+            at?: number;
+            template?: string;
+            source?: string;
+        };
         fold_steer?: {
             text: string;
             direction: 'steer' | 'retry' | 'edit';
