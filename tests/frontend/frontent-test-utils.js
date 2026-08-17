@@ -13,6 +13,7 @@ export const testSetup = {
      *
      * Handles both shapes of a first page load: an install with a user picker (click through it)
      * and a single passwordless install, which drops straight into the app with no picker at all.
+<<<<<<< HEAD
      *
      * The picker is detected by asking whether this IS the login page, rather than by waiting to
      * see whether one appears — a timeout that expires is indistinguishable from a slow render, and

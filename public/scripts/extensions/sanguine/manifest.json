@@ -1,0 +1,15 @@
+{
+    "display_name": "Sanguine",
+    "loading_order": 200,
+    "requires": [],
+    "optional": [],
+    "generate_interceptor": "sanguine_interceptGeneration",
+    "js": "index.js",
+    "css": "style.css",
+    "author": "socol",
+    "version": "0.1.0",
+    "homePage": "https://github.com/SillyTavern/SillyTavern",
+    "hooks": {
+        "activate": "init"
+    }
+}

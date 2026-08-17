@@ -1,0 +1,194 @@
+/*
+ * fold — swipe steering controls.
+ *
+ * Visibility is CSS-only, gated on `.last_mes` + `body.fold-steer-enabled`. This mirrors
+ * how core binds `.swipe_right` only on `.last_mes` (script.js:11086) and means the
+ * controls need no per-message JS bookkeeping — they survive addOneMessage() re-rendering
+ * from #message_template on every single swipe.
+ */
+
+.fold_hidden,
+.sanguine_hidden {
+    display: none;
+}
+
+/* The wand button: last AI message only, and only while steering is enabled. */
+body.sanguine-steer-enabled #chat .mes.last_mes:not([is_user="true"]):not([is_system="true"]) .mes_steer.fold_hidden,
+body.sanguine-steer-enabled #chat .mes.last_mes:not([is_user="true"]):not([is_system="true"]) .mes_steer.sanguine_hidden,
+body.fold-steer-enabled #chat .mes.last_mes:not([is_user="true"]):not([is_system="true"]) .mes_steer.fold_hidden {
+    display: flex;
+}
+
+/* The inline bar, opened per-message by removing .fold_hidden. */
+body.sanguine-steer-enabled #chat .mes.last_mes .fold_steer_bar:not(.fold_hidden):not(.sanguine_hidden),
+body.sanguine-steer-enabled #chat .mes.last_mes .sanguine_steer_bar:not(.sanguine_hidden),
+body.fold-steer-enabled #chat .mes.last_mes .fold_steer_bar:not(.fold_hidden) {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 5px;
+}
+
+.fold_steer_bar .fold_steer_input,
+.sanguine_steer_bar .sanguine_steer_input {
+    flex: 1;
+    resize: vertical;
+    min-height: 2em;
+    margin: 0;
+}
+
+.fold_steer_bar .menu_button,
+.sanguine_steer_bar .menu_button {
+    flex: 0 0 auto;
+    margin: 0;
+}
+
+/* Follow core's generation lock: script.js sets data-swiping on <body> while a swipe runs. */
+body[data-swiping] .mes_steer,
+body[data-swiping] .fold_steer_bar,
+body[data-swiping] .sanguine_steer_bar {
+    display: none !important;
+}
+
+/* Badge on a message whose active swipe was steered. */
+.fold_steer_badge,
+.sanguine_steer_badge {
+    opacity: 0.6;
+    margin-left: 0.5em;
+    cursor: help;
+}
+
+/* ── Tracker panel ─────────────────────────────────────────────────────────────
+   Sized and coloured through SillyTavern's own theme variables so it inherits the
+   user's theme rather than imposing one. */
+
+/* .drawer-content supplies the tint, border and radius, but is sized for a full-width drawer —
+   these override its 450px minimum. The blur is what turns the semi-transparent tint into a
+   readable surface rather than a ghost over the chat. */
+#sanguineTracker,
+#foldTracker {
+    position: fixed;
+    /* .drawer-content sets left:0; right:0; margin:0 auto to centre a full-width drawer. Setting
+       `right` alone loses to the inherited `left`, so the panel drifts to the middle. */
+    left: auto !important;
+    right: 1em;
+    top: 6em;
+    margin: 0 !important;
+    width: 250px !important;
+    min-width: 160px !important;
+    min-height: 80px !important;
+    max-height: 60vh;
+    z-index: 3000;
+    padding: 0.4em 0.6em 0.6em;
+    backdrop-filter: blur(var(--SmartThemeBlurStrength));
+    -webkit-backdrop-filter: blur(var(--SmartThemeBlurStrength));
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+}
+
+/* Toggled by a class rather than jQuery show/hide: .show() writes an inline `display: block`,
+   which beats the stylesheet and collapses the flex column into stacked blocks. */
+#sanguineTracker.sanguine_open,
+#sanguineTracker.fold_open,
+#foldTracker.fold_open {
+    display: flex;
+    flex-direction: column;
+}
+
+.sanguine_tracker_title,
+.fold_tracker_title {
+    font-size: calc(var(--mainFontSize) * 0.75);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    opacity: 0.5;
+    /* Leaves room for the control bar, which sits absolutely over the top-right corner. */
+    padding-right: 3.5em;
+}
+
+.sanguine_tracker_body,
+.fold_tracker_body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5em;
+    overflow-y: auto;
+    padding-top: 0.2em;
+}
+
+.fold_vital { display: flex; flex-direction: column; gap: 0.15em; }
+
+.fold_vital_head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: calc(var(--mainFontSize) * 0.9);
+}
+
+.fold_vital_name { text-transform: capitalize; }
+.fold_vital_num { opacity: 0.7; font-variant-numeric: tabular-nums; }
+
+.fold_bar {
+    height: 5px;
+    border-radius: 3px;
+    background: rgba(128, 128, 128, 0.25);
+    overflow: hidden;
+}
+
+.fold_bar span { display: block; height: 100%; transition: width 0.25s ease; }
+.fold_bar span.ok { background: var(--SmartThemeQuoteColor); }
+.fold_bar span.low { background: #d9a441; }
+.fold_bar span.critical { background: #c94d5f; }
+
+.fold_flags { display: flex; flex-wrap: wrap; gap: 0.25em; }
+
+.fold_flag {
+    font-size: calc(var(--mainFontSize) * 0.8);
+    padding: 0.05em 0.4em;
+    border-radius: 3px;
+    background: rgba(201, 77, 95, 0.18);
+    color: var(--SmartThemeBodyColor);
+    text-transform: capitalize;
+}
+
+.fold_section {
+    font-size: calc(var(--mainFontSize) * 0.75);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    opacity: 0.55;
+    border-top: 1px solid rgba(128, 128, 128, 0.25);
+    padding-top: 0.4em;
+}
+
+.fold_items { display: flex; flex-direction: column; }
+
+.fold_item {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5em;
+    font-size: calc(var(--mainFontSize) * 0.9);
+    padding: 0.1em 0;
+    cursor: help;
+}
+
+.fold_item_name { text-transform: capitalize; overflow-wrap: anywhere; }
+.fold_item_qty { opacity: 0.7; font-variant-numeric: tabular-nums; flex: none; }
+
+.fold_empty {
+    font-size: calc(var(--mainFontSize) * 0.85);
+    opacity: 0.6;
+    line-height: 1.4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .fold_bar span { transition: none; }
+}
+
+/* Chip in the swipe picker showing the instruction a variant was generated under. */
+.fold_swipe_picker_steer {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4em;
+    opacity: 0.75;
+    font-size: calc(var(--mainFontSize) * 0.9);
+    font-style: italic;
+    margin-bottom: 0.25em;
+    overflow-wrap: anywhere;
+}

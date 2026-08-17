@@ -22,6 +22,8 @@
         "**/*.min.js",
         "scripts/extensions/quick-reply/lib/**",
         "scripts/extensions/tts/lib/**",
+        "scripts/extensions/sanguine/lib/**",
+        "scripts/extensions/sanguine-gloss/lib/**",
         "scripts/extensions/fold/lib/**"
     ],
     "typeAcquisition": {

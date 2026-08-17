@@ -1,0 +1,54 @@
+<div class="sanguine_gloss_settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b data-i18n="Sanguine Gloss">Sanguine Gloss</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <label class="checkbox_label" for="sanguine_gloss_enabled">
+                <input id="sanguine_gloss_enabled" type="checkbox" class="checkbox">
+                <b data-i18n="Enable Interactive Glossing">Enable Interactive Glossing</b>
+            </label>
+            <small class="flex-container flexFlowColumn" data-i18n="sanguine_gloss_desc">
+                Enables sanguinehost.com-style hover tooltips and interactive reading for Chinese and Wuxia roleplay terms.
+            </small>
+
+            <hr>
+
+            <label for="sanguine_gloss_mode" data-i18n="Reading Mode">Reading Mode</label>
+            <select id="sanguine_gloss_mode" class="text_pole">
+                <option value="hover" data-i18n="Hover Tooltip (Clean Hanzi)">Hover Tooltip (Clean Hanzi)</option>
+                <option value="ruby_pinyin" data-i18n="Ruby Pinyin (Furigana-style above characters)">Ruby Pinyin (Furigana-style above characters)</option>
+                <option value="ruby_english" data-i18n="Ruby English (English meaning above characters)">Ruby English (English meaning above characters)</option>
+                <option value="interlinear" data-i18n="Interlinear (Pinyin + Meaning above characters)">Interlinear (Pinyin + Meaning above characters)</option>
+            </select>
+
+            <label class="checkbox_label" for="sanguine_gloss_wuxia">
+                <input id="sanguine_gloss_wuxia" type="checkbox" class="checkbox">
+                <span data-i18n="Enable Wuxia & Cultivation Lexicon">Enable Wuxia & Cultivation Lexicon</span>
+            </label>
+            <small class="flex-container flexFlowColumn" data-i18n="wuxia_lexicon_desc">
+                Includes cultivation realms, meridians, Daoism, storage rings, pills, and martial arts terminology with deep lore cards.
+            </small>
+
+            <label class="checkbox_label" for="sanguine_gloss_common">
+                <input id="sanguine_gloss_common" type="checkbox" class="checkbox">
+                <span data-i18n="Enable General Chinese Lexicon">Enable General Chinese Lexicon</span>
+            </label>
+
+            <hr>
+
+            <h4 class="margin0" data-i18n="Add Custom Term">Add Custom Term</h4>
+            <div class="flex-container flexFlowColumn">
+                <input id="sanguine_gloss_new_term" class="text_pole textarea_compact" type="text" placeholder="Hanzi term (e.g. 九界天升诀)" data-i18n="[placeholder]Hanzi term (e.g. 九界天升诀)">
+                <input id="sanguine_gloss_new_say" class="text_pole textarea_compact" type="text" placeholder="Pinyin pronunciation (optional)" data-i18n="[placeholder]Pinyin pronunciation (optional)">
+                <input id="sanguine_gloss_new_mean" class="text_pole textarea_compact" type="text" placeholder="English meaning / translation" data-i18n="[placeholder]English meaning / translation">
+                <textarea id="sanguine_gloss_new_more" class="text_pole textarea_compact" rows="2" placeholder="Deeper lore / description (optional)" data-i18n="[placeholder]Deeper lore / description (optional)"></textarea>
+                <div class="flex-container">
+                    <div id="sanguine_gloss_add_term" class="menu_button flex1" data-i18n="Save Term">Save Term</div>
+                    <div id="sanguine_gloss_reprocess" class="menu_button flex1" data-i18n="Re-scan Chat">Re-scan Chat</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

@@ -5700,7 +5700,7 @@ async function swipeChatCallback(args, instruction) {
         // A steering instruction only makes sense for a forward swipe, which is the one that
         // generates. Imported lazily so core carries no static dependency on the extension.
         if (steerText && direction === SWIPE_DIRECTION.RIGHT) {
-            const { requestSteer } = await import('./extensions/fold/steer.js');
+            const { requestSteer } = await import('./extensions/sanguine/steer.js').catch(() => import('./extensions/fold/steer.js'));
             outerResolve(Promise.resolve(requestSteer(chat.length - 1, steerText, { source: 'swipe_cmd' })));
             return '';
         }
