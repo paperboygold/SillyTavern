@@ -7,7 +7,9 @@
  * One structure (the K -> V table), one operation (`insert_with`), and `merge_b` for lookup.
  */
 
+import { castTerms } from './cast-terms.js';
 import {
+    chat_metadata,
     eventSource,
     event_types,
     saveSettingsDebounced,
@@ -19,6 +21,7 @@ import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
 import { t } from '../../i18n.js';
 import {
     clearContextTerms,
+    registerBatchContext,
     getGlossEntry,
     rebuildActiveTrie,
     registerContextTerm,
@@ -91,7 +94,7 @@ async function renderSettingsUi() {
     if (container.length) {
         container.append(html);
     } else {
-        $('#sanguine_container, #fold_container').append(html);
+        $('#sanguine_container, #sanguine_container').append(html);
     }
 
     const settings = glossSettings();
@@ -194,6 +197,32 @@ function registerSlashCommands() {
 }
 
 /**
+ * Feed the tracker's own names into the context tier.
+ *
+ * Read straight off `chat_metadata`, not through an import: sanguine and sanguine-gloss are
+ * separate extensions and either may be absent. A missing tracker is the ordinary case for a
+ * non-CJK story and leaves the gloss exactly as it was.
+ *
+ * Re-harvested on every chat change because the cast is per-chat, and `clearContextTerms` has just
+ * emptied the tier — the pairing is cheap and always current.
+ */
+function harvestCastTerms() {
+    try {
+        const cast = chat_metadata?.sanguine?.state?.cast;
+        if (!cast) return;
+        const terms = castTerms(cast);
+        const count = Object.keys(terms).length;
+        if (!count) return;
+        registerBatchContext(terms);
+        console.debug(`[${MODULE_NAME}] ${count} names from the cast`);
+    } catch (error) {
+        // A gloss that throws would take the chat render with it; a gloss that skips a tier is a
+        // gloss with fewer entries.
+        console.debug(`[${MODULE_NAME}] cast harvest skipped:`, error?.message);
+    }
+}
+
+/**
  * Extension entry point.
  */
 export async function init() {
@@ -223,8 +252,10 @@ export async function init() {
         processMessage(mesId);
     });
 
+
     eventSource.on(event_types.CHAT_CHANGED, () => {
         clearContextTerms();
+        harvestCastTerms();
         setTimeout(() => processAllChatMessages(), 100);
     });
 

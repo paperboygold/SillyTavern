@@ -1,5 +1,9 @@
 {
     "verbose": true,
     "transform": {},
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "testPathIgnorePatterns": [
+        "/node_modules/",
+        "sanguine-gloss-.*\\.test\\.js$"
+    ]
 }

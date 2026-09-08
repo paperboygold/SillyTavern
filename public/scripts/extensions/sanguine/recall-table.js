@@ -1,10 +1,10 @@
 /**
- * fold/recall-table.js — the pure fusion layer.
+ * fold/recall-table.js: the pure fusion layer.
  *
  * Imports nothing but ./lib/hash.js, so it runs in plain Node and is unit-testable.
  *
  * Reciprocal Rank Fusion IS the Accumulator face. Each source contributes `1/(k + rank)` for the
- * items it returns, and those contributions accumulate under `merge_acc` — the pair monoid. The
+ * items it returns, and those contributions accumulate under `merge_acc`: the pair monoid. The
  * `sum` component is the fused score; the `n` component falls out for free and counts how many
  * independent sources surfaced the item, which is a genuine agreement signal used as the tiebreak.
  *
@@ -25,32 +25,69 @@ export const NEAR_DUPLICATE_THRESHOLD = 0.8;
  * @typedef {object} EvidenceSource
  * @property {string[]} keys Item keys in rank order, best first.
  * @property {number} [weight] Relative trust in this source. Defaults to 1.
+ * @property {string} [label] What to call this source when reporting why an item ranked. Defaults
+ *   to its position (`s0`, `s1`, …), so an unlabelled caller still gets provenance rather than
+ *   nothing.
  */
+
+/**
+ * The fused accumulator, extended with provenance.
+ *
+ * Why the pair monoid becomes a triple.
+ *
+ * `merge_acc` is `{sum, n}` under componentwise addition. `by` is a third component under
+ * "keep the better rank", `min` over the naturals, which is a commutative idempotent monoid with
+ * identity +∞, lifted pointwise over the label keys. So the merge is still a monoid merge and
+ * `fuse` is still the Accumulator face; there is simply one more coordinate in it.
+ *
+ * It exists because the score alone cannot answer the only question a reader actually has when
+ * they see a retrieved memory: *why did this one come up?* `sum` says "0.031", which is not an
+ * answer. `by` says "the chronicle ranked it 1st and recency ranked it 4th", which is.
+ *
+ * @param {{sum: number, n: number, by?: Record<string, number>}} nu The incoming contribution.
+ * @param {{sum: number, n: number, by?: Record<string, number>}} old What is already there.
+ * @returns {{sum: number, n: number, by: Record<string, number>}} The merged accumulator.
+ */
+function mergeProvenance(nu, old) {
+    const { sum, n } = merge_acc(nu, old);
+    const by = { ...(old.by ?? {}) };
+    for (const [label, rank] of Object.entries(nu.by ?? {})) {
+        // A source that lists the same key twice is malformed, but it still has a best rank, and
+        // `min` is the only merge that reports it rather than whichever copy came last.
+        by[label] = label in by ? Math.min(by[label], rank) : rank;
+    }
+    return { sum, n, by };
+}
 
 /**
  * Fuse ranked lists into one scored table.
  * @param {EvidenceSource[]} sources Ranked lists.
  * @param {number} [k] RRF constant.
- * @returns {Map<string, {sum: number, n: number}>} key -> fused score and source count.
+ * @returns {Map<string, {sum: number, n: number, by: Record<string, number>}>} key -> fused score,
+ *   source count, and the zero-based rank each source gave it.
  */
 export function fuse(sources, k = RRF_K) {
-    return fold(sources, new Map(), (acc, source) =>
+    return fold(sources, new Map(), (acc, source, index) =>
         fold(source?.keys ?? [], acc, (table, key, rank) =>
-            insert_with(table, merge_acc, key, { sum: (source.weight ?? 1) / (k + rank + 1), n: 1 })));
+            insert_with(table, mergeProvenance, key, {
+                sum: (source.weight ?? 1) / (k + rank + 1),
+                n: 1,
+                by: { [source?.label || `s${index}`]: rank },
+            })));
 }
 
 /**
  * Order a fused table best-first.
  *
- * Ties on score break toward items that more than one source surfaced — that is what `n` is for,
+ * Ties on score break toward items that more than one source surfaced, that is what `n` is for,
  * and it is the whole reason the pair monoid is the right merge rather than a plain sum.
  *
- * @param {Map<string, {sum: number, n: number}>} fused A fused table.
- * @returns {Array<{key: string, sum: number, n: number}>} Ranked entries.
+ * @param {Map<string, {sum: number, n: number, by?: Record<string, number>}>} fused A fused table.
+ * @returns {Array<{key: string, sum: number, n: number, by: Record<string, number>}>} Ranked entries.
  */
 export function rankFused(fused) {
     return table_entries(fused)
-        .map(([key, score]) => ({ key, sum: score.sum, n: score.n }))
+        .map(([key, score]) => ({ key, sum: score.sum, n: score.n, by: score.by ?? {} }))
         .sort((a, b) => b.sum - a.sum || b.n - a.n);
 }
 
@@ -98,39 +135,73 @@ export function isNearDuplicate(text, accepted, threshold = NEAR_DUPLICATE_THRES
  *
  * Three filters, in cost order: identity (cheap), near-duplicate against what is already in the
  * prompt or already accepted (moderate), then the token budget (needs a counter). `covered` holds
- * text that another system has already put in the prompt — activated World Info entries — so fold
+ * text that another system has already put in the prompt, activated World Info entries, so fold
  * never pays tokens to say something the model is about to be told anyway.
  *
+ * The skipped tally counts; `dropped` explains.
+ *
+ * `skipped` has always been four integers, which is enough to notice that retrieval threw six
+ * things away and not enough to ever find out what they were. `dropped` is the same decisions with
+ * the candidate attached, in the order they were made, so a reader can see that the budget stopped
+ * at the fifth-ranked memory rather than only that "budget: 1". It is derived from the same branch
+ * that increments the tally, there is no second code path that could disagree with it.
+ *
  * @param {object} params Parameters.
- * @param {Array<{key: string}>} params.ranked Ranked keys from rankFused.
+ * @param {Array<{key: string, sum?: number, n?: number, by?: Record<string, number>}>} params.ranked
+ *   Ranked keys from rankFused.
  * @param {Map<string, {text: string, anchor?: string, source: string}>} params.meta Item metadata.
  * @param {string[]} [params.covered] Texts already present in the prompt from other sources.
  * @param {number} params.budget Token budget for the whole block.
  * @param {(key: string, text: string) => number} params.costOf Token cost of an item.
  * @param {number} [params.maxItems] Hard cap on item count.
- * @returns {{items: Array<{key: string, text: string, source: string}>, tokens: number, skipped: object}} Selection.
+ * @returns {{items: Array<object>, tokens: number, skipped: object, dropped: Array<object>}} Selection.
  */
 export function selectEvidence({ ranked, meta, covered = [], budget, costOf, maxItems = 20 }) {
     const seen = new Map();
     // Source messages already represented, split by how. A summary and the raw message it came
     // from are redundant with each other, so whichever wins suppresses the other. But two
-    // summaries of the same message are NOT redundant — they say different things — so they must
+    // summaries of the same message are NOT redundant, they say different things, so they must
     // not suppress each other just for sharing an anchor.
     const rawAccepted = new Map();
     const summarizedAccepted = new Map();
     const accepted = [];
     const items = [];
     const skipped = { covered: 0, duplicate: 0, budget: 0, missing: 0 };
+    /** @type {Array<object>} Every candidate that did not make it, and the gate that stopped it. */
+    const dropped = [];
     let tokens = 0;
 
-    for (const { key } of ranked) {
+    /**
+     * Everything known about a candidate at the moment it was judged.
+     * @param {object} candidate The ranked entry.
+     * @param {number} at Its zero-based position in the ranking.
+     * @param {object|undefined} entry Its metadata, if any.
+     * @returns {object} A provenance record.
+     */
+    const provenance = (candidate, at, entry) => ({
+        key: candidate.key,
+        rank: at,
+        score: candidate.sum ?? 0,
+        agree: candidate.n ?? 0,
+        by: candidate.by ?? {},
+        text: entry?.text ?? '',
+        source: entry?.source ?? '',
+    });
+
+    for (const [at, candidate] of ranked.entries()) {
+        const key = candidate.key;
         if (items.length >= maxItems) {
-            break;
+            // `continue` rather than `break`: nothing more can be accepted either way, so the
+            // selection is identical, but the tail is reported instead of vanishing. A cap that
+            // leaves no trace is exactly what `observe.js` exists to stop.
+            dropped.push({ ...provenance(candidate, at, meta.get(key)), reason: 'capped' });
+            continue;
         }
 
         const entry = meta.get(key);
         if (!entry?.text) {
             skipped.missing++;
+            dropped.push({ ...provenance(candidate, at, entry), reason: 'missing' });
             continue;
         }
 
@@ -143,22 +214,26 @@ export function selectEvidence({ ranked, meta, covered = [], budget, costOf, max
 
         if (lookup(seen, key, false) || redundant) {
             skipped.duplicate++;
+            dropped.push({ ...provenance(candidate, at, entry), reason: 'duplicate', of: anchor ?? key });
             continue;
         }
 
         if (isNearDuplicate(entry.text, covered)) {
             skipped.covered++;
+            dropped.push({ ...provenance(candidate, at, entry), reason: 'covered' });
             continue;
         }
 
         if (isNearDuplicate(entry.text, accepted)) {
             skipped.duplicate++;
+            dropped.push({ ...provenance(candidate, at, entry), reason: 'duplicate' });
             continue;
         }
 
         const cost = costOf(key, entry.text);
         if (tokens + cost > budget) {
             skipped.budget++;
+            dropped.push({ ...provenance(candidate, at, entry), reason: 'budget', cost });
             continue;
         }
 
@@ -168,10 +243,12 @@ export function selectEvidence({ ranked, meta, covered = [], budget, costOf, max
         }
         accepted.push(entry.text);
         tokens += cost;
-        items.push({ key, text: entry.text, source: entry.source });
+        // The provenance rides along with the item. `text` and `source` are what the prompt needs;
+        // everything else is what a reader needs to believe the prompt.
+        items.push({ ...provenance(candidate, at, entry), cost });
     }
 
-    return { items, tokens, skipped };
+    return { items, tokens, skipped, dropped };
 }
 
 /**

@@ -1,0 +1,723 @@
+/*
+ * sanguine/overlay-chronicle.css: the Chronicle tab.
+ *
+ * A third sheet, injected by `overlay-chronicle.js` the way `overlay.js` injects its own and for the
+ * same reason: `addExtensionStyle` (extensions.js:781) reads exactly one filename out of the
+ * manifest, and `style.css` has it.
+ *
+ * What this file is allowed to invent.
+ *
+ * Nothing. Every size comes from the six-step scale in `style.css` `:root` (`--s-display` …
+ * `--s-micro`), every opacity from the four stops (`--o-now` … `--o-dormant`), and every semantic
+ * colour from `--fold-fresh` / `-warn` / `-crit` / `-rel`. A seventh size or a fifth opacity would
+ * be a value nobody else in the extension can mean anything by.
+ *
+ * The two doctrines the panel established carry over unchanged:
+ *
+ *   1. Mono is a claim about PROVENANCE. Ranks, fused scores, token counts, hit counts and clock
+ *      readings are derived, so they are `--fold-mono` with tabular figures. Event summaries are
+ *      what a model wrote about the fiction, so they are the body face. That is how a reader tells a
+ *      measurement from a sentence without reading either.
+ *   2. The semantic axis is for MEANING. The budget bar goes warn then crit as it fills because a
+ *      full budget is dropping evidence; the selected filter is chrome and takes the theme accent.
+ */
+
+.sanguine_chron {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55em;
+    padding-right: 0.2em;
+}
+
+/* The two views. */
+
+.sanguine_chron_switch {
+    display: flex;
+    gap: 0.25em;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(128, 128, 128, 0.35));
+    padding-bottom: 0.35em;
+}
+
+.sanguine_chron_switchbtn {
+    padding: 0.3em 0.9em;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: var(--s-body);
+    cursor: pointer;
+    opacity: var(--o-standing);
+    transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+
+.sanguine_chron_switchbtn:hover {
+    opacity: var(--o-now);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 10%, transparent);
+}
+
+.sanguine_chron_switchbtn_on {
+    opacity: var(--o-now);
+    font-weight: 600;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 18%, transparent);
+    box-shadow: inset 0 -2px 0 var(--SmartThemeQuoteColor, #d4a753);
+}
+
+.sanguine_chron_stage {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6em;
+    min-width: 0;
+}
+
+/* Headings, labels, numbers. */
+
+/* THE FLOOR. Uppercase and letter-spaced, which is the only thing `--s-micro` is for. */
+.sanguine_chron_label,
+.sanguine_chron_headlabel,
+.sanguine_chron_badge,
+.sanguine_chron_chip,
+.sanguine_chron_provname {
+    font-size: var(--s-micro);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.sanguine_chron_label {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5em;
+    margin: 0 0 0.3em;
+    opacity: var(--o-standing);
+    font-weight: 600;
+}
+
+.sanguine_chron_headlabel {
+    opacity: var(--o-standing);
+}
+
+/* Every derived value in this tab. */
+.sanguine_chron_num {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+}
+
+.sanguine_chron_big {
+    font-size: var(--s-title);
+    color: var(--fold-fresh);
+}
+
+.sanguine_chron_dim {
+    opacity: var(--o-standing);
+}
+
+/* Model prose. Body face, never mono, never uppercase. */
+.sanguine_chron_summary {
+    margin: 0;
+    font-size: var(--s-body);
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+.sanguine_chron_empty {
+    margin: 0;
+    padding: 0.8em 0.2em;
+    font-size: var(--s-sub);
+    opacity: var(--o-standing);
+}
+
+.sanguine_chron_empty p {
+    margin: 0 0 0.5em;
+    max-width: 42em;
+}
+
+.sanguine_chron_head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6em 1.2em;
+}
+
+.sanguine_chron_counts {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4em;
+    flex-wrap: wrap;
+}
+
+/* A real bound that has been reached is a warning; a view bound is not. Only the first is drawn. */
+.sanguine_chron_bound {
+    flex: 1 1 100%;
+    margin: 0;
+    font-size: var(--s-sub);
+    color: var(--fold-warn);
+    opacity: var(--o-context);
+}
+
+.sanguine_chron_notfound {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5em;
+    margin: 0;
+    padding: 0.4em 0.6em;
+    border-left: 2px solid var(--fold-warn);
+    font-size: var(--s-sub);
+    background: color-mix(in srgb, var(--fold-warn) 8%, transparent);
+}
+
+.sanguine_chron_key {
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    opacity: var(--o-standing);
+}
+
+/* Filters. */
+
+.sanguine_chron_filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4em;
+}
+
+.sanguine_chron_search {
+    flex: 1 1 12em;
+    min-width: 8em;
+    padding: 0.3em 0.5em;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(128, 128, 128, 0.35));
+    border-radius: 5px;
+    background: var(--black30a, rgba(0, 0, 0, 0.18));
+    color: inherit;
+    font-family: inherit;
+    font-size: var(--s-sub);
+}
+
+.sanguine_chron_search:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: -1px;
+}
+
+.sanguine_chron_seg {
+    display: flex;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(128, 128, 128, 0.35));
+    border-radius: 5px;
+    overflow: hidden;
+}
+
+.sanguine_chron_segbtn {
+    padding: 0.28em 0.6em;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: var(--s-sub);
+    cursor: pointer;
+    opacity: var(--o-standing);
+}
+
+.sanguine_chron_segbtn:hover {
+    opacity: var(--o-now);
+}
+
+.sanguine_chron_segbtn_on {
+    opacity: var(--o-now);
+    /* Chrome, not meaning: the theme accent, so the semantic colours keep their jobs. */
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 22%, transparent);
+    font-weight: 600;
+}
+
+.sanguine_chron_segbtn:focus-visible,
+.sanguine_chron_bucket:focus-visible,
+.sanguine_chron_chip:focus-visible,
+.sanguine_chron_jump:focus-visible,
+.sanguine_chron_more:focus-visible,
+.sanguine_chron_switchbtn:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: -2px;
+}
+
+/* The two panes. */
+
+.sanguine_chron_panes {
+    display: grid;
+    grid-template-columns: 11em minmax(0, 1fr);
+    gap: 0.8em;
+    align-items: start;
+}
+
+.sanguine_chron_rail {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4em;
+    min-width: 0;
+    padding-right: 0.6em;
+    border-right: 1px solid var(--SmartThemeBorderColor, rgba(128, 128, 128, 0.35));
+    /* Sticky rather than scrolling: the rail is shorter than the list by construction, and a second
+       scroll region inside a scrolling panel is a trap for a trackpad. */
+    position: sticky;
+    top: 0;
+}
+
+.sanguine_chron_railhead {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15em;
+    padding-bottom: 0.4em;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(128, 128, 128, 0.25));
+}
+
+.sanguine_chron_storyclock {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4em;
+}
+
+/* The one display-size thing in the tab, and it is the clock, the same rule the panel follows. */
+.sanguine_chron_storyclock .sanguine_chron_num:first-child {
+    font-size: var(--s-display);
+    color: var(--fold-fresh);
+    line-height: 1.1;
+}
+
+/* Model-written text ("Wednesday, September 23, 1998"), so: prose. */
+.sanguine_chron_storydate {
+    font-size: var(--s-sub);
+    opacity: var(--o-context);
+    overflow-wrap: anywhere;
+}
+
+.sanguine_chron_railnote {
+    margin-top: 0.2em;
+    font-size: var(--s-sub);
+    opacity: var(--o-dormant);
+    line-height: 1.3;
+}
+
+.sanguine_chron_buckets {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1em;
+    max-height: 40vh;
+    overflow-y: auto;
+}
+
+.sanguine_chron_bucket {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.4em;
+    padding: 0.25em 0.4em;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    text-align: start;
+    cursor: pointer;
+    opacity: var(--o-standing);
+}
+
+.sanguine_chron_bucket:hover {
+    opacity: var(--o-now);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 10%, transparent);
+}
+
+.sanguine_chron_bucket_on {
+    opacity: var(--o-now);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 16%, transparent);
+    box-shadow: inset 2px 0 0 var(--SmartThemeQuoteColor, #d4a753);
+}
+
+/* A date is a derived value. Mono. */
+.sanguine_chron_bucketday {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    white-space: nowrap;
+}
+
+.sanguine_chron_buckettally {
+    display: flex;
+    gap: 0.35em;
+    flex: 0 0 auto;
+}
+
+/* Events on this day whose source message a swipe replaced. The warn colour, because it is the
+   answer to "why is the record longer than the story". */
+.sanguine_chron_bucketoff {
+    color: var(--fold-warn);
+    opacity: var(--o-context);
+}
+
+.sanguine_chron_listwrap {
+    min-width: 0;
+}
+
+/* One event. */
+
+.sanguine_chron_list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1em;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.sanguine_chron_row {
+    display: grid;
+    grid-template-columns: 3.4em minmax(0, 1fr) auto;
+    gap: 0.55em;
+    align-items: baseline;
+    padding: 0.35em 0.3em;
+    border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor, rgba(128, 128, 128, 0.35)) 45%, transparent);
+}
+
+/*
+ * Off-branch, not deleted.
+ *
+ * `--o-dormant` is the stop for "over, moot, or left behind", which is exactly what an event whose
+ * source message a swipe replaced is: still in the record, not on this timeline. Dimming is the
+ * whole distinction, and the `off-branch` badge repeats it in words so the row does not depend on a
+ * reader noticing a 0.38 against a 1.
+ */
+.sanguine_chron_row_dead {
+    opacity: var(--o-dormant);
+}
+
+.sanguine_chron_when {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    opacity: var(--o-standing);
+    white-space: nowrap;
+}
+
+.sanguine_chron_rowbody {
+    min-width: 0;
+}
+
+.sanguine_chron_tags {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25em;
+    margin-top: 0.2em;
+}
+
+/* Model-chosen keywords. Uppercase chips: they are the retrieval key space, not prose. */
+.sanguine_chron_chip {
+    padding: 0.05em 0.4em;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 40%, transparent);
+    border-radius: 3px;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    cursor: pointer;
+    opacity: var(--o-standing);
+}
+
+.sanguine_chron_chip:hover {
+    opacity: var(--o-now);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 14%, transparent);
+}
+
+.sanguine_chron_badge {
+    padding: 0.05em 0.4em;
+    border-radius: 3px;
+    opacity: var(--o-context);
+}
+
+.sanguine_chron_badge_delta {
+    background: color-mix(in srgb, var(--fold-rel) 30%, transparent);
+    color: var(--SmartThemeBodyColor);
+}
+
+.sanguine_chron_badge_dead {
+    border: 1px solid color-mix(in srgb, var(--fold-warn) 55%, transparent);
+    color: var(--fold-warn);
+}
+
+.sanguine_chron_badge_user {
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 35%, transparent);
+}
+
+.sanguine_chron_badge_agree {
+    background: color-mix(in srgb, var(--fold-fresh) 26%, transparent);
+}
+
+.sanguine_chron_hits {
+    opacity: var(--o-standing);
+}
+
+.sanguine_chron_jump {
+    padding: 0.15em 0.45em;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor, rgba(128, 128, 128, 0.35)) 80%, transparent);
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    cursor: pointer;
+    opacity: var(--o-standing);
+    white-space: nowrap;
+}
+
+.sanguine_chron_jump:hover {
+    opacity: var(--o-now);
+    border-color: var(--SmartThemeQuoteColor, #d4a753);
+}
+
+.sanguine_chron_jump_none {
+    border-color: transparent;
+    opacity: var(--o-dormant);
+    cursor: default;
+}
+
+.sanguine_chron_more {
+    width: 100%;
+    margin-top: 0.5em;
+    padding: 0.45em;
+    border: 1px dashed var(--SmartThemeBorderColor, rgba(128, 128, 128, 0.35));
+    border-radius: 5px;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: var(--s-sub);
+    cursor: pointer;
+    opacity: var(--o-standing);
+}
+
+.sanguine_chron_more:hover {
+    opacity: var(--o-now);
+}
+
+/* Recall. */
+
+.sanguine_chron_budget {
+    display: flex;
+    align-items: center;
+    gap: 0.6em;
+    flex: 1 1 14em;
+    max-width: 22em;
+}
+
+.sanguine_chron_bar {
+    flex: 1 1 auto;
+    height: 0.5em;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 14%, transparent);
+    overflow: hidden;
+}
+
+.sanguine_chron_barfill {
+    height: 100%;
+    background: var(--fold-fresh);
+    transition: width 0.2s ease;
+}
+
+.sanguine_chron_barfill_near {
+    background: var(--fold-warn);
+}
+
+/* At the ceiling, recall is dropping evidence it ranked highly. That is the crit case. */
+.sanguine_chron_barfill_full {
+    background: var(--fold-crit);
+}
+
+.sanguine_chron_budgetread {
+    display: flex;
+    align-items: baseline;
+    gap: 0.35em;
+    white-space: nowrap;
+}
+
+.sanguine_chron_query {
+    border-left: 2px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 50%, transparent);
+    padding-left: 0.6em;
+}
+
+.sanguine_chron_query summary {
+    cursor: pointer;
+}
+
+.sanguine_chron_querytext {
+    margin: 0.3em 0 0;
+    max-height: 14em;
+    overflow-y: auto;
+    font-size: var(--s-sub);
+    opacity: var(--o-context);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.sanguine_chron_sourcelist {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2em;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.sanguine_chron_source {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5em;
+}
+
+.sanguine_chron_sourceblurb {
+    flex: 1 1 14em;
+    font-size: var(--s-sub);
+    opacity: var(--o-standing);
+}
+
+.sanguine_chron_sourcenote {
+    margin: 0.4em 0 0;
+    font-size: var(--s-sub);
+    opacity: var(--o-standing);
+}
+
+.sanguine_chron_section {
+    padding-top: 0.4em;
+    border-top: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor, rgba(128, 128, 128, 0.35)) 60%, transparent);
+}
+
+.sanguine_chron_why {
+    margin: 0 0 0.4em;
+    max-width: 46em;
+    font-size: var(--s-sub);
+    opacity: var(--o-standing);
+}
+
+.sanguine_chron_evlist {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15em;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.sanguine_chron_ev {
+    display: grid;
+    grid-template-columns: 4.4em minmax(0, 1fr);
+    gap: 0.6em;
+    padding: 0.35em 0.3em;
+    border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor, rgba(128, 128, 128, 0.35)) 40%, transparent);
+}
+
+/* Retrieved and then dropped: still shown, visibly not in the prompt. */
+.sanguine_chron_ev_out {
+    opacity: var(--o-dormant);
+}
+
+.sanguine_chron_evrank {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    line-height: 1.25;
+}
+
+.sanguine_chron_evbody {
+    min-width: 0;
+}
+
+.sanguine_chron_evmeta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.3em;
+    margin-top: 0.2em;
+}
+
+.sanguine_chron_prov {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.25em;
+}
+
+.sanguine_chron_prov_chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.25em;
+    padding: 0.05em 0.4em;
+    border-radius: 3px;
+    border: 1px solid transparent;
+    opacity: var(--o-context);
+}
+
+/* Three sources, three readings off the semantic axis, not three decorative colours. The chronicle
+   is fold's own record (fresh), the vector store is a related-but-external retrieval (rel), and
+   recency is a weak ordering that should never look as strong as either. */
+.sanguine_chron_prov_chronicle {
+    border-color: color-mix(in srgb, var(--fold-fresh) 60%, transparent);
+    color: var(--fold-fresh);
+}
+
+.sanguine_chron_prov_vectors {
+    border-color: color-mix(in srgb, var(--fold-rel) 60%, transparent);
+    color: var(--fold-rel);
+}
+
+.sanguine_chron_prov_recency {
+    border-color: color-mix(in srgb, var(--SmartThemeBodyColor) 30%, transparent);
+    opacity: var(--o-standing);
+}
+
+/* Motion. */
+
+@media (prefers-reduced-motion: reduce) {
+    .sanguine_chron_switchbtn,
+    .sanguine_chron_barfill {
+        transition: none;
+    }
+}
+
+/* Small screens.
+ *
+ * 1000px, the extension's existing breakpoint (`style.css` line 232) and the one `overlay.css`
+ * already turns the rail on. Below it the two panes stack: the time rail becomes a horizontal strip
+ * of days above the entries, which is the same instrument in the shape a thumb can use.
+ */
+@media (max-width: 1000px) {
+    .sanguine_chron_panes {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .sanguine_chron_rail {
+        position: static;
+        padding-right: 0;
+        padding-bottom: 0.4em;
+        border-right: none;
+        border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(128, 128, 128, 0.35));
+    }
+
+    .sanguine_chron_buckets {
+        flex-direction: row;
+        max-height: none;
+        overflow-x: auto;
+        overflow-y: hidden;
+        padding-bottom: 0.2em;
+    }
+
+    .sanguine_chron_bucket {
+        flex: 0 0 auto;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.1em;
+    }
+
+    .sanguine_chron_bucket_on {
+        box-shadow: inset 0 -2px 0 var(--SmartThemeQuoteColor, #d4a753);
+    }
+
+    .sanguine_chron_row {
+        grid-template-columns: 3.2em minmax(0, 1fr) auto;
+    }
+}

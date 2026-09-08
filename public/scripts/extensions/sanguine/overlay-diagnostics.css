@@ -1,0 +1,687 @@
+/*
+ * sanguine/overlay-diagnostics.css: the Diagnostics tab.
+ *
+ * A third sheet, injected by `overlay-diagnostics.js` at import time the same way `overlay.js`
+ * injects `overlay.css`: the manifest declares exactly one stylesheet and `style.css` holds it, and
+ * a tab that owns the most detailed surface in the extension should own its own file.
+ *
+ * What this sheet may and may not spend.
+ *
+ * The panel's design system is not advisory here, it is the reason this surface is legible at all:
+ *
+ *   · SIX TYPE STEPS, from `style.css` `:root`: `--s-display`, `--s-title`, `--s-body`, `--s-sub`,
+ *     `--s-meta`, `--s-micro`. Nothing between them. `--s-micro` (9.3px) is for UPPERCASE
+ *     letter-spaced labels only; lowercase prose at that size is not small, it is unread.
+ *     `--s-display` is the clock hour and nothing else, so it does not appear in this file.
+ *   · FOUR OPACITY STOPS, `--o-now`, `--o-context`, `--o-standing`, `--o-dormant`, and they mean
+ *     TIME, never emphasis and never severity. Structural alphas (hairlines, borders) are not on
+ *     that scale, because a border makes no claim about time.
+ *   · MONO AGAINST PROSE IS LOAD-BEARING. Raw model tokens, prompts, rule names, counts and turn
+ *     numbers are machine-produced and take `--fold-mono`; the `help:` sentences are written for a
+ *     person and take the body face. That contrast is what lets the eye skip a class of thing
+ *     without reading it, and it is the single reason a wall of rejections is scannable.
+ *   · SEMANTIC COLOUR OFF THE ACCENT, `--fold-fresh`, `--fold-warn`, `--fold-crit`, `--fold-rel`.
+ *     Reserved for meaning. On this surface a FAILED PASS is the one thing that earns `--fold-crit`;
+ *     the refusal count earns it as a total, because a refusal is a thing that did not happen.
+ */
+
+.sanguine_diag {
+    /* A measure, not a width: prose set across 760px is prose nobody finishes a line of. The blocks
+       below opt out of this on purpose, a prompt wants every pixel. */
+    max-width: 60em;
+    padding-bottom: 1.5em;
+}
+
+/* The section index. */
+
+.sanguine_diag_index {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3em;
+    padding: 0.35em 0 0.4em;
+    margin-bottom: 0.2em;
+    background: var(--SmartThemeBlurTintColor, var(--SmartThemeBotMesBlurTintColor, #1b1b1b));
+    border-bottom: 1px solid var(--fold-hair);
+}
+
+.sanguine_diag_jump {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: inherit;
+    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
+    border-radius: 0.3em;
+    padding: 0.3em 0.7em;
+    cursor: pointer;
+    opacity: var(--o-standing);
+    transition: opacity 0.12s ease, border-color 0.12s ease;
+}
+
+.sanguine_diag_jump:hover {
+    opacity: var(--o-now);
+    border-color: var(--fold-fresh);
+}
+
+.sanguine_diag_jump:focus-visible {
+    outline: 2px solid var(--fold-fresh);
+    outline-offset: 1px;
+    opacity: var(--o-now);
+}
+
+/* Sections. */
+
+.sanguine_diag_section {
+    padding: 0.9em 0 1.1em;
+    border-bottom: 1px solid var(--fold-hair);
+}
+
+.sanguine_diag_section:last-child {
+    border-bottom: none;
+}
+
+.sanguine_diag_head {
+    font-size: var(--s-title);
+    font-weight: 600;
+    margin: 0 0 0.2em;
+    opacity: var(--o-now);
+}
+
+/* Prose about the section, in the body face: this is written for a person. */
+.sanguine_diag_blurb {
+    font-size: var(--s-sub);
+    line-height: 1.5;
+    margin: 0 0 0.8em;
+    opacity: var(--o-context);
+}
+
+.sanguine_diag_sub {
+    font-size: var(--s-body);
+    font-weight: 600;
+    margin: 0 0 0.3em;
+    opacity: var(--o-context);
+}
+
+.sanguine_diag_reading {
+    margin-top: 1.1em;
+}
+
+.sanguine_diag_prose {
+    font-size: var(--s-body);
+    line-height: 1.5;
+    margin: 0 0 0.5em;
+    opacity: var(--o-context);
+}
+
+/* The honesty paragraph, the tally-versus-log split, the empty states. Set apart with a rule
+   rather than a colour: it is not a warning, it is a caveat. */
+.sanguine_diag_note {
+    font-size: var(--s-sub);
+    line-height: 1.55;
+    margin: 0 0 0.9em;
+    padding: 0.5em 0.8em;
+    border-left: 2px solid var(--fold-hair);
+    opacity: var(--o-standing);
+}
+
+.sanguine_diag_thin {
+    font-size: var(--s-meta);
+    margin: 0.2em 0 0;
+    opacity: var(--o-dormant);
+}
+
+/* Figures. */
+
+.sanguine_diag_stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4em 2em;
+    margin: 0 0 0.9em;
+}
+
+.sanguine_diag_stat {
+    display: flex;
+    flex-direction: column-reverse;
+    min-width: 4em;
+}
+
+/* A number fold computed: mono, tabular, and at the title step because it is the answer to the
+   question the section asks. */
+.sanguine_diag_stat_value {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-title);
+    line-height: 1.15;
+    margin: 0;
+    opacity: var(--o-now);
+}
+
+.sanguine_diag_stat_label {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    opacity: var(--o-standing);
+}
+
+.sanguine_diag_fresh { color: var(--fold-fresh); }
+.sanguine_diag_warn { color: var(--fold-warn); }
+.sanguine_diag_crit { color: var(--fold-crit); }
+.sanguine_diag_rel { color: var(--fold-rel); }
+
+/* Acknowledgement.
+ *
+ * Set apart from the lifetime figures above it by a hairline and an indent, because the two blocks
+ * show THE SAME FOUR BUCKETS over different spans and the only thing distinguishing them is which
+ * question they answer. Two identical stat rows with nothing between them would read as one surface
+ * contradicting itself; the rule and the sub-heading are what make it two readings of one record.
+ *
+ * No colour of its own. The tones inside it are the section's, `warn` on waste, `crit` on the
+ * ledger: and a container that also carried a tint would put a third claim about severity on top of
+ * theirs.
+ */
+
+.sanguine_diag_ack {
+    margin: 0 0 1.1em;
+    padding-left: 0.8em;
+    border-left: 2px solid var(--fold-hair);
+}
+
+.sanguine_diag_ack_actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4em;
+    margin: 0.2em 0 0.5em;
+}
+
+/* The one control on this tab that WRITES. Every other button here copies, expands or scrolls, so
+   it carries the accent at rest rather than only on hover, a destructive-looking action it is not,
+   but an action it is, and the reader should be able to find it without hunting. */
+.sanguine_diag_ack_btn {
+    border-color: color-mix(in srgb, var(--fold-fresh) 55%, transparent);
+    opacity: var(--o-context);
+}
+
+/* Numbers, right-aligned against their headers, so a column of rates can be compared by eye. Only
+   the first column is prose-shaped; everything after it is a figure. */
+.sanguine_diag_rates th:not(:first-child),
+.sanguine_diag_rates td:not(:first-child) {
+    text-align: end;
+}
+
+/* The open span, the one still accruing, at full weight. The closed ones are history and take the
+   standing stop, which is the same time reading the four opacity stops carry everywhere else. */
+.sanguine_diag_rates tbody tr {
+    opacity: var(--o-standing);
+}
+
+.sanguine_diag_rates tbody tr.sanguine_diag_rate_open {
+    opacity: var(--o-now);
+}
+
+/* Rejection groups. */
+
+.sanguine_diag_groups {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15em;
+}
+
+.sanguine_diag_group {
+    border: 1px solid transparent;
+    border-radius: 0.35em;
+}
+
+.sanguine_diag_group.sanguine_diag_open {
+    border-color: var(--fold-hair);
+    background: rgba(128, 128, 128, 0.05);
+}
+
+.sanguine_diag_disclosure {
+    display: flex;
+    align-items: baseline;
+    gap: 0.7em;
+    width: 100%;
+    padding: 0.4em 0.6em;
+    border: none;
+    border-radius: 0.35em;
+    background: transparent;
+    color: inherit;
+    text-align: start;
+    cursor: pointer;
+}
+
+.sanguine_diag_disclosure:hover {
+    background: rgba(128, 128, 128, 0.09);
+}
+
+.sanguine_diag_disclosure:focus-visible {
+    outline: 2px solid var(--fold-fresh);
+    outline-offset: -2px;
+}
+
+.sanguine_diag_caret {
+    flex: 0 0 0.8em;
+    font-size: var(--s-meta);
+    opacity: var(--o-standing);
+    transition: transform 0.12s ease;
+}
+
+.sanguine_diag_open .sanguine_diag_caret {
+    transform: rotate(90deg);
+}
+
+/* The machine's own word for what it refused. */
+.sanguine_diag_reason {
+    font-family: var(--fold-mono);
+    font-size: var(--s-body);
+    font-weight: 600;
+    color: var(--fold-crit);
+    opacity: var(--o-now);
+    overflow-wrap: anywhere;
+}
+
+.sanguine_diag_count {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-body);
+    margin-inline-start: auto;
+    opacity: var(--o-context);
+}
+
+.sanguine_diag_evidence {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    min-width: 7em;
+    text-align: end;
+    opacity: var(--o-standing);
+}
+
+.sanguine_diag_group_body {
+    padding: 0.1em 0.8em 0.7em 2.1em;
+}
+
+/* The help line: mono tag, prose sentence. */
+
+.sanguine_diag_help {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5em;
+    margin: 0 0 0.5em;
+}
+
+.sanguine_diag_help_tag {
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    color: var(--fold-fresh);
+    opacity: var(--o-context);
+}
+
+/* Written for a person, so it is set as prose. This is the one thing on the surface that is. */
+.sanguine_diag_help_text {
+    flex: 1 1 20em;
+    font-size: var(--s-body);
+    line-height: 1.5;
+    opacity: var(--o-context);
+}
+
+.sanguine_diag_verdict {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.6em;
+    margin: 0.4em 0 0.6em;
+}
+
+/* Recorded rows (the `.sanguine_log_*` classes from style.css, in a wider box). */
+
+.sanguine_diag_rows {
+    list-style: none;
+    margin: 0.3em 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15em;
+}
+
+/*
+ * The rows themselves keep the panel's classes, one renderer, one look, no drift. What the overlay
+ * changes is the size: 10.5px was a 288px column's price, and the whole argument for moving the log
+ * here was that the price no longer has to be paid. The raw token and its caret stay at `--s-meta`
+ * BECAUSE THEY MUST MATCH EACH OTHER: the caret run is a character count, so a caret at a different
+ * size than the token it underlines points at the wrong character.
+ */
+.sanguine_diag_rows .sanguine_log_row {
+    font-size: var(--s-sub);
+    padding: 0.25em 0.4em;
+    border-radius: 0.25em;
+}
+
+.sanguine_diag_rows .sanguine_log_row:hover {
+    background: rgba(128, 128, 128, 0.07);
+}
+
+.sanguine_diag_rows .sanguine_log_snippet {
+    /* There is room for the window excerpt here; in the panel it had to be one clipped line. */
+    white-space: normal;
+    overflow: visible;
+}
+
+/* The cause-link, as a real button rather than a click handler on the row. */
+.sanguine_log_jump_btn {
+    align-self: start;
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    color: inherit;
+    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
+    border-radius: 0.3em;
+    padding: 0.1em 0.45em;
+    cursor: pointer;
+    opacity: var(--o-standing);
+    transition: opacity 0.12s ease, border-color 0.12s ease;
+}
+
+.sanguine_log_jump_btn:hover {
+    opacity: var(--o-now);
+    border-color: var(--fold-fresh);
+    color: var(--fold-fresh);
+}
+
+.sanguine_log_jump_btn:focus-visible {
+    outline: 2px solid var(--fold-fresh);
+    outline-offset: 1px;
+    opacity: var(--o-now);
+}
+
+/* Machine text blocks: prompt, schema, raw reply, parsed. */
+
+.sanguine_diag_block {
+    margin: 0 0 0.7em;
+}
+
+.sanguine_diag_block_head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.7em;
+    margin-bottom: 0.2em;
+}
+
+.sanguine_diag_block_label {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    opacity: var(--o-context);
+}
+
+.sanguine_diag_block_size {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    opacity: var(--o-dormant);
+}
+
+.sanguine_diag_block_controls {
+    margin-inline-start: auto;
+    display: flex;
+    gap: 0.3em;
+}
+
+/*
+ * The block itself. `pre-wrap` rather than a horizontal scrollbar: a prompt's lines are prose lines
+ * and can run for hundreds of characters, and a reader who has to scroll sideways to finish a
+ * sentence does not finish it. Vertical scroll is capped so that four blocks fit on one screen, the
+ * point of this section is the RELATIONSHIP between the prompt, the reply and what survived.
+ */
+.sanguine_diag_pre {
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    line-height: 1.5;
+    margin: 0;
+    padding: 0.55em 0.7em;
+    max-height: 17em;
+    overflow: auto;
+    overscroll-behavior: contain;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    tab-size: 2;
+    background: rgba(128, 128, 128, 0.07);
+    border: 1px solid var(--fold-hair);
+    border-radius: 0.35em;
+    opacity: var(--o-now);
+}
+
+.sanguine_diag_pre:focus-visible {
+    outline: 2px solid var(--fold-fresh);
+    outline-offset: -2px;
+}
+
+.sanguine_diag_pre_empty {
+    font-style: italic;
+    opacity: var(--o-dormant);
+}
+
+/* Buttons. */
+
+.sanguine_diag_btn {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: inherit;
+    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
+    border-radius: 0.3em;
+    padding: 0.25em 0.6em;
+    cursor: pointer;
+    opacity: var(--o-standing);
+    transition: opacity 0.12s ease, border-color 0.12s ease;
+}
+
+.sanguine_diag_btn:hover:enabled {
+    opacity: var(--o-now);
+    border-color: var(--fold-fresh);
+    color: var(--fold-fresh);
+}
+
+.sanguine_diag_btn:focus-visible {
+    outline: 2px solid var(--fold-fresh);
+    outline-offset: 1px;
+    opacity: var(--o-now);
+}
+
+.sanguine_diag_btn:disabled {
+    cursor: default;
+    opacity: var(--o-dormant);
+}
+
+.sanguine_diag_copied {
+    color: var(--fold-fresh);
+    border-color: var(--fold-fresh);
+    opacity: var(--o-now);
+}
+
+.sanguine_diag_failed {
+    color: var(--fold-crit);
+    border-color: var(--fold-crit);
+    opacity: var(--o-now);
+}
+
+.sanguine_diag_more {
+    margin-top: 0.3em;
+}
+
+.sanguine_diag_console {
+    margin-top: 0.2em;
+}
+
+/* Key/value facts. */
+
+.sanguine_diag_facts {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.15em 1em;
+    margin: 0 0 0.8em;
+    align-items: baseline;
+}
+
+.sanguine_diag_fact_label {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    opacity: var(--o-standing);
+}
+
+.sanguine_diag_fact_value {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    margin: 0;
+    overflow-wrap: anywhere;
+    opacity: var(--o-context);
+}
+
+.sanguine_diag_facts .sanguine_diag_prose {
+    margin: 0;
+}
+
+/* The counter table. */
+
+.sanguine_diag_table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0 0 0.8em;
+}
+
+.sanguine_diag_table th {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    font-weight: 400;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    text-align: start;
+    padding: 0.2em 0.6em 0.3em 0;
+    border-bottom: 1px solid var(--fold-hair);
+    opacity: var(--o-standing);
+}
+
+.sanguine_diag_table th:last-child,
+.sanguine_diag_table td:last-child {
+    text-align: end;
+    padding-right: 0;
+}
+
+.sanguine_diag_table td {
+    padding: 0.12em 0.6em 0.12em 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--fold-hair) 50%, transparent);
+}
+
+.sanguine_diag_rule {
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    overflow-wrap: anywhere;
+    opacity: var(--o-context);
+}
+
+.sanguine_diag_kind {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    opacity: var(--o-standing);
+}
+
+.sanguine_diag_num {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    white-space: nowrap;
+    opacity: var(--o-now);
+}
+
+/* Chips: rule names, in bulk. */
+
+.sanguine_diag_chips {
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25em;
+    margin: 0.4em 0 0;
+    padding: 0;
+}
+
+/*
+ * A rule name is a machine key, so it is mono, and it is lowercase, so it is at `--s-meta` and NOT
+ * at `--s-micro`. The micro step is for uppercase letter-spaced labels; lowercase at 9.3px is the
+ * mistake this design system was written to stop.
+ */
+.sanguine_diag_chip {
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    padding: 0.15em 0.5em;
+    border: 1px solid var(--fold-hair);
+    border-radius: 0.3em;
+    opacity: var(--o-dormant);
+}
+
+.sanguine_diag_chip_warn {
+    color: var(--fold-warn);
+    border-color: color-mix(in srgb, var(--fold-warn) 45%, transparent);
+    opacity: var(--o-context);
+}
+
+/* Motion. */
+
+@media (prefers-reduced-motion: reduce) {
+    .sanguine_diag_jump,
+    .sanguine_diag_btn,
+    .sanguine_diag_caret,
+    .sanguine_log_jump_btn {
+        transition: none;
+    }
+}
+
+/* Small screens.
+ *
+ * The overlay goes full-bleed below 1000px (`overlay.css`), which is where this surface hurts most:
+ * every block here is machine text that cannot be reflowed any narrower than it already is. The
+ * blocks get shorter rather than smaller, scrolling a 12em box is a better answer than 8px type.
+ */
+@media (max-width: 1000px) {
+    .sanguine_diag_stats {
+        gap: 0.4em 1.2em;
+    }
+
+    .sanguine_diag_group_body {
+        padding-left: 1em;
+    }
+
+    .sanguine_diag_pre {
+        max-height: 12em;
+    }
+
+    .sanguine_diag_evidence {
+        min-width: 0;
+    }
+}
+
+/* Touch: nothing here is hover-revealed, and every control needs a real target. */
+@media (hover: none), (pointer: coarse) {
+    .sanguine_diag_btn,
+    .sanguine_diag_jump,
+    .sanguine_log_jump_btn {
+        padding: 0.45em 0.75em;
+        opacity: var(--o-context);
+    }
+}

@@ -1,4 +1,4 @@
-import { describe, expect, test } from './test-harness.js';
+import { describe, expect, test } from '@jest/globals';
 
 import {
     buildSteerTable,
@@ -25,13 +25,13 @@ function message(steers) {
         swipe_info: steers.map(text => ({
             send_date: 0,
             extra: text
-                ? { fold_steer: { text, direction: FOLD_STEER_DIRECTION.STEER, at: 1, source: 'ui' } }
+                ? { sanguine_steer: { text, direction: FOLD_STEER_DIRECTION.STEER, at: 1, source: 'ui' } }
                 : {},
         })),
     };
 }
 
-describe('buildSteerTable — the Graph face over a chat', () => {
+describe('buildSteerTable, the Graph face over a chat', () => {
     test('keys by message id, one edge per swipe, in swipe order', () => {
         const chat = [
             message(['make her angrier', null, 'shorter']),
@@ -67,7 +67,7 @@ describe('buildSteerTable — the Graph face over a chat', () => {
     });
 });
 
-describe('steerForSwipe — total read off the table', () => {
+describe('steerForSwipe, total read off the table', () => {
     test('reads the record for a given message and swipe', () => {
         const table = buildSteerTable([message([null, 'be brief'])]);
         expect(steerForSwipe(table, 0, 1).text).toBe('be brief');
@@ -80,7 +80,7 @@ describe('steerForSwipe — total read off the table', () => {
     });
 });
 
-describe('steerForMessage — the single-message shortcut', () => {
+describe('steerForMessage, the single-message shortcut', () => {
     test('agrees with the table read', () => {
         const msg = message([null, 'be brief']);
         const table = buildSteerTable([msg]);
@@ -93,7 +93,7 @@ describe('steerForMessage — the single-message shortcut', () => {
     });
 });
 
-describe('normalizeSteer — chat files are user-editable and travel between installs', () => {
+describe('normalizeSteer, chat files are user-editable and travel between installs', () => {
     test('degrades malformed records to the floor', () => {
         const malformed = {
             null: null,

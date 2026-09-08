@@ -1,5 +1,5 @@
 /**
- * fold/steer.js — the single entry point for every steering surface.
+ * fold/steer.js: the single entry point for every steering surface.
  *
  * Every route into steering (the wand button, /steer, /swipe <instruction>) funnels through
  * requestSteer(), so the guards, the template rendering and the persistence shape are defined
@@ -63,14 +63,6 @@ export async function requestSteer(mesId, instruction, { source = 'ui' } = {}) {
         message.swipe_id = 0;
     }
 
-    const steerRecord = {
-        text,
-        direction: FOLD_STEER_DIRECTION.STEER,
-        at: Date.now(),
-        template: settings.steer.template,
-        source,
-    };
-
     await swipe(null, SWIPE_DIRECTION.RIGHT, {
         source: SWIPE_SOURCE.STEER,
         forceMesId: mesId,
@@ -79,8 +71,13 @@ export async function requestSteer(mesId, instruction, { source = 'ui' } = {}) {
         forceSwipeId: message.swipes.length,
         generateOptions: { quiet_prompt: rendered, quietToLoud: true },
         newSwipeExtra: {
-            sanguine_steer: steerRecord,
-            fold_steer: steerRecord,
+            sanguine_steer: {
+                text,
+                direction: FOLD_STEER_DIRECTION.STEER,
+                at: Date.now(),
+                template: settings.steer.template,
+                source,
+            },
         },
     });
 

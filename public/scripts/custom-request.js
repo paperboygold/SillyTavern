@@ -423,7 +423,7 @@ export class TextCompletionService {
  * openai.js#getGenerateData, but which this service previously did not.
  *
  * Without this, every consumer of a connection profile — the Connection Manager's own test
- * message, extension requests, fold's chronicle extraction — fails with
+ * message, extension requests, sanguine's chronicle extraction — fails with
  * "Unsupported parameter: 'max_tokens' is not supported with this model" the moment the profile
  * points at a reasoning-style OpenAI model. The rule is duplicated rather than shared because
  * openai.js applies it to a differently-shaped object mid-assembly.

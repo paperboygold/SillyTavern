@@ -1,0 +1,715 @@
+/*
+ * sanguine/overlay-assets.css: the assets tab.
+ *
+ * Injected by `overlay-assets.js` at import time, the way `overlay.js` injects `overlay.css`: the
+ * manifest holds exactly one filename and `style.css` already has it, so every sheet after the first
+ * carries itself in.
+ *
+ * What this sheet is allowed to invent.
+ *
+ * Nothing on the type scale, nothing on the opacity scale, and no colour off the semantic axis. All
+ * three are declared in `style.css` `:root` and all three are shared with the sidebar, which is the
+ * point: a player reading a place record in the overlay and a place name in the 288px panel is
+ * reading one instrument, and a second private scale here would make them two.
+ *
+ *   type      six steps. `--s-micro` is UPPERCASE letter-spaced labels only; every rule below that
+ *             uses it was checked for `text-transform: uppercase` first.
+ *   opacity   four stops, and they mean TIME. `--o-standing` for a fact that does not tick, which
+ *             is what a place's `facts` is, and `--o-dormant` for a place the story is finished
+ *             with. Structural alphas (the tree's guide rules, the hairlines) are not on the scale
+ *             and keep their own values, because they make no claim about time.
+ *   face      derived values in `--fold-mono` with tabular figures; anything a narrator wrote set as
+ *             prose. Counts, turn numbers, rates and quantities are ours. `facts`, `detail` and the
+ *             trail's before-and-after are the model's.
+ *
+ * The guide rule is the markup.
+ *
+ * Depth is a nested `<ul role="group">` per tier, the ARIA structure, so one `border-left` on the
+ * group draws exactly one guide per level, with no depth arithmetic in the JS to be kept in step
+ * with a padding scale. Indentation and the rule are then the same declaration.
+ */
+
+/* The two columns. */
+
+.sanguine_assets {
+    display: grid;
+    grid-template-columns: minmax(11em, 15em) minmax(0, 1fr);
+    gap: 0 1em;
+    align-items: start;
+    padding: 0.2em 0 0.6em;
+}
+
+.sanguine_assets_side {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35em;
+    min-width: 0;
+    /* Hairline rather than a filled column: the tree is a list beside a document, not a sidebar
+       inside a sidebar. */
+    border-right: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+    padding-right: 0.8em;
+}
+
+.sanguine_assets_detail {
+    min-width: 0;
+}
+
+/* Headings and counts. */
+
+.sanguine_assets_head {
+    margin: 0;
+    font-size: var(--s-micro);
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    opacity: var(--o-standing);
+}
+
+.sanguine_assets_side_head,
+.sanguine_assets_block_head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5em;
+    margin: 0 0 0.3em;
+}
+
+.sanguine_assets_side_head {
+    padding-bottom: 0.25em;
+    border-bottom: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+}
+
+/* A count is derived, so it is set in the instrument face. Tabular, so a column of them lines up. */
+.sanguine_assets_count {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    opacity: var(--o-standing);
+    margin-left: auto;
+}
+
+.sanguine_assets_side_head .sanguine_assets_count {
+    margin-left: 0;
+}
+
+/* The tree. */
+
+.sanguine_assets_tree,
+.sanguine_assets_group {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+/* One tier, one rule. The 0.55em indent plus the border is the whole depth cue, and it is drawn by
+   the nesting rather than by a computed padding. */
+.sanguine_assets_group {
+    margin-left: 0.45em;
+    padding-left: 0.55em;
+    border-left: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+}
+
+.sanguine_assets_node {
+    list-style: none;
+}
+
+.sanguine_assets_node_line {
+    display: flex;
+    align-items: baseline;
+    gap: 0.35em;
+    padding: 0.18em 0.35em;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.15s ease, opacity 0.15s ease;
+}
+
+.sanguine_assets_node_line:hover {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 10%, transparent);
+}
+
+/* The treeitem itself holds focus, the APG pattern, so the focus ring belongs to it and not to
+   anything inside it. Never removed, only replaced. */
+.sanguine_assets_node:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: -2px;
+    border-radius: 4px;
+}
+
+.sanguine_assets_node > .sanguine_assets_node_line > .sanguine_assets_node_name {
+    font-size: var(--s-body);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The disclosure marker. A hit area rather than a glyph: it is the one click on the row that does
+   not select, so it has to be findable by a pointer. */
+.sanguine_assets_twisty {
+    flex: 0 0 0.9em;
+    font-size: var(--s-meta);
+    text-align: center;
+    opacity: var(--o-standing);
+    cursor: pointer;
+    user-select: none;
+}
+
+.sanguine_assets_twisty:hover {
+    opacity: var(--o-now);
+}
+
+/* Selected, in the tree and on the holdings shelf. A bar and a wash, the same pair `overlay.css`
+   uses for a revealed record: the wash alone vanishes under a light theme, the bar alone is easy to
+   miss halfway down a list. */
+.sanguine_assets_on,
+.sanguine_assets_node.sanguine_assets_on > .sanguine_assets_node_line {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 16%, transparent);
+    box-shadow: inset 2px 0 0 var(--SmartThemeQuoteColor, #d4a753);
+}
+
+/* Over, moot, or left behind, the fourth opacity stop, used for exactly what it names. */
+.sanguine_assets_dormant {
+    opacity: var(--o-dormant);
+}
+
+/* A status word. Uppercase and tracked, which is what earns the floor size. */
+.sanguine_assets_chip {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--fold-warn);
+    opacity: var(--o-context);
+}
+
+/* Rows in a containment loop, which `wouldCycle` refuses to create and a hand edit still can. */
+.sanguine_assets_stranded {
+    list-style: none;
+    margin: 0.5em 0 0.2em;
+}
+
+.sanguine_assets_stranded_flag {
+    font-size: var(--s-meta);
+    color: var(--fold-warn);
+    opacity: var(--o-context);
+}
+
+/* The holdings shelf. */
+
+.sanguine_assets_shelf {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5em;
+    width: 100%;
+    margin-top: 0.5em;
+    padding: 0.3em 0.35em;
+    border: none;
+    border-top: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+    border-radius: 0 4px 4px 0;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    text-align: start;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+.sanguine_assets_shelf:hover {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 10%, transparent);
+}
+
+.sanguine_assets_shelf:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: -2px;
+}
+
+.sanguine_assets_shelf_name {
+    font-size: var(--s-body);
+}
+
+/* The empty state. */
+
+.sanguine_assets_intro {
+    padding: 0.4em 0.1em;
+}
+
+/* Deliberately NOT `--fold-warn`. Nothing is wrong: a chat with no place records is a chat that has
+   not established one yet, and colouring that as a warning would be the tab telling the player to
+   fix something that is not broken. */
+.sanguine_assets_intro_flag {
+    margin: 0 0 0.5em;
+    font-size: var(--s-body);
+    font-weight: 600;
+    opacity: var(--o-context);
+}
+
+.sanguine_assets_intro_body {
+    margin: 0 0 0.6em;
+    font-size: var(--s-sub);
+    opacity: var(--o-standing);
+}
+
+.sanguine_assets_intro_how {
+    margin: 0;
+    font-size: var(--s-sub);
+    opacity: var(--o-dormant);
+}
+
+/* The detail pane. */
+
+.sanguine_assets_title {
+    margin: 0 0 0.15em;
+    font-size: var(--s-title);
+    font-weight: 600;
+    line-height: 1.25;
+}
+
+.sanguine_assets_crumb {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.3em;
+    margin-bottom: 0.4em;
+}
+
+.sanguine_assets_crumb_in {
+    font-size: var(--s-meta);
+    opacity: var(--o-standing);
+}
+
+/* The chain up. Each step is a real button, styled back down to the text it replaces, the
+   affordance is the underline on hover, not a button chrome on every ancestor. */
+.sanguine_assets_crumb_step {
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    font-family: inherit;
+    font-size: var(--s-sub);
+    cursor: pointer;
+    opacity: var(--o-context);
+}
+
+.sanguine_assets_crumb_step::after {
+    content: ' ‹';
+    opacity: var(--o-dormant);
+}
+
+.sanguine_assets_crumb_step:last-child::after {
+    content: '';
+}
+
+.sanguine_assets_crumb_step:hover {
+    opacity: var(--o-now);
+    text-decoration: underline;
+}
+
+.sanguine_assets_crumb_step:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: 1px;
+}
+
+/* A parent named with no record behind it. Fail-open is the normal case, so it is set quietly. */
+.sanguine_assets_crumb_plain {
+    margin-bottom: 0.4em;
+    font-size: var(--s-sub);
+    opacity: var(--o-dormant);
+}
+
+/* `renderPlace`'s line, model prose joined by fold's semicolons, so it is set as prose. */
+.sanguine_assets_lede {
+    margin: 0 0 0.7em;
+    font-size: var(--s-sub);
+    opacity: var(--o-context);
+}
+
+.sanguine_assets_facts {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 0.25em 0.8em;
+    margin: 0 0 0.6em;
+}
+
+.sanguine_assets_flabel {
+    font-size: var(--s-micro);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    opacity: var(--o-standing);
+    /* The label's baseline sits with the first line of its value rather than above it. */
+    padding-top: 0.15em;
+}
+
+.sanguine_assets_fvalue {
+    margin: 0;
+    font-size: var(--s-sub);
+    overflow-wrap: anywhere;
+}
+
+/* A fact that does not tick. */
+.sanguine_assets_standing {
+    opacity: var(--o-standing);
+}
+
+/* What is true of it now, a claim about this scene, one stop brighter. */
+.sanguine_assets_current {
+    opacity: var(--o-context);
+}
+
+.sanguine_assets_meta {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    opacity: var(--o-standing);
+}
+
+/* A standing off-screen change: `drive/driveSize`, a derived pair, so mono. */
+.sanguine_assets_drive {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    color: var(--fold-rel);
+}
+
+.sanguine_assets_drive_note {
+    margin-left: 0.5em;
+    font-size: var(--s-sub);
+    opacity: var(--o-dormant);
+}
+
+/* Actions. */
+
+.sanguine_assets_actions {
+    display: flex;
+    gap: 0.4em;
+    margin-bottom: 0.9em;
+}
+
+.sanguine_assets_action {
+    padding: 0.15em 0.6em;
+    border: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    opacity: var(--o-standing);
+    transition: opacity 0.15s ease, border-color 0.15s ease;
+}
+
+.sanguine_assets_action:hover {
+    opacity: var(--o-now);
+    border-color: var(--SmartThemeQuoteColor, #d4a753);
+}
+
+.sanguine_assets_action:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: 1px;
+    opacity: var(--o-now);
+}
+
+.sanguine_assets_danger:hover {
+    border-color: var(--fold-crit);
+    color: var(--fold-crit);
+}
+
+/* Blocks: contains, here, changed. */
+
+.sanguine_assets_block {
+    margin-bottom: 0.9em;
+}
+
+.sanguine_assets_none {
+    margin: 0;
+    font-size: var(--s-sub);
+    opacity: var(--o-dormant);
+}
+
+.sanguine_assets_list,
+.sanguine_assets_kids {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.sanguine_assets_kids li {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5em;
+    padding: 0.12em 0;
+}
+
+.sanguine_assets_child {
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    font-family: inherit;
+    font-size: var(--s-body);
+    cursor: pointer;
+}
+
+.sanguine_assets_child:hover {
+    text-decoration: underline;
+    color: var(--fold-fresh);
+}
+
+.sanguine_assets_child:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: 1px;
+}
+
+.sanguine_assets_child_note {
+    font-size: var(--s-sub);
+    opacity: var(--o-standing);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* An item. */
+
+.sanguine_assets_item {
+    padding: 0.18em 0.35em 0.18em 0;
+    border-radius: 0 4px 4px 0;
+}
+
+.sanguine_assets_item_head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5em;
+}
+
+/* The story's own casing, so prose. */
+.sanguine_assets_iname {
+    font-size: var(--s-body);
+}
+
+/* A grade the story gave it, free text, never compared, so prose at the description step. */
+.sanguine_assets_irank {
+    font-size: var(--s-sub);
+    color: var(--fold-fresh);
+    opacity: var(--o-context);
+}
+
+.sanguine_assets_iqty {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    opacity: var(--o-standing);
+    margin-left: auto;
+}
+
+/* Somebody else's. `--fold-rel` is the relationship colour, which is what an owner is. */
+.sanguine_assets_iowner {
+    font-size: var(--s-sub);
+    color: var(--fold-rel);
+    opacity: var(--o-context);
+}
+
+.sanguine_assets_item_foot {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6em;
+    padding-left: 0.2em;
+}
+
+.sanguine_assets_rate {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+}
+
+.sanguine_assets_rate_up {
+    color: var(--fold-fresh);
+}
+
+.sanguine_assets_rate_down {
+    color: var(--fold-warn);
+}
+
+.sanguine_assets_paused {
+    opacity: var(--o-dormant);
+}
+
+.sanguine_assets_empties {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    opacity: var(--o-standing);
+}
+
+.sanguine_assets_urgent {
+    color: var(--fold-crit);
+    opacity: var(--o-now);
+}
+
+/* The trail. */
+
+.sanguine_assets_trail {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.sanguine_assets_trail_row {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr) max-content;
+    gap: 0.15em 0.7em;
+    align-items: baseline;
+    padding: 0.2em 0;
+    border-top: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+}
+
+.sanguine_assets_trail_field {
+    font-size: var(--s-micro);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    opacity: var(--o-standing);
+}
+
+.sanguine_assets_trail_said {
+    min-width: 0;
+    font-size: var(--s-sub);
+}
+
+/* What it was: over, so the dormant stop, and struck through so the direction reads without the
+   arrow having to be found first. */
+.sanguine_assets_trail_from {
+    opacity: var(--o-dormant);
+    text-decoration: line-through;
+}
+
+.sanguine_assets_trail_arrow {
+    margin: 0 0.35em;
+    font-family: var(--fold-mono);
+    opacity: var(--o-dormant);
+}
+
+.sanguine_assets_trail_to {
+    opacity: var(--o-context);
+}
+
+.sanguine_assets_trail_meta {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4em;
+}
+
+.sanguine_assets_trail_turn {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    opacity: var(--o-standing);
+}
+
+/* The cause-link. A real button, because it does something. */
+.sanguine_assets_jump {
+    padding: 0 0.35em;
+    border: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+    border-radius: 3px;
+    background: transparent;
+    color: inherit;
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    opacity: var(--o-standing);
+    transition: opacity 0.15s ease, border-color 0.15s ease;
+}
+
+.sanguine_assets_jump:hover {
+    opacity: var(--o-now);
+    border-color: var(--SmartThemeQuoteColor, #d4a753);
+}
+
+.sanguine_assets_jump:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: 1px;
+    opacity: var(--o-now);
+}
+
+/* A key nothing answers to. */
+
+.sanguine_assets_missing {
+    margin-bottom: 0.9em;
+    padding: 0.5em 0.6em;
+    border-left: 2px solid var(--fold-warn);
+    border-radius: 0 4px 4px 0;
+    background: color-mix(in srgb, var(--fold-warn) 8%, transparent);
+}
+
+.sanguine_assets_missing_flag {
+    margin: 0 0 0.25em;
+    font-size: var(--s-body);
+    font-weight: 600;
+    color: var(--fold-warn);
+}
+
+.sanguine_assets_missing_how {
+    margin: 0 0 0.35em;
+    font-size: var(--s-sub);
+    opacity: var(--o-standing);
+}
+
+/* A machine key, shown with its NULs made visible so an intact key does not look truncated. */
+.sanguine_assets_key {
+    margin: 0;
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    opacity: var(--o-standing);
+}
+
+/* Motion. */
+
+@media (prefers-reduced-motion: reduce) {
+    .sanguine_assets_node_line,
+    .sanguine_assets_shelf,
+    .sanguine_assets_action,
+    .sanguine_assets_jump {
+        transition: none;
+    }
+}
+
+/* Small screens.
+ *
+ * 1000px is the extension's breakpoint everywhere else. Below it the overlay is the whole screen and
+ * two columns of 15em do not fit, so the tree becomes a band above the record it selects, which is
+ * also the reading order the source already has.
+ */
+@media (max-width: 1000px) {
+    .sanguine_assets {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0.7em;
+    }
+
+    .sanguine_assets_side {
+        border-right: none;
+        border-bottom: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+        padding-right: 0;
+        padding-bottom: 0.5em;
+        max-height: 40vh;
+        overflow-y: auto;
+    }
+}
+
+/* Unreachable, said at the heading.
+ *
+ * The place was destroyed and what is stored here is still stored here. The count beside "Here" is
+ * unchanged and the rows are unchanged; this is the one clause that explains them. Semantic colour
+ * off the theme accent, instrument face, one line, a label, not a notice.
+ */
+.sanguine_assets_shut {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--fold-crit, #c94d5f);
+    opacity: var(--o-context);
+    white-space: nowrap;
+}

@@ -4,20 +4,19 @@ import assert from 'node:assert/strict';
 import {
     clearContextTerms,
     getGlossEntry,
-    rebuildActiveTrie,
     registerBatchContext,
     registerContextTerm,
     segmentAndGloss,
 } from '../public/scripts/extensions/sanguine-gloss/lexicon.js';
 
-describe('sanguine-gloss lexicon — three-tier resolution', () => {
+describe('sanguine-gloss lexicon, three-tier resolution', () => {
     test('resolves tier-2 Wuxia domain terms with pronunciation and lore', () => {
         const entry = getGlossEntry('金丹');
         assert.ok(entry);
         assert.equal(entry.say, 'jīn dān');
         assert.match(entry.mean, /Golden Core/i);
         assert.ok(entry.more);
-        assert.match(entry.more, /51–100/);
+        assert.match(entry.more, /51, 100/);
     });
 
     test('resolves tier-3 common lexicon words', () => {

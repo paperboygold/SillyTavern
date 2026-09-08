@@ -91,7 +91,7 @@ test.describe('fold — directed retry', () => {
         await plainSwipeRight(page);
         const plain = await lastMessageSwipeState(page);
 
-        // Guards the `delete message.extra.fold_steer` line in clearMessageData: without it,
+        // Guards the `delete message.extra.sanguine_steer` line in clearMessageData: without it,
         // syncSwipeToMes restores the instruction and it silently rides onto the next swipe.
         expect(plain.swipeCount).toBe(steered.swipeCount + 1);
         expect(plain.steers[plain.swipeId]).toBeNull();
@@ -167,7 +167,7 @@ test.describe('fold — directed retry', () => {
         mockServer.reset();
         const rejected = await page.evaluate(async () => {
             const { chat } = await import('./script.js');
-            const { requestSteer } = await import('./scripts/extensions/fold/steer.js');
+            const { requestSteer } = await import('./scripts/extensions/sanguine/steer.js');
             return await requestSteer(chat.length - 1, '   ', { source: 'ui' });
         });
         expect(rejected).toBe(false);

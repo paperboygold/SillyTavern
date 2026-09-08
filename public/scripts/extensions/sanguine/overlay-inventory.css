@@ -1,0 +1,696 @@
+/*
+ * sanguine/overlay-inventory.css: the inventory tab.
+ *
+ * A third sheet, for the reason `overlay.css` gives at its head: `addExtensionStyle`
+ * (extensions.js:781) reads exactly one filename out of the manifest, `style.css` already holds it,
+ * and `overlay.js` injects the second. This one is injected by `overlay-inventory.js` on the same
+ * pattern, so the tab carries its own look and nothing in the shell has to know it exists.
+ *
+ * What it inherits.
+ *
+ * Every value here comes from `style.css` `:root`. That is not tidiness, it is the whole design:
+ *
+ *   · SIX type steps and no seventh. `--s-display` … `--s-micro`. A rule that "needs" something in
+ *     between has not decided whether it is a name or a description, and the fix is the decision.
+ *     `--s-micro` is uppercase letter-spaced labels ONLY, SEARCH, SORT, AUDIT TRAIL, the chips,
+ *     the group headings. Lowercase prose at 9.3px is not small, it is unread.
+ *   · FOUR opacity stops, and they mean time. `--o-now` for what the row IS, `--o-context` for what
+ *     qualifies it, `--o-standing` for fold's own bookkeeping. Opacity never doubles as emphasis.
+ *   · MONO IS LOAD-BEARING. Counts, deltas and running totals are derived, so they are set in
+ *     `--fold-mono` with tabular figures. A trail summary is a sentence the model wrote, so it is
+ *     set as prose. If you can see the typeface, you know who produced the value.
+ *   · The semantic axis, `--fold-fresh` / `-warn` / `-crit`, is spent on MEANING and nothing else.
+ *     Here that is exactly two things: a gain reads fresh and a loss reads warn in the audit trail,
+ *     and the erase action reads crit. Selection and hover are chrome and take the theme accent.
+ */
+
+.sanguine_inv {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    /* Written by a ResizeObserver in `overlay-inventory.js`: it is how far down the group headings
+       stick, and the controls are one line on a wide dialog and two when they wrap. A hardcoded
+       offset is a heading that hides behind the search box at one width and floats at another. */
+    --inv-controls-h: 3.2em;
+}
+
+/* Controls. */
+
+.sanguine_inv_controls {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0.4em 0.6em;
+    padding: 0.25em 0 0.45em;
+    /* Opaque, because rows scroll UNDER this. The popup's own surface colour, so the bar reads as
+       part of the frame rather than as a card floating on it. */
+    background: var(--SmartThemeBlurTintColor, rgba(24, 24, 28, 0.96));
+    border-bottom: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+}
+
+.sanguine_inv_search {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15em;
+    flex: 1 1 11em;
+    min-width: 8em;
+    margin: 0;
+}
+
+.sanguine_inv_sortwrap {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15em;
+    flex: 0 0 auto;
+    margin: 0;
+}
+
+/* The only thing `--s-micro` is for. A real <label>, not a placeholder: a placeholder is not an
+   accessible name and it vanishes at the moment the field has content. */
+.sanguine_inv_label {
+    font-size: var(--s-micro);
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    opacity: var(--o-standing);
+}
+
+.sanguine_inv_input,
+.sanguine_inv_sort {
+    font-size: var(--s-sub);
+    height: auto;
+    padding: 0.25em 0.5em;
+    margin: 0;
+}
+
+.sanguine_inv_sort {
+    /* The three orderings are short words; letting the select size to its widest keeps the bar from
+       reflowing when the choice changes. */
+    min-width: 7.5em;
+}
+
+/* Category chips. */
+
+.sanguine_inv_chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.3em;
+    flex: 1 1 100%;
+    min-width: 0;
+}
+
+.sanguine_inv_chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.4em;
+    padding: 0.2em 0.6em;
+    border: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+    border-radius: 999px;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    cursor: pointer;
+    opacity: var(--o-standing);
+    transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+
+.sanguine_inv_chip:hover {
+    opacity: var(--o-now);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 10%, transparent);
+}
+
+/* Never removed, only replaced. It is the only thing telling a keyboard user where they are. */
+.sanguine_inv_chip:focus-visible,
+.sanguine_inv_add:focus-visible,
+.sanguine_inv_act:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: 1px;
+    opacity: var(--o-now);
+}
+
+/* Selection is CHROME, so it takes the theme accent and leaves the semantic axis alone, spending
+   the urgency colour on "which filter am I on" is how a tracker loses the ability to say urgent.
+   Two devices, never one: a fill and a border, so it survives a theme whose accent neighbours its
+   background. */
+.sanguine_inv_chip_on {
+    opacity: var(--o-now);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 20%, transparent);
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 55%, transparent);
+}
+
+/* A category the search left nothing in. Still shown, a chip list that reshuffles as you type is
+   unusable: and dimmed to the stop that means "not what is happening now". */
+.sanguine_inv_chip_empty:not(.sanguine_inv_chip_on) {
+    opacity: var(--o-dormant);
+}
+
+.sanguine_inv_chip_label {
+    font-size: var(--s-micro);
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+}
+
+/* A count is derived, so it is mono and tabular even at three characters. */
+.sanguine_inv_chip_count {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    opacity: var(--o-context);
+}
+
+.sanguine_inv_add {
+    flex: 0 0 auto;
+    align-self: flex-end;
+    padding: 0.25em 0.7em;
+    border: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: var(--s-sub);
+    cursor: pointer;
+    opacity: var(--o-context);
+    transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+
+.sanguine_inv_add:hover {
+    opacity: var(--o-now);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 12%, transparent);
+}
+
+/* The live region. Empty most of the time, so it must not reserve a line, it only speaks after an
+   edit takes the row (and the button that was pressed) out of the document. */
+.sanguine_inv_status {
+    flex: 1 1 100%;
+    margin: 0;
+    font-size: var(--s-sub);
+    opacity: var(--o-context);
+}
+
+.sanguine_inv_status:empty {
+    display: none;
+}
+
+/* Groups. */
+
+.sanguine_inv_body {
+    padding-bottom: 1em;
+}
+
+.sanguine_inv_group {
+    position: sticky;
+    top: var(--inv-controls-h, 3.2em);
+    z-index: 2;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.6em;
+    margin: 0;
+    padding: 0.5em 0 0.25em;
+    background: var(--SmartThemeBlurTintColor, rgba(24, 24, 28, 0.96));
+    border-bottom: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+    font-weight: 600;
+}
+
+.sanguine_inv_group_name {
+    font-size: var(--s-micro);
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    opacity: var(--o-standing);
+}
+
+.sanguine_inv_group_count {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    font-weight: 400;
+    opacity: var(--o-standing);
+}
+
+.sanguine_inv_list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+/* Rows. */
+
+.sanguine_inv_row {
+    border-bottom: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+}
+
+.sanguine_inv_head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5em;
+    width: 100%;
+    padding: 0.4em 0.4em 0.4em 0.1em;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    text-align: start;
+    cursor: pointer;
+    transition: background-color 0.12s ease;
+}
+
+.sanguine_inv_head:hover {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 8%, transparent);
+}
+
+.sanguine_inv_head:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: -2px;
+}
+
+/* The record `open({tab, focus})` landed on. `overlay.css` paints `.sanguine_overlay_hit`, but the
+   head declares `background: transparent` at the same specificity from a later sheet and would win.
+   Restated here at two classes so the landing is visible where it matters most. */
+.sanguine_inv_head.sanguine_overlay_hit {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 14%, transparent);
+    box-shadow: inset 2px 0 0 var(--SmartThemeQuoteColor, #d4a753);
+}
+
+.sanguine_inv_caret {
+    flex: 0 0 0.7em;
+    font-style: normal;
+    font-size: var(--s-meta);
+    opacity: var(--o-standing);
+    transition: transform 0.15s ease;
+}
+
+.sanguine_inv_open > .sanguine_inv_head .sanguine_inv_caret {
+    transform: rotate(90deg);
+}
+
+/* The name the story wrote, in the story's own casing. Prose face, the step that is for "names of
+   people, things, stakes", and the only 600 weight on the row, one thing per row is the loudest. */
+.sanguine_inv_name {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: var(--s-body);
+    font-weight: 600;
+    opacity: var(--o-now);
+    overflow-wrap: anywhere;
+}
+
+/* The grade. Derived and never compared, so: instrument face, one step down, one stop dimmer.
+   Two devices between it and the name, which is the rule. */
+.sanguine_inv_rank {
+    flex: 0 0 auto;
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    opacity: var(--o-context);
+    white-space: nowrap;
+}
+
+/* Whose it is, when it is not yours. A relationship, which is what `--fold-rel` is for. */
+.sanguine_inv_owner {
+    flex: 0 0 auto;
+    padding: 0.05em 0.45em;
+    border: 1px solid color-mix(in srgb, var(--fold-rel, #8b73d4) 45%, transparent);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--fold-rel, #8b73d4);
+    font-family: inherit;
+    font-size: var(--s-micro);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+    opacity: var(--o-context);
+    white-space: nowrap;
+}
+
+.sanguine_inv_owner:hover {
+    opacity: var(--o-now);
+}
+
+.sanguine_inv_owner:focus-visible {
+    outline: 2px solid var(--fold-rel, #8b73d4);
+    outline-offset: 1px;
+}
+
+/* Not a control: the story named a holder fold has no cast row for, so there is nowhere to go. */
+.sanguine_inv_owner_flat {
+    cursor: default;
+}
+
+/* The count. Derived, so mono and tabular; right-aligned in a fixed gutter so sixty of them read as
+   a column rather than as sixty ragged endings. */
+.sanguine_inv_qty {
+    flex: 0 0 auto;
+    min-width: 4.5ch;
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    text-align: right;
+    opacity: var(--o-now);
+}
+
+/* A capability has no count, so the gutter `.sanguine_inv_qty` reserves is not there to keep the
+   column straight. Padding the row's tail by the same amount keeps the Abilities group aligned with
+   the groups above it instead of running four characters wider than every other row on the screen.
+   Reserved rather than removed, deliberately: the eye tracks a single right edge down the whole
+   list, and a group that breaks it reads as a rendering fault rather than as a different kind. */
+.sanguine_inv_row_ability .sanguine_inv_head {
+    padding-right: calc(4.5ch + 0.5em);
+}
+
+/* The detail. */
+
+.sanguine_inv_detail {
+    padding: 0.1em 0.4em 0.7em 1.3em;
+}
+
+.sanguine_inv_meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.2em 1em;
+    margin-bottom: 0.5em;
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    opacity: var(--o-standing);
+}
+
+.sanguine_inv_trail {
+    margin-bottom: 0.6em;
+}
+
+.sanguine_inv_trail_list {
+    list-style: none;
+    margin: 0.2em 0 0;
+    padding: 0;
+}
+
+.sanguine_inv_trail_line {
+    display: grid;
+    /* delta · what happened · running total. The two outer columns are fixed so the arithmetic
+       lines up down the page, which is the only reason a running total is worth printing. */
+    grid-template-columns: 4.5ch 1fr 5ch;
+    gap: 0.6em;
+    align-items: baseline;
+    width: 100%;
+    padding: 0.18em 0.3em;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    text-align: start;
+}
+
+.sanguine_inv_trail_jump {
+    cursor: pointer;
+}
+
+.sanguine_inv_trail_jump:hover {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 10%, transparent);
+}
+
+.sanguine_inv_trail_jump:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: -1px;
+}
+
+/* Derived arithmetic, on the semantic axis: a gain is fresh, a loss warns. Not crit, a spent round
+   is not a crisis, and an axis that shouts at every subtraction cannot say anything else. */
+.sanguine_inv_dq {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    text-align: right;
+}
+
+.sanguine_inv_gain {
+    color: var(--fold-fresh, #d4a753);
+}
+
+.sanguine_inv_loss {
+    color: var(--fold-warn, #d67a46);
+}
+
+/* The model's own sentence. Prose face, the step that is for "prose about them". */
+.sanguine_inv_sum {
+    font-size: var(--s-sub);
+    opacity: var(--o-context);
+    overflow-wrap: anywhere;
+}
+
+.sanguine_inv_run {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    text-align: right;
+    opacity: var(--o-standing);
+}
+
+/* Actions. */
+
+.sanguine_inv_actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4em;
+}
+
+.sanguine_inv_act {
+    padding: 0.22em 0.7em;
+    border: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: var(--s-sub);
+    cursor: pointer;
+    opacity: var(--o-context);
+    transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+
+.sanguine_inv_act:hover {
+    opacity: var(--o-now);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 12%, transparent);
+}
+
+/* Erasing events is the one irreversible thing on this tab, so it is the one thing wearing the
+   crisis colour. It must READ as destructive before it is pressed, not only after. */
+.sanguine_inv_danger {
+    border-color: color-mix(in srgb, var(--fold-crit, #c94d5f) 50%, transparent);
+    color: var(--fold-crit, #c94d5f);
+}
+
+.sanguine_inv_danger:hover {
+    background: color-mix(in srgb, var(--fold-crit, #c94d5f) 15%, transparent);
+}
+
+.sanguine_inv_danger:focus-visible {
+    outline-color: var(--fold-crit, #c94d5f);
+}
+
+/* Notes. */
+
+.sanguine_inv_empty {
+    margin: 0.8em 0;
+    font-size: var(--s-sub);
+    opacity: var(--o-standing);
+}
+
+/* A key that arrived from a sidebar row which no longer exists. An unfinished, unresolvable state,
+   which is what the warn colour is for. */
+.sanguine_inv_missing {
+    margin: 0.6em 0;
+    padding: 0.4em 0.6em;
+    border-left: 2px solid var(--fold-warn, #d67a46);
+    font-size: var(--s-sub);
+    color: var(--fold-warn, #d67a46);
+}
+
+.sanguine_inv_confirm_note {
+    font-size: var(--s-sub);
+    opacity: var(--o-standing);
+}
+
+/* Motion. */
+
+@media (prefers-reduced-motion: reduce) {
+    .sanguine_inv_chip,
+    .sanguine_inv_add,
+    .sanguine_inv_act,
+    .sanguine_inv_head,
+    .sanguine_inv_caret {
+        transition: none;
+    }
+}
+
+/* Small screens.
+ *
+ * Same 1000px cutover the panel and `overlay.css` use. The bar keeps its order and simply gets
+ * taller as it wraps; the sticky offset is measured, so the headings follow it without a media
+ * query of their own.
+ */
+@media (max-width: 1000px) {
+    .sanguine_inv_search {
+        flex: 1 1 100%;
+    }
+
+    .sanguine_inv_detail {
+        padding-left: 0.6em;
+    }
+
+    .sanguine_inv_trail_line {
+        grid-template-columns: 4ch 1fr 4.5ch;
+        gap: 0.4em;
+    }
+}
+
+/* Parts: what a row is MADE OF.
+ *
+ * One tier down from the item and drawn as one: tighter, quieter, and with the name in the
+ * instrument face because it is fold's own key while the reading beside it is the story's words.
+ * The line is a button, the whole of it, for `sanguine_inv_head`'s reason: a control the eye can
+ * see and the keyboard can reach, with the focus ring and the announcement arriving with the
+ * element rather than being rebuilt worse on a div.
+ */
+.sanguine_inv_parts {
+    margin-bottom: 0.6em;
+}
+
+.sanguine_inv_parts_list {
+    list-style: none;
+    margin: 0.2em 0 0.4em;
+    padding: 0;
+}
+
+.sanguine_inv_part {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6em;
+    justify-content: space-between;
+}
+
+.sanguine_inv_part_head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6em;
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0.18em 0.3em;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    text-align: start;
+    cursor: pointer;
+}
+
+.sanguine_inv_part_head:hover {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 10%, transparent);
+}
+
+.sanguine_inv_part_head:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: -1px;
+}
+
+/* fold's own key: instrument face, and the stop a standing fact sits at. */
+.sanguine_inv_part_name {
+    flex: 0 0 auto;
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    opacity: var(--o-standing);
+    white-space: nowrap;
+}
+
+/* The story's words: prose face, full size, never interpreted. */
+.sanguine_inv_part_value {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: var(--s-sub);
+    opacity: var(--o-context);
+    overflow-wrap: anywhere;
+}
+
+.sanguine_inv_part_meta {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5em;
+    flex: 0 0 auto;
+}
+
+.sanguine_inv_part_since,
+.sanguine_inv_part_orphan {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    opacity: var(--o-dormant);
+    white-space: nowrap;
+}
+
+.sanguine_inv_part_jump,
+.sanguine_inv_part_drop {
+    padding: 0.1em 0.4em;
+    border: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+    border-radius: 3px;
+    background: transparent;
+    color: inherit;
+    font-size: var(--s-micro);
+    opacity: var(--o-standing);
+    cursor: pointer;
+}
+
+.sanguine_inv_part_jump:hover,
+.sanguine_inv_part_drop:hover {
+    opacity: var(--o-now);
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 50%, transparent);
+}
+
+.sanguine_inv_part_drop:hover {
+    border-color: color-mix(in srgb, var(--fold-crit, #c94d5f) 50%, transparent);
+    color: var(--fold-crit, #c94d5f);
+}
+
+/* Unreachable: dimmed, never hidden.
+ *
+ * The place it is in was destroyed. The row keeps its count and its actions and drops one opacity
+ * stop, with the reason on a chip in the semantic colour. It is NOT removed and it is NOT crossed
+ * out: `cap:stale-hidden` read 540 in Raccoon City doing exactly that to things in a character's
+ * pockets, and the lesson is that fold may explain, never quietly withdraw.
+ */
+.sanguine_inv_shut > .sanguine_inv_head > .sanguine_inv_name,
+.sanguine_inv_shut > .sanguine_inv_head > .sanguine_inv_qty {
+    opacity: var(--o-dormant);
+}
+
+.sanguine_inv_shut_chip,
+.sanguine_inv_group_shut_note {
+    flex: 0 0 auto;
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--fold-crit, #c94d5f);
+    opacity: var(--o-context);
+    white-space: nowrap;
+}
+
+.sanguine_inv_group_shut {
+    border-bottom-color: color-mix(in srgb, var(--fold-crit, #c94d5f) 40%, transparent);
+}
+
+.sanguine_inv_shut_why {
+    margin: 0 0 0.6em;
+    font-size: var(--s-sub);
+    opacity: var(--o-context);
+}
+
+.sanguine_inv_shut_why strong {
+    font-weight: 600;
+}
+
+/* A part addressed to a row that stopped existing, a split, or a thing that left the story. Listed
+   at the foot rather than swept, so the player decides. */
+.sanguine_inv_loose .sanguine_inv_part_head {
+    cursor: default;
+}

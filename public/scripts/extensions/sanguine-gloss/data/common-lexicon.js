@@ -23,7 +23,6 @@ export const COMMON_LEXICON = {
     '上': { say: 'shàng', mean: 'up / above / upon' },
     '下': { say: 'xià', mean: 'down / below / lower' },
     '天': { say: 'tiān', mean: 'heaven / sky / day' },
-    '地': { say: 'dì', mean: 'earth / ground / land' },
     '心': { say: 'xīn', mean: 'heart / mind' },
     '手': { say: 'shǒu', mean: 'hand' },
     '眼': { say: 'yǎn', mean: 'eye' },

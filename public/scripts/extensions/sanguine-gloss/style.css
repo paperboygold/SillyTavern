@@ -4,12 +4,31 @@
  * Modeled after sanguinehost.com/public/index.html with SillyTavern theme integration.
  */
 
-/* ── Interactive Highlighted Term ────────────────────────────────────────── */
+/* ── Interactive Highlighted Term ──────────────────────────────────────────
+   The text keeps its own colour, and the gloss shows itself only under the cursor.
+
+   This used to paint every glossed term gold. That was defensible while the lexicon held 187
+   curated entries and a gold character meant "somebody wrote a note about this one" — but the
+   per-character floor made every ideograph glossable, so the colour stopped distinguishing
+   anything and became a second, competing highlight over the whole of the Chinese text.
+
+   Two things it was quietly costing, beyond taste:
+
+     · SillyTavern colours quoted dialogue, and a hard `color` on the span OVERRODE it — a glossed
+       character inside dialogue lost the dialogue colour and took the gloss's instead. `inherit`
+       gives it back, so dialogue colouring, italics, quote styling and any user theme all show
+       through the gloss untouched.
+     · with total coverage the honest affordance is "hover anything Chinese", which needs no mark
+       at all. `cursor: help` says it at the moment it matters and nothing says it the rest of the
+       time.
+
+   `.sanguine-gloss-floor` is still set on floor hits — it is a real distinction and worth keeping
+   as a styling hook — it simply no longer earns a colour of its own. */
 .sanguine-gloss-term,
 .gloss {
     cursor: help;
-    color: #d4a753;
-    border-bottom: 1px dashed rgba(212, 167, 83, 0.75);
+    color: inherit;
+    border-bottom: 1px dashed transparent;
     transition: color 0.18s ease, text-shadow 0.18s ease, border-color 0.18s ease;
     padding: 0 1px;
     border-radius: 2px;

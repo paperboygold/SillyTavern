@@ -1,17 +1,36 @@
-import { describe, expect, test } from './test-harness.js';
+import { describe, expect, test } from '@jest/globals';
 
 import {
+    ABILITIES,
+    ASSETS,
+    CARRIED,
+    MAX_CHANGES_PER_TURN,
+    MAX_CONDITION_TURNS,
+    MAX_MONEY,
+    MAX_QTY,
+    MONEY,
+    STALE_THRESHOLD,
+    carriedBaseline,
+    deltaAllowance,
     deriveState,
-    isFresh,
+    isDisposable,
     isMentioned,
-    MAX_DELTA,
+    itemKey,
+    itemPhrases,
+    markKey,
+    magnitudeCorroborated,
     normalizeItemName,
     normalizeKey,
+    normalizePlace,
+    renderLedger,
     renderState,
-    STALE_THRESHOLD,
+    setQty,
+    splitItemKey,
+    statusSubject,
     validateInventory,
     validateStatus,
     validateVitals,
+    vitalLabel,
 } from '../public/scripts/extensions/sanguine/state-table.js';
 
 /**
@@ -24,8 +43,32 @@ import {
 const ev = (t, d, s = 'something happened') => ({ s, kw: [], t, src: 'llm', d });
 
 describe('normalizeItemName', () => {
-    test('lowercases and trims', () => {
-        expect(normalizeItemName('  Healing Potion  ')).toEqual({ name: 'healing potion', qty: null });
+    /*
+     * The KEY is lowercased and the NAME the story wrote is kept beside it.
+     *
+     * This returned only the lowercased form, so `SIG P226` and `KV Cache` were destroyed at write
+     * time and the panel's `sentenceCase` could only ever render them `Sig p226` and `Kv cache`.
+     * Casing carries meaning no display heuristic can reconstruct, initialisms, model numbers,
+     * trade names, and `entity-table.js` had already solved the same problem by returning
+     * `{key, display}`. The key stays lowercase so two spellings remain one row.
+     */
+    test('lowercases and trims the key', () => {
+        expect(normalizeItemName('  Healing Potion  ')).toMatchObject({ name: 'healing potion', qty: null });
+    });
+
+    test('and keeps the casing the story actually used', () => {
+        expect(normalizeItemName('SIG P226').display).toBe('SIG P226');
+        expect(normalizeItemName('KV Cache').display).toBe('KV Cache');
+        expect(normalizeItemName('SIG P226').name).toBe('sig p226');
+    });
+
+    test('two spellings of one thing are still one row', () => {
+        expect(normalizeItemName('SIG P226').name).toBe(normalizeItemName('sig p226').name);
+    });
+
+    test('the quantity comes off the face as well as the key', () => {
+        expect(normalizeItemName('3x KV Cache')).toMatchObject({ name: 'kv cache', display: 'KV Cache', qty: 3 });
+        expect(normalizeItemName('Mossberg 590 x2')).toMatchObject({ name: 'mossberg 590', display: 'Mossberg 590', qty: 2 });
     });
 
     test('strips the decoration models actually emit', () => {
@@ -36,22 +79,133 @@ describe('normalizeItemName', () => {
 
     test('pulls a leading quantity out of the name', () => {
         // Models write "3x potion" at least as often as they fill in a quantity field.
-        expect(normalizeItemName('3x Healing Potion')).toEqual({ name: 'healing potion', qty: 3 });
-        expect(normalizeItemName('2 gold coins')).toEqual({ name: 'gold coins', qty: 2 });
+        expect(normalizeItemName('3x Healing Potion')).toMatchObject({ name: 'healing potion', qty: 3 });
+        expect(normalizeItemName('2 gold coins')).toMatchObject({ name: 'gold coins', qty: 2 });
     });
 
     test('pulls a trailing quantity out of the name', () => {
-        expect(normalizeItemName('Healing Potion x3')).toEqual({ name: 'healing potion', qty: 3 });
+        expect(normalizeItemName('Healing Potion x3')).toMatchObject({ name: 'healing potion', qty: 3 });
     });
 
-    test('rejects nothing-shaped and dangerous names', () => {
-        for (const raw of ['', '   ', null, undefined, 'None', '__proto__', 'constructor', 'prototype']) {
-            expect(normalizeItemName(raw)).toBeNull();
-        }
+    test('rejects structurally empty and dangerous names', () => {
+        // 'None' is a name the model reported, so it is stored, the English sentinel is gone. Only
+        // structurally empty strings and prototype-pollution keys are unusable.
+        expect(normalizeItemName('')).toBeNull();
+        expect(normalizeItemName('   ')).toBeNull();
+        expect(normalizeItemName(null)).toBeNull();
+        expect(normalizeItemName(undefined)).toBeNull();
+        expect(normalizeItemName('__proto__')).toBeNull();
+        expect(normalizeItemName('constructor')).toBeNull();
+        expect(normalizeItemName('prototype')).toBeNull();
+        expect(normalizeItemName('None')?.name).toBe('none');
     });
 
     test('caps absurd lengths', () => {
         expect(normalizeItemName('x'.repeat(500)).name.length).toBeLessThanOrEqual(64);
+    });
+
+    test('keeps a parenthesised qualifier intact', () => {
+        // Stripping every trailing bracket turned "Thinkpad (closed)" into "thinkpad (closed",
+        // which the user saw in the panel as a truncated name.
+        expect(normalizeItemName('Thinkpad (closed)').name).toBe('thinkpad (closed)');
+        expect(normalizeItemName('Beretta M92F (12 rounds, one spare)').name)
+            .toBe('beretta m92f (12 rounds, one spare)');
+    });
+
+    test('still strips brackets that wrap the whole name', () => {
+        expect(normalizeItemName('[Sword]').name).toBe('sword');
+        expect(normalizeItemName('(Sword)').name).toBe('sword');
+        expect(normalizeItemName('"Sword"').name).toBe('sword');
+    });
+
+    test('strips a stray closer that nothing opened', () => {
+        expect(normalizeItemName('Sword)').name).toBe('sword');
+    });
+});
+
+describe('item places', () => {
+    test('an item key round-trips through its place', () => {
+        // `who` is always reported; '' is the point-of-view character's, which is every key a
+        // chat written before owners existed carries.
+        expect(splitItemKey(itemKey('crowbar', 'car boot')))
+            .toEqual({ who: '', place: 'car boot', name: 'crowbar' });
+    });
+
+    test('carried is the default; the protocol token collapses to it', () => {
+        for (const place of [undefined, '', 'carried']) {
+            expect(splitItemKey(itemKey('rope', place)).place).toBe(CARRIED);
+        }
+    });
+
+    test('a key written before places existed reads as carried', () => {
+        expect(splitItemKey('rope')).toEqual({ who: '', place: CARRIED, name: 'rope' });
+    });
+
+    test('the same item in two places stays two entries', () => {
+        // "Everything you own is in your pockets" stops being true the moment there is a car.
+        const { inv } = deriveState([
+            ev(1, { inv: [{ item: 'crowbar', dq: 1 }] }),
+            ev(2, { inv: [{ item: 'crowbar', dq: 1, at: 'car boot' }] }),
+        ]);
+        expect(inv.get(itemKey('crowbar'))).toEqual({ qty: 1 });
+        expect(inv.get(itemKey('crowbar', 'car boot'))).toEqual({ qty: 1 });
+    });
+
+    test('moving an item is a loss in one place and a gain in the other', () => {
+        const { inv } = deriveState([
+            ev(1, { inv: [{ item: 'crowbar', dq: 1, at: 'apartment' }] }),
+            ev(2, { inv: [{ item: 'crowbar', dq: -1, at: 'apartment' }, { item: 'crowbar', dq: 1 }] }),
+        ]);
+        expect(inv.has(itemKey('crowbar', 'apartment'))).toBe(false);
+        expect(inv.get(itemKey('crowbar'))).toEqual({ qty: 1 });
+    });
+
+    test('renderState groups by place', () => {
+        const inv = new Map([
+            [itemKey('wallet'), { qty: 1 }],
+            [itemKey('shotgun', 'apartment'), { qty: 1 }],
+        ]);
+        const block = renderState({ inv, vitals: new Map(), marks: new Map() });
+        expect(block).toContain('Carrying: wallet');
+        expect(block).toContain('Stored (apartment): shotgun');
+    });
+
+    test('a treasury is a literal place now, the model writes "money" for money', () => {
+        // The English synonym list ("treasury"=money, "coffers"=money) is gone: fold does not guess
+        // what an `at` label means. The schema instruction tells the model to write `at: "money"`
+        // for a balance, and fold trusts the protocol token. "treasury" is a room, not a synonym.
+        expect(normalizePlace('treasury')).toBe('treasury');
+        expect(normalizePlace('money')).toBe(MONEY);
+        expect(normalizePlace('assets')).toBe(ASSETS);
+        expect(normalizePlace('abilities')).toBe(ABILITIES);
+    });
+
+    test('a stated balance establishes through set, not dq', () => {
+        // The extraction schema exposes `set` so a first-stated treasury ("12,400 marks") lands as
+        // an establishment. The model writes `at: "money"` per the instruction; fold keys it there.
+        const { inv } = deriveState([
+            ev(1, { inv: [{ item: 'marks', dq: 0, set: 12400, at: 'money' }] }),
+        ]);
+        expect(inv.get(itemKey('marks', MONEY))).toEqual({ qty: 12400 });
+        // The single money row is keyed under the money place, there is no second row at a place
+        // literally called "treasury".
+        const entries = [...inv.entries()];
+        expect(entries).toHaveLength(1);
+        expect(splitItemKey(entries[0][0]).place).toBe(MONEY);
+    });
+
+    test('a model-authored set: 0 under strict mode is not a restatement', () => {
+        // Strict structured output forces `set` into every row, so the write path must read a
+        // 0/null `set` on an ordinary delta as "not a restatement", otherwise every item the
+        // model touches resets to zero. (The fold path still treats a stored `set: 0` as a
+        // removal; that is the difference between a proposal and a record.)
+        const result = validateInventory({
+            inv: new Map(),
+            windowText: 'she picked up a rope',
+            deltas: [{ item: 'rope', dq: 1, set: 0 }],
+        });
+        expect(result.accepted).toEqual([{ item: 'rope', dq: 1 }]);
+        expect(result.rejected).toEqual([]);
     });
 });
 
@@ -63,14 +217,19 @@ describe('normalizeKey', () => {
     });
 });
 
-describe('isMentioned — the mention gate', () => {
-    test('matches on the head of the noun phrase', () => {
-        expect(isMentioned('healing potion', 'she drank the potion')).toBe(true);
-        expect(isMentioned('iron sword', 'he drew his sword')).toBe(true);
+describe('isMentioned, the block-path fallback, exact-name only', () => {
+    test('matches the full name when it appears verbatim', () => {
+        // This is the fallback that runs only when no model report exists. The primary gate is the
+        // model's `mentions` report, which names items exactly. The old head-noun truncation
+        // (`itemHead` splitting "healing potion" on English prepositions) is gone; the name is
+        // matched as the model wrote it.
+        expect(isMentioned('healing potion', 'she drank the healing potion')).toBe(true);
+        expect(isMentioned('iron sword', 'he drew his iron sword')).toBe(true);
     });
 
-    test('ignores parenthetical qualifiers', () => {
-        expect(isMentioned('potion (minor)', 'she drank the potion')).toBe(true);
+    test('a parenthetical is part of the name, not stripped by fold', () => {
+        expect(isMentioned('potion (minor)', 'she drank the potion (minor)')).toBe(true);
+        expect(isMentioned('potion (minor)', 'she drank the potion')).toBe(false);
     });
 
     test('rejects what the narrative never mentions', () => {
@@ -98,7 +257,7 @@ describe('isMentioned — the mention gate', () => {
     });
 });
 
-describe('validateInventory — the model proposes, the merge disposes', () => {
+describe('validateInventory, the model proposes, the merge disposes', () => {
     const base = { inv: new Map(), windowText: 'she picked up a rope and two coins' };
 
     test('accepts a mentioned, plausible gain', () => {
@@ -107,16 +266,105 @@ describe('validateInventory — the model proposes, the merge disposes', () => {
         expect(result.rejected).toEqual([]);
     });
 
-    test('rejects a change to something the narrative never mentions', () => {
-        // The strongest rule: a model cannot invent state changes for things nobody talked about.
-        const result = validateInventory({ ...base, deltas: [{ item: 'dragon egg', dq: 1 }] });
+    test('a change proposed against an EMPTY coverage report is refused', () => {
+        // The strongest rule, restated against the attestation. fold no longer decides whether two
+        // spellings are one thing, that is record linkage, the model's job. What it still refuses
+        // is a model that was asked what the excerpt names, answered NOTHING, and proposed a change
+        // anyway. That is the hallucination this gate exists for.
+        const result = validateInventory({ ...base, mentioned: new Set(), deltas: [{ item: 'dragon egg', dq: 1 }] });
         expect(result.accepted).toEqual([]);
         expect(result.rejected[0].reason).toBe('not-mentioned');
     });
 
+    test('and with no report at all there is nothing to judge, so nothing is refused', () => {
+        // The block path, the review's money answer and the unit fixtures pass no report. Refusing
+        // them would break every caller that does not run the events probe; the magnitude, re-tell
+        // and overdraw gates still apply to all of them.
+        const result = validateInventory({ ...base, deltas: [{ item: 'dragon egg', dq: 1 }] });
+        expect(result.rejected).toEqual([]);
+    });
+
+    test('a reported item is accepted even when the window test would fail (coverage wins)', () => {
+        // The model's report is authoritative: a paraphrased item it declares is admitted even if
+        // the window cannot token-match it, the whole point of coverage over substring.
+        const result = validateInventory({
+            ...base,
+            windowText: 'she stowed her things by the door',
+            mentioned: new Set(['the traveller\'s pack']),
+            deltas: [{ item: 'the traveller\'s pack', dq: 1 }],
+        });
+        expect(result.accepted).toEqual([{ item: 'the traveller\'s pack', dq: 1 }]);
+        expect(result.rejected).toEqual([]);
+    });
+
+    test('a window-mentioned item is accepted even when the model under-reported its mentions', () => {
+        // Measured in the Wuxia RP: the model's coverage report omitted items the prose visibly
+        // named, and the old gate rejected every one as `not-mentioned`. The window test rescues a
+        // name the report forgot, while still refusing something neither report nor window has.
+        const result = validateInventory({
+            ...base,
+            windowText: 'she picked up a rope and two coins, then sheathed the iron dagger',
+            mentioned: new Set(['rope', 'coins']), // dagger omitted from the report
+            deltas: [{ item: 'dagger', dq: 1 }],
+        });
+        expect(result.accepted).toEqual([{ item: 'dagger', dq: 1 }]);
+        expect(result.rejected).toEqual([]);
+    });
+
+    test('a non-empty report admits the delta even when the wording differs', () => {
+        // This is the fix, stated as a test. MEASURED against the old relation: "low-grade spirit
+        // stone" vs a report of "spirit stones" was REFUSED, as were "copper penny" vs "copper
+        // coins" and "strip of coarse beast meat" vs "strips of coarse meat", inflection and
+        // function words, 442 of 763 refusals corpus-wide. The model read the excerpt and said what
+        // it names; its delta is its own reading of the same excerpt.
+        const result = validateInventory({
+            ...base,
+            windowText: 'she picked up a rope and two coins',
+            mentioned: new Set(['coins']),
+            deltas: [{ item: 'copper penny', dq: 1 }],
+        });
+        expect(result.rejected).toEqual([]);
+        expect(result.accepted[0]).toMatchObject({ item: 'copper penny' });
+    });
+
     test('rejects an implausible magnitude', () => {
-        const result = validateInventory({ ...base, deltas: [{ item: 'rope', dq: MAX_DELTA + 1 }] });
+        // The premise moved with the rule: a FIRST sighting of any size is allowed (no prior to
+        // bound against), so an implausible magnitude is now one that outgrows what is held.
+        const result = validateInventory({
+            inv: new Map([[itemKey('rope'), { qty: 1 }]]),
+            windowText: 'she picked up a rope and two coins',
+            deltas: [{ item: 'rope', dq: 4000 }],
+        });
         expect(result.rejected[0].reason).toBe('implausible-delta');
+    });
+
+    test('an untagged delta joins an existing money row (precedent, not a name guess)', () => {
+        // The mid-46 event of the live Solo Leveling chat, `{"item":"won","dq":360000}` with no
+        // `at`: keyed as carried and clamped to 9,999 while the real balance went unrecorded.
+        // §11 forbids guessing "won is currency" from the name; the §11-compliant default reads
+        // fold's OWN state, once a `money␀won` row exists, an untagged "won" delta joins it.
+        const inv = new Map([[itemKey('won', 'money'), { qty: 210000 }]]);
+        const result = validateInventory({
+            inv,
+            windowText: 'Kang sends a message that 680,000 won was deposited',
+            deltas: [{ item: 'won', dq: 680000 }],
+        });
+        expect(result.accepted).toEqual([{ item: 'won', dq: 680000, at: 'money' }]);
+    });
+
+    test('an untagged delta with no prior money row still defaults to carried', () => {
+        // The first payout is the one lapse the precedent rule cannot heal, nothing is yet on
+        // record as money, so a name is not read to invent it. That case is the directed-money
+        // question's job (§5); this rule stops every recurrence after the first.
+        const result = validateInventory({
+            inv: new Map(),
+            windowText: 'Solomon receives 360,000 won as his share',
+            deltas: [{ item: 'won', dq: 360000 }],
+        });
+        // Accepted (civilisation-scale corroborated deltas stay allowed); the clamp at MAX_QTY is
+        // the separate, documented serialization guard, not this rule's concern.
+        expect(result.accepted[0]).toEqual({ item: 'won', dq: 360000 });
+        expect(result.rejected).toEqual([]);
     });
 
     test('rejects removing something never held', () => {
@@ -126,7 +374,7 @@ describe('validateInventory — the model proposes, the merge disposes', () => {
 
     test('clamps underflow rather than rejecting it', () => {
         // Our count may simply be behind; the narrative is the better authority on what happened.
-        const inv = new Map([['rope', { qty: 1 }]]);
+        const inv = new Map([[itemKey('rope'), { qty: 1 }]]);
         const result = validateInventory({ ...base, inv, deltas: [{ item: 'rope', dq: -5 }] });
         expect(result.accepted).toEqual([{ item: 'rope', dq: -5 }]);
         expect(result.rejected[0].reason).toBe('clamped-underflow');
@@ -138,15 +386,116 @@ describe('validateInventory — the model proposes, the merge disposes', () => {
     });
 
     test('rate-limits a flood of changes', () => {
-        const deltas = Array.from({ length: 20 }, () => ({ item: 'rope', dq: 1 }));
+        // Asserted against the constant, not a copy of it. A test that restates the number cannot
+        // tell a retune from a regression, it just fails, which is what happened when calibration
+        // moved this from 8 to 12.
+        const deltas = Array.from({ length: MAX_CHANGES_PER_TURN * 3 }, () => ({ item: 'rope', dq: 1 }));
         const result = validateInventory({ ...base, deltas });
-        expect(result.accepted.length).toBeLessThanOrEqual(8);
+        expect(result.accepted.length).toBeLessThanOrEqual(MAX_CHANGES_PER_TURN);
         expect(result.rejected.some(r => r.reason === 'rate-limited')).toBe(true);
     });
 
     test('is total over junk', () => {
         expect(validateInventory({ ...base, deltas: null }).accepted).toEqual([]);
         expect(validateInventory({ ...base, deltas: [null, {}] }).accepted).toEqual([]);
+    });
+});
+
+describe('a required field the instruction says to omit, `max: 0` is silence, not a ceiling', () => {
+    // The live My Hero Academia RP, mid 94.
+    //
+    // The whole campaign turns on one quantitative stat: output percentages, hold durations, a core
+    // that depletes and replenishes. The panel read `Mana 0/0` from mid 94 onward, because the
+    // recorded delta was `{name:"mana", dcur:80, max:0}` and `merge_vital` read `Number.isFinite(0)`
+    // as "the ceiling is zero" rather than "nobody said".
+    //
+    // The model had no choice. `state.js`'s schema says `max` is a "Ceiling; send only when newly
+    // established, then omit afterwards" and lists it in `required`, which strict mode makes
+    // mandatory, so "omit" is unexpressible and 0 is what arrives. The same trap was already
+    // reasoned through for the sibling field: "`set: 0` is not a total, nothing is held at zero,
+    // and strict mode forces the field into every row, so a 0/null `set` on an ordinary delta must
+    // read as 'not a restatement'." The vitals path never got that rule.
+
+    // What this block asserted, and what superseded it.
+    //
+    // The defect was that `max: 0` DESTROYED the reported value: `cur` clamped to a ceiling of zero
+    // and the panel read `Mana 0/0` for the rest of the campaign. That is still the defect these
+    // tests guard, and the value still survives.
+    //
+    // What changed is the repair. The first fix fell through to a literal ceiling of 100 and seeded
+    // `cur` at it, so an unbounded quantity acquired a hundred-wide pool and arrived full. That is
+    // the same fabrication measured later in the Raccoon City campaign, where one `{name:
+    // "ammunition", dcur: -1}`, the only vital event in 171 messages, folded to `Ammunition
+    // 99/100`. A defaulted ceiling is not a bound (`reconcile_ok` is a theorem about a real one);
+    // it is a number the narrator then has to reason against.
+    //
+    // So silence now produces silence: `max: 0` stays 0, and the count accumulates from nothing.
+    // The trade is real and worth stating, this campaign's mana behaves as percentages, and a
+    // fabricated 100 happened to match that, so the reading is less flattering than it was. It is
+    // also the only reading the story actually licensed.
+
+    test('a zero ceiling does not destroy the value, and does not invent a ceiling either', () => {
+        const { vitals } = deriveState([ev(1, { vit: [{ name: 'mana', dcur: 80, max: 0 }] })]);
+        expect(vitals.get('mana')).toEqual({ max: 0, cur: 80 });
+    });
+
+    test('and the value survives across the mid-94 beat', () => {
+        // Depleted by the lance and the endurance hold, then replenished by the circulation. The
+        // original defect pinned max to 0 and clamped `cur` to 0 with it; the value survives.
+        const { vitals } = deriveState([
+            ev(1, { vit: [{ name: 'mana', dcur: -90, max: 0 }] }),
+            ev(2, { vit: [{ name: 'mana', dcur: 80, max: 0 }] }),
+        ]);
+        expect(vitals.get('mana').cur).toBe(80);
+    });
+
+    test('and one stated ceiling repairs the whole row, whenever it arrives', () => {
+        // The recovery path, and the reason the honest reading costs nothing permanent: the moment
+        // the narrative names a ceiling, the row is a gauge again and clamps like one.
+        const { vitals } = deriveState([
+            ev(1, { vit: [{ name: 'mana', dcur: 80, max: 0 }] }),
+            ev(2, { vit: [{ name: 'mana', dcur: 30, max: 100 }] }),
+        ]);
+        expect(vitals.get('mana')).toEqual({ max: 100, cur: 100 });
+    });
+
+    test('omitting max behaves identically, because both mean the same thing', () => {
+        const said = deriveState([ev(1, { vit: [{ name: 'mana', dcur: 80, max: 0 }] })]).vitals;
+        const quiet = deriveState([ev(1, { vit: [{ name: 'mana', dcur: 80 }] })]).vitals;
+        expect(said.get('mana')).toEqual(quiet.get('mana'));
+    });
+
+    test('a real ceiling still lands, and still wins', () => {
+        const { vitals } = deriveState([
+            ev(1, { vit: [{ name: 'hp', dcur: 0, max: 70 }] }),
+            ev(2, { vit: [{ name: 'hp', dcur: -26, max: 70 }] }),
+        ]);
+        expect(vitals.get('hp')).toEqual({ max: 70, cur: 44 });
+    });
+
+    test('a zeroed row is repairable, the trap was worse than the wrong number', () => {
+        // `implausible-max` bounds a change at `held.max * 0.5`, which is 0 when the row was
+        // zeroed, so EVERY correction was refused and the row could never come back.
+        const vitals = new Map([['mana', { max: 0, cur: 0 }]]);
+        const { accepted, rejected } = validateVitals({
+            vitals,
+            deltas: [{ name: 'mana', dcur: 80, max: 100 }],
+            windowText: 'his mana core is full again',
+            mentioned: new Set(['mana']),
+        });
+        expect(rejected).toEqual([]);
+        expect(accepted).toEqual([{ name: 'mana', dcur: 80, max: 100 }]);
+    });
+
+    test('and the plausibility bound still bites on a real ceiling', () => {
+        const vitals = new Map([['hp', { max: 70, cur: 70 }]]);
+        const { rejected } = validateVitals({
+            vitals,
+            deltas: [{ name: 'hp', dcur: 0, max: 900 }],
+            windowText: 'his hp is 900 now',
+            mentioned: new Set(['hp']),
+        });
+        expect(rejected).toEqual([expect.objectContaining({ item: 'hp', reason: 'implausible-max' })]);
     });
 });
 
@@ -170,24 +519,89 @@ describe('validateVitals', () => {
 });
 
 describe('validateStatus', () => {
-    test('accepts a mentioned flag and rejects an invented one', () => {
+    test('a condition the prose describes but does not name is KEPT', () => {
+        // This assertion used to be the opposite, and the opposite cost six campaigns their
+        // injuries. The gate read `mentioned.has(flag) || isMentioned(flag, windowText)`: it
+        // required the model's READING to appear verbatim in the text it was read from. A flag is a
+        // conclusion, not a quote, so it almost never does.
+        //
+        // Measured over every chat on disk: 25 marks rejected `not-mentioned`, and NONE was a
+        // hallucination. "bisected from shoulder to hip" (Mr. Park), "leg chopped off" (Jin-Woo,
+        // twice), "blinded in both eyes" (Vesk), "paralyzed by trauma" (Lee Joo-hee), "cut palm"
+        // (Elizabeth, four times), "lightheaded from qi recoil" (pov). A 0% true-positive rate
+        // against 25 destroyed state changes.
         const result = validateStatus({
             status: new Map(),
-            deltas: [{ flag: 'poisoned', on: true }, { flag: 'cursed', on: true }],
-            windowText: 'the venom left her poisoned',
+            deltas: [{ flag: 'lightheaded from qi recoil', on: true }],
+            windowText: 'the world tilts and his ears ring as the technique recoils through him',
         });
-        expect(result.accepted).toEqual([{ flag: 'poisoned', on: true }]);
+        expect(result.rejected).toEqual([]);
+        expect(result.accepted[0].flag).toBe('lightheaded from qi recoil');
+    });
+
+    test('a condition proposed against an EMPTY coverage report is still refused', () => {
+        // The protection the gate was written for survives, narrowed to the case fold can actually
+        // judge. Asking about the PERSON rather than the flag was the right half of the earlier
+        // fix; comparing two spellings of that person's name was the wrong half, and the same
+        // inflection and function-word failures measured on the item gate apply to a name.
+        const cast = new Map([
+            ['person\u0000bandit', { kind: 'person', name: 'Bandit' }],
+        ]);
+        const result = validateStatus({
+            status: new Map(),
+            deltas: [{ who: 'Bandit', flag: 'wounded', on: true }],
+            windowText: 'Elizabeth walks alone through the empty temple',
+            // Asked, and named nobody, yet a bandit is wounded. That is the invention.
+            mentioned: new Set(),
+            cast,
+            pov: 'Elizabeth',
+        });
+        expect(result.accepted).toEqual([]);
         expect(result.rejected[0].reason).toBe('not-mentioned');
+    });
+
+    test('a named third party IS admitted once the report carries anything', () => {
+        // The other side of the same rule: fold stops deciding whether "Bandit" and the report's
+        // wording are one name. `Ms. Tanaka` against a report of `Tanaka`, `the tall guard` against
+        // `Marek`: the pairs the old relation refused are exactly the ones a narrator writes.
+        const cast = new Map([['person bandit', { kind: 'person', name: 'Bandit' }]]);
+        const result = validateStatus({
+            status: new Map(),
+            deltas: [{ who: 'Bandit', flag: 'wounded', on: true }],
+            windowText: 'The man in the road does not get up again.',
+            mentioned: new Set(['the man in the road']),
+            cast,
+            pov: 'Elizabeth',
+        });
+        expect(result.rejected).toEqual([]);
+        expect(result.accepted).toHaveLength(1);
+    });
+
+    test('a named owner the window DOES name is kept, however the flag is worded', () => {
+        const cast = new Map([
+            ['person\u0000ms. tanaka', { kind: 'person', name: 'Ms. Tanaka' }],
+        ]);
+        const result = validateStatus({
+            status: new Map(),
+            deltas: [{ who: 'Ms. Tanaka', flag: 'dead', on: true }],
+            // The live Isekai turn 1: two people are unmistakably killed and the word "dead" is
+            // nowhere in the window.
+            windowText: 'The teacher and bus driver vanished along with it, blood spattering across the first few rows. Ms. Tanaka was at the front.',
+            cast,
+            pov: 'Sol',
+        });
+        expect(result.rejected).toEqual([]);
+        expect(result.accepted[0].flag).toBe('dead');
     });
 });
 
-describe('deriveState — state is a fold over the ledger', () => {
+describe('deriveState, state is a fold over the ledger', () => {
     test('quantities accumulate across events', () => {
         const { inv } = deriveState([
             ev(1, { inv: [{ item: 'coin', dq: 3 }] }),
             ev(2, { inv: [{ item: 'coin', dq: 2 }] }),
         ]);
-        expect(inv.get('coin')).toEqual({ qty: 5 });
+        expect(inv.get(itemKey('coin'))).toEqual({ qty: 5 });
     });
 
     test('an item spent down to zero leaves the inventory', () => {
@@ -195,7 +609,7 @@ describe('deriveState — state is a fold over the ledger', () => {
             ev(1, { inv: [{ item: 'coin', dq: 3 }] }),
             ev(2, { inv: [{ item: 'coin', dq: -3 }] }),
         ]);
-        expect(inv.has('coin')).toBe(false);
+        expect(inv.has(itemKey('coin'))).toBe(false);
     });
 
     test('events fold in chronological order regardless of array order', () => {
@@ -203,18 +617,18 @@ describe('deriveState — state is a fold over the ledger', () => {
             ev(2, { inv: [{ item: 'coin', dq: -1 }] }),
             ev(1, { inv: [{ item: 'coin', dq: 5 }] }),
         ]);
-        expect(out.inv.get('coin')).toEqual({ qty: 4 });
+        expect(out.inv.get(itemKey('coin'))).toEqual({ qty: 4 });
     });
 
-    test('dropping an event un-does its effect — branch-awareness for free', () => {
+    test('dropping an event un-does its effect, branch-awareness for free', () => {
         // This is the payoff of deriving rather than storing: pass only the events live on this
         // swipe and the inventory is automatically the inventory of this branch.
         const all = [
             ev(1, { inv: [{ item: 'rope', dq: 1 }] }),
             ev(2, { inv: [{ item: 'sword', dq: 1 }] }),
         ];
-        expect(deriveState(all).inv.has('sword')).toBe(true);
-        expect(deriveState(all.slice(0, 1)).inv.has('sword')).toBe(false);
+        expect(deriveState(all).inv.has(itemKey('sword'))).toBe(true);
+        expect(deriveState(all.slice(0, 1)).inv.has(itemKey('sword'))).toBe(false);
     });
 
     test('vitals clamp to their maximum and floor at zero', () => {
@@ -232,22 +646,65 @@ describe('deriveState — state is a fold over the ledger', () => {
         expect(healed.vitals.get('health')).toEqual({ cur: 50, max: 50 });
     });
 
+    test('a first vital report that carries damage folds to cur, not a raw delta', () => {
+        // Regression: the model's first and only HP report was `{name:"hp", dcur:-26, max:70}`:
+        // damage and max in one event. `insert_with` stores the incoming value verbatim when the
+        // key is absent, so before the seeding fix the stored row was the raw `{dcur:-26, max:70}`
+        // with no `cur`: the panel showed "Hp 0/70" (the `?? 0` fallback) and the injection
+        // "hp NaN/70" (`Math.round(undefined)`).
+        const { vitals } = deriveState([
+            ev(1, { vit: [{ name: 'hp', dcur: -26, max: 70 }] }),
+        ]);
+        expect(vitals.get('hp')).toEqual({ max: 70, cur: 44 });
+
+        // A later delta accumulates from the folded base, not from a re-anchor at max.
+        const later = deriveState([
+            ev(1, { vit: [{ name: 'hp', dcur: -26, max: 70 }] }),
+            ev(2, { vit: [{ name: 'hp', dcur: 10 }] }),
+        ]);
+        expect(later.vitals.get('hp')).toEqual({ max: 70, cur: 54 });
+
+        // The stored shape is always {max, cur}, so a reader never sees NaN.
+        const { cur, max } = later.vitals.get('hp');
+        expect(Number.isFinite(cur)).toBe(true);
+        expect(Number.isFinite(max)).toBe(true);
+    });
+
+    test('vitalLabel uppercases initialisms and sentence-cases the rest', () => {
+        expect(vitalLabel('hp')).toBe('HP');
+        expect(vitalLabel('mp')).toBe('MP');
+        expect(vitalLabel('stamina')).toBe('Stamina');
+        expect(vitalLabel('health')).toBe('Health');
+        expect(vitalLabel('')).toBe('');
+    });
+
     test('status flags clear, because status is the Map face and not the Set face', () => {
-        const { status } = deriveState([
+        const { marks: status } = deriveState([
             ev(1, { st: [{ flag: 'poisoned', on: true }] }),
             ev(2, { st: [{ flag: 'poisoned', on: false }] }),
         ]);
-        expect(status.get('poisoned').on).toBe(false);
+        expect(status.get(markKey('', 'poisoned')).on).toBe(false);
     });
 
-    test('records the audit trail for every quantity', () => {
+    test('records the audit trail for every quantity, with its anchor mid for the cause-link', () => {
         const { contributors } = deriveState([
             ev(1, { inv: [{ item: 'coin', dq: 3 }] }, 'Found three coins'),
             ev(2, { inv: [{ item: 'coin', dq: -1 }] }, 'Paid the toll'),
         ]);
-        expect(contributors.get('coin')).toEqual([
-            { at: 1, dq: 3, summary: 'Found three coins' },
-            { at: 2, dq: -1, summary: 'Paid the toll' },
+        // `ev` sets no mid, so the anchor is null, a legacy event is still a contributor, just
+        // not a jumpable one (§8 cause-link: the jump needs a mesid).
+        expect(contributors.get(itemKey('coin'))).toEqual([
+            { at: 1, dq: 3, summary: 'Found three coins', mid: null },
+            { at: 2, dq: -1, summary: 'Paid the toll', mid: null },
+        ]);
+    });
+
+    test('a contributor with a mid keeps it, so the panel can jump to its message', () => {
+        const { contributors } = deriveState([
+            { s: 'Found three coins', kw: [], t: 1, mid: 46, src: 'llm', d: { inv: [{ item: 'coin', dq: 3 }] } },
+        ]);
+        expect(contributors.get(itemKey('coin'))).toEqual([
+            { at: 1, dq: 3, summary: 'Found three coins', mid: 46 },
         ]);
     });
 
@@ -259,8 +716,8 @@ describe('deriveState — state is a fold over the ledger', () => {
             ev(4, {}),
         ];
         const { since } = deriveState(events);
-        expect(since.get('rope')).toBe(3);
-        expect(since.get('coin')).toBe(2);
+        expect(since.get(itemKey('rope'))).toBe(3);
+        expect(since.get(itemKey('coin'))).toBe(2);
     });
 
     test('ignores events with no delta, and is total over junk', () => {
@@ -270,29 +727,1511 @@ describe('deriveState — state is a fold over the ledger', () => {
     });
 });
 
-describe('isFresh / renderState', () => {
-    test('an item stops rendering once it goes stale, but stays in the ledger', () => {
-        const inv = new Map([['lantern', { qty: 1 }]]);
-        const stale = new Map([['lantern', STALE_THRESHOLD]]);
-        expect(isFresh('lantern', stale)).toBe(false);
-        expect(renderState({ inv, vitals: new Map(), status: new Map(), since: stale })).toBe('');
-        // Still held — soft-hidden, not deleted.
-        expect(inv.has('lantern')).toBe(true);
+describe('renderState, and the staleness that no longer hides anything', () => {
+    test('an item nobody has mentioned for ages is still in the prompt', () => {
+        // The `isFresh` test that stood here asserted the opposite, and the assertion was the bug:
+        // `cap:stale-hidden` read 198 in the live Solo Leveling chat and 540 in Raccoon City, and
+        // what it was hiding was the character's own pockets, the goblin knife, the E-rank licence
+        // and the hunter pamphlet, all held and all invisible to the narrator (FOLD-RPG-GAP.md §4).
+        // Silence is a zero residual and a zero residual moves nothing (BayesFilter.lean:80-81).
+        const inv = new Map([[itemKey('lantern'), { qty: 1 }]]);
+        const stale = new Map([[itemKey('lantern'), STALE_THRESHOLD * 100]]);
+        expect(renderState({ inv, vitals: new Map(), marks: new Map(), since: stale }))
+            .toContain('Carrying: lantern');
     });
 
     test('renders a compact block', () => {
         const block = renderState({
             inv: new Map([['rope', { qty: 1 }], ['coin', { qty: 42 }]]),
             vitals: new Map([['health', { cur: 34, max: 50 }]]),
-            status: new Map([['poisoned', { on: true }], ['blessed', { on: false }]]),
+            marks: new Map([[markKey('', 'poisoned'), { on: true }], [markKey('', 'blessed'), { on: false }]]),
         });
-        expect(block).toContain('Vitals: health 34/50');
+        expect(block).toContain('Vitals: Health 34/50');
         expect(block).toContain('Status: poisoned');
         expect(block).not.toContain('blessed');
         expect(block).toContain('Carrying: rope, coin x42');
     });
 
     test('renders nothing at all when there is nothing to say', () => {
-        expect(renderState({ inv: new Map(), vitals: new Map(), status: new Map() })).toBe('');
+        expect(renderState({ inv: new Map(), vitals: new Map(), marks: new Map() })).toBe('');
+    });
+});
+
+// Regressions from live play on the Raccoon City card.
+// Each of these was visible in the panel before it was a test. They are grouped because they share
+// a cause: a value that should have replaced an earlier one was instead stored beside it.
+
+describe('names are the model\'s report, the schema instruction is the contract', () => {
+    test('a placeholder name the model reported is stored, not refused by an English list', () => {
+        // The old `EMPTY_NAME` sentinel was an English word list ("none", "nothing", "nil", "empty",
+        // "n/a", "unknown", ...) that could only work in one language. The delta instruction says
+        // "Use empty arrays when an event changes nothing" and "Record only what the excerpt NAMES"
+        //, so a name meaning "nothing" is the model's error, visible and correctable, never a
+        // refusal fold makes with words. Only a structurally empty name is unusable.
+        for (const raw of ['none carried', 'None carried', 'nothing of note',
+            'no items at present', 'none currently', 'nil']) {
+            expect(normalizeItemName(raw)?.name).toBe(raw.toLowerCase());
+        }
+    });
+
+    test('a real name that merely starts with those letters survives', () => {
+        expect(normalizeItemName('north gate key')?.name).toBe('north gate key');
+        expect(normalizeItemName('notebook')?.name).toBe('notebook');
+        expect(normalizeItemName('nail file')?.name).toBe('nail file');
+    });
+
+    test('only structurally empty names are unusable', () => {
+        const { accepted, rejected } = validateInventory({
+            inv: new Map(),
+            deltas: [{ item: 'none carried', dq: 1 }, { item: 'none carried', dq: 1 }],
+            windowText: 'the block said none carried',
+            mentioned: new Set(['none carried']),
+        });
+        expect(accepted).toHaveLength(2);
+        expect(rejected).toHaveLength(0);
+    });
+});
+
+describe('statusSubject, the subject comes from the schema, not an English modifier list', () => {
+    test('finds the leading content token when the phrase leads with it', () => {
+        // The old `STATUS_MODIFIERS` stoplist that stripped "mild"/"severe" is gone. The subject is
+        // the model's structured `subject` answer; `statusSubject` is only the legacy fallback and
+        // takes the first content token.
+        expect(statusSubject('hangover mostly eased')).toBe('hangover');
+    });
+
+    test('a phrase of no content has no subject', () => {
+        expect(statusSubject('')).toBeNull();
+    });
+
+    test('a restatement REPLACES rather than joining, the whole point', () => {
+        // The model reports `subject: "hangover"` for both descriptions, so they fold to one mark.
+        const { marks: status } = deriveState([
+            ev(1, { st: [{ flag: 'mild hangover', subject: 'hangover', on: true }] }),
+            ev(2, { st: [{ flag: 'hangover mostly eased', subject: 'hangover', on: true }] }),
+        ]);
+        expect(status.size).toBe(1);
+        expect(status.get(markKey('', 'hangover'))).toMatchObject({ on: true, phrase: 'hangover mostly eased' });
+    });
+
+    test('unrelated conditions still coexist', () => {
+        const { marks: status } = deriveState([
+            ev(1, { st: [{ flag: 'mild hangover', on: true }] }),
+            ev(2, { st: [{ flag: 'sprained ankle', on: true }] }),
+        ]);
+        expect(status.size).toBe(2);
+    });
+
+    test('renderState reports the phrase, not the key', () => {
+        const { marks: status } = deriveState([ev(1, { st: [{ flag: 'hangover mostly eased', on: true }] })]);
+        expect(renderState({ inv: new Map(), vitals: new Map(), marks: status })).toContain('hangover mostly eased');
+    });
+});
+
+describe('healing is the model\'s report, not an English word list', () => {
+    test('a flag the model marks on:false turns a tracked condition off', () => {
+        // The schema tells the model to set `on: false` when something heals or is treated away.
+        // That IS the transition; no `isNegation` word list guesses it from prose.
+        const { accepted } = validateStatus({
+            status: new Map([[markKey('', 'hangover'), { on: true, phrase: 'mild hangover' }]]),
+            deltas: [{ flag: 'hangover', on: false }],
+            windowText: 'the hangover was gone by noon',
+        });
+        expect(accepted).toEqual([expect.objectContaining({ who: '', flag: 'hangover', on: false })]);
+    });
+
+    test('an affliction and its later healing leave the healed line', () => {
+        // The model reports the affliction, then a second event reports on:false for the same
+        // subject. The fold shows the healed state, not a reassurance invented by a word list.
+        const window = 'mild hangover';
+        const first = validateStatus({
+            status: new Map(),
+            deltas: [{ flag: 'mild hangover', subject: 'hangover', on: true }],
+            windowText: window,
+        });
+        const state = deriveState([ev(1, { st: first.accepted })]);
+        const second = validateStatus({
+            status: state.marks,
+            deltas: [{ flag: 'hangover', subject: 'hangover', on: false }],
+            windowText: 'hangover mostly eased',
+        });
+        const final = deriveState([ev(1, { st: first.accepted }), ev(2, { st: second.accepted })]);
+
+        const shown = [...final.marks.values()].filter(v => v.on).map(v => v.phrase);
+        expect(shown).toEqual([]);
+    });
+});
+
+describe('read-time normalization heals a ledger written under an older normalizer', () => {
+    test('an orphaned opening bracket loses the bracket, not the word', () => {
+        // "thinkpad (closed" was recorded before trimWrapping existed. State is a fold, so it
+        // folded forward under the truncated name on every single redraw.
+        expect(normalizeItemName('thinkpad (closed')?.name).toBe('thinkpad closed');
+    });
+
+    test('a properly closed qualifier is left completely alone', () => {
+        expect(normalizeItemName('Thinkpad (closed)')?.name).toBe('thinkpad (closed)');
+        expect(normalizeItemName('Beretta M92F (12 rounds)')?.name).toBe('beretta m92f (12 rounds)');
+    });
+
+    test('deriveState re-normalizes, so the old and new spellings converge on one row', () => {
+        const { inv } = deriveState([
+            ev(1, { inv: [{ item: 'thinkpad (closed', dq: 1 }] }),
+            ev(2, { inv: [{ item: 'thinkpad closed', dq: 1 }] }),
+        ]);
+        expect(inv.size).toBe(1);
+        expect(inv.get(itemKey('thinkpad closed', CARRIED))).toEqual({ qty: 2 });
+    });
+});
+
+describe('conditions that tick, consequence without dice', () => {
+    test('a condition with no stated duration is permanent', () => {
+        // A missing limb does not grow back because twelve turns went by.
+        const events = [ev(1, { st: [{ flag: 'broken arm', on: true, turns: 0 }] })];
+        for (let i = 2; i < 30; i++) {
+            events.push(ev(i, { st: [] }));
+        }
+        const { marks: status } = deriveState(events);
+        expect([...status.values()]).toEqual([expect.objectContaining({ on: true, fade: 1 })]);
+    });
+
+    test('a condition with a duration wears off on its own', () => {
+        const events = [ev(1, { st: [{ flag: 'mild hangover', on: true, turns: 3 }] })];
+        for (let i = 2; i <= 6; i++) {
+            events.push(ev(i, { inv: [] }));
+        }
+        const { marks: status } = deriveState(events);
+        expect([...status.values()][0].on).toBe(false);
+    });
+
+    test('it fades rather than snapping, so the panel can draw it', () => {
+        const events = [
+            ev(1, { st: [{ flag: 'mild hangover', on: true, turns: 4 }] }),
+            ev(2, { inv: [] }),
+            ev(3, { inv: [] }),
+        ];
+        const { marks: status } = deriveState(events);
+        const hangover = [...status.values()][0];
+        expect(hangover.on).toBe(true);
+        expect(hangover.fade).toBeCloseTo(0.5, 5);
+    });
+
+    test('restating it resets the clock, the narrator is the authority on now', () => {
+        const events = [
+            ev(1, { st: [{ flag: 'mild hangover', on: true, turns: 2 }] }),
+            ev(2, { inv: [] }),
+            ev(3, { st: [{ flag: 'hangover still going', on: true, turns: 2 }] }),
+        ];
+        const { marks: status } = deriveState(events);
+        expect(status.size).toBe(1);
+        expect([...status.values()][0].on).toBe(true);
+    });
+
+    test('an expired condition stops being sent to the model', () => {
+        const events = [ev(1, { st: [{ flag: 'tipsy', on: true, turns: 1 }] }), ev(2, { inv: [] }), ev(3, { inv: [] })];
+        const { marks: status } = deriveState(events);
+        expect(renderState({ inv: new Map(), vitals: new Map(), marks: status })).toBe('');
+    });
+
+    test('a duration is bounded like any other model claim', () => {
+        const { accepted } = validateStatus({
+            status: new Map(),
+            deltas: [{ flag: 'cursed', on: true, turns: 99999 }],
+            windowText: 'she was cursed',
+        });
+        expect(accepted[0].turns).toBe(MAX_CONDITION_TURNS);
+    });
+
+    test('a nonsensical duration degrades to permanent, the safe failure', () => {
+        const { accepted } = validateStatus({
+            status: new Map(),
+            deltas: [{ flag: 'cursed', on: true, turns: -4 }],
+            windowText: 'she was cursed',
+        });
+        expect(accepted[0].turns).toBe(0);
+    });
+
+    test('expiry is a READ of the ledger, so swiping the cause away undoes the effect', () => {
+        // The whole reason ticking lives in deriveState rather than in a scheduler: drop the event
+        // that caused the hangover and there is no hangover to have been fading.
+        const cause = ev(1, { st: [{ flag: 'mild hangover', on: true, turns: 3 }] });
+        const later = [ev(2, { inv: [] }), ev(3, { inv: [] })];
+        expect(deriveState([cause, ...later]).marks.size).toBe(1);
+        expect(deriveState(later).marks.size).toBe(0);
+    });
+});
+
+describe('statusKeyFor, overlap, because word position cannot decide this', () => {
+    test('a modifier-led phrase and a subject-led restatement are one condition', () => {
+        const { marks: status } = deriveState([
+            ev(1, { st: [{ flag: 'mild hangover', on: true }] }),
+            ev(2, { st: [{ flag: 'hangover mostly eased', on: true }] }),
+        ]);
+        expect(status.size).toBe(1);
+    });
+
+    test('and so are the inverse pair, which any Nth-word rule gets backwards', () => {
+        // "broken arm" then "arm healing": first-word keying gives broken/arm, last-word keying
+        // gives arm/healing. Both duplicate. Shared content words do not.
+        const { marks: status } = deriveState([
+            ev(1, { st: [{ flag: 'broken arm', on: true }] }),
+            ev(2, { st: [{ flag: 'arm healing', on: true }] }),
+        ]);
+        expect(status.size).toBe(1);
+        expect([...status.values()][0].phrase).toBe('arm healing');
+    });
+
+    test('conditions that share nothing stay separate', () => {
+        const { marks: status } = deriveState([
+            ev(1, { st: [{ flag: 'broken arm', on: true }] }),
+            ev(2, { st: [{ flag: 'mild hangover', on: true }] }),
+            ev(3, { st: [{ flag: 'concussion', on: true }] }),
+        ]);
+        expect(status.size).toBe(3);
+    });
+
+    test('identity is fixed by the first description, not the latest', () => {
+        // Otherwise the key drifts with every restatement and a third phrase can fail to match.
+        const { marks: status } = deriveState([
+            ev(1, { st: [{ flag: 'broken arm', on: true }] }),
+            ev(2, { st: [{ flag: 'arm healing', on: true }] }),
+            ev(3, { st: [{ flag: 'broken arm splinted', on: true }] }),
+        ]);
+        expect(status.size).toBe(1);
+    });
+});
+
+describe('restated totals, the fold path that heals a runaway count', () => {
+    test('a total overwrites rather than accumulating', () => {
+        const { inv } = deriveState([
+            ev(1, { inv: [{ item: 'grey flat cap', set: 1 }] }),
+            ev(2, { inv: [{ item: 'grey flat cap', set: 1 }] }),
+            ev(3, { inv: [{ item: 'grey flat cap', set: 1 }] }),
+        ]);
+        expect(inv.get(itemKey('grey flat cap'))).toEqual({ qty: 1 });
+    });
+
+    test('a total lands on top of the deltas that corrupted the count', () => {
+        // Exactly the shape of the broken chat: seven recorded +1s, then one honest restatement.
+        const events = [];
+        for (let i = 1; i <= 7; i++) {
+            events.push(ev(i, { inv: [{ item: 'grey flat cap', dq: 1 }] }));
+        }
+        expect(deriveState(events).inv.get(itemKey('grey flat cap'))).toEqual({ qty: 7 });
+
+        events.push(ev(8, { inv: [{ item: 'grey flat cap', set: 1 }] }));
+        expect(deriveState(events).inv.get(itemKey('grey flat cap'))).toEqual({ qty: 1 });
+    });
+
+    test('a total of zero removes the item', () => {
+        const { inv } = deriveState([
+            ev(1, { inv: [{ item: 'rope', dq: 1 }] }),
+            ev(2, { inv: [{ item: 'rope', set: 0 }] }),
+        ]);
+        expect(inv.has(itemKey('rope'))).toBe(false);
+    });
+
+    test('a restatement that changes nothing adds no audit row', () => {
+        // Otherwise the trail fills with "still have it" once per turn and stops being readable.
+        const { contributors } = deriveState([
+            ev(1, { inv: [{ item: 'rope', set: 1 }] }),
+            ev(2, { inv: [{ item: 'rope', set: 1 }] }),
+            ev(3, { inv: [{ item: 'rope', set: 1 }] }),
+        ]);
+        expect(contributors.get(itemKey('rope'))).toHaveLength(1);
+    });
+
+    test('a correction DOES leave an audit row, showing the correction', () => {
+        const { contributors } = deriveState([
+            ev(1, { inv: [{ item: 'rope', dq: 4 }] }),
+            ev(2, { inv: [{ item: 'rope', set: 1 }] }, 'the block restated the list'),
+        ]);
+        expect(contributors.get(itemKey('rope')).map(c => c.dq)).toEqual([4, -3]);
+    });
+
+    test('a total is bounded like any other model claim', () => {
+        const { accepted } = validateInventory({
+            inv: new Map(),
+            deltas: [{ item: 'rope', set: 99999999 }],
+            windowText: 'a coil of rope',
+        });
+        expect(accepted[0].set).toBeLessThanOrEqual(9999);
+    });
+
+    test('a total still has to pass the mention gate', () => {
+        const { accepted, rejected } = validateInventory({
+            inv: new Map(),
+            deltas: [{ item: 'dragon egg', set: 1 }],
+            windowText: 'she walked to the river',
+            mentioned: new Set(),
+        });
+        expect(accepted).toEqual([]);
+        expect(rejected[0].reason).toBe('not-mentioned');
+    });
+});
+
+describe('canonicalItemName, exact-key identity', () => {
+    test('a rewording is a NEW row, the model reports names, fold does not merge by morphology', () => {
+        // The old head-token rule folded "m-65 military jacket" onto "m-65 jacket". Whether two
+        // spellings name one thing is the model's reading: it reuses the exact State-block name
+        // when restating, and the review probe answers `[same?]` for a pair fold cannot resolve.
+        const { inv } = deriveState([
+            ev(1, { inv: [{ item: 'm-65 jacket', dq: 1 }] }),
+            ev(2, { inv: [{ item: 'm-65 military jacket', set: 1 }] }),
+        ]);
+        expect([...inv.keys()].sort()).toEqual([itemKey('m-65 jacket'), itemKey('m-65 military jacket')].sort());
+    });
+
+    test('the same name in a different place is still a different item', () => {
+        const { inv } = deriveState([
+            ev(1, { inv: [{ item: 'crowbar', dq: 1 }] }),
+            ev(2, { inv: [{ item: 'crowbar', dq: 1, at: 'car boot' }] }),
+        ]);
+        expect(inv.size).toBe(2);
+    });
+});
+
+describe('the magnitude bound is a RATIO, because an absolute one encodes a genre', () => {
+    test('a first sighting is not bounded, there is no prior to bound against', () => {
+        // "Absence is not a retraction", applied to magnitude: no evidence, no verdict.
+        expect(deltaAllowance(0)).toBe(9999);
+    });
+
+    test('growth is bounded against what is held', () => {
+        expect(deltaAllowance(1)).toBe(8);
+        expect(deltaAllowance(1000)).toBe(4000);
+    });
+
+    test('ordinary domestic play never trips it', () => {
+        const { accepted } = validateInventory({
+            inv: new Map(),
+            deltas: [{ item: 'rope', dq: 1 }],
+            windowText: 'she coiled the rope',
+        });
+        expect(accepted).toHaveLength(1);
+    });
+
+    test('civilisation scale passes when the narrative says the number', () => {
+        // The case the absolute cap of 6 destroyed.
+        const inv = new Map([[itemKey('troops'), { qty: 2000 }]]);
+        const { accepted } = validateInventory({
+            inv,
+            deltas: [{ item: 'troops', dq: 10000 }],
+            windowText: 'Ten thousand troops, 10,000 of them, swore to the new banner.',
+        });
+        expect(accepted).toEqual([{ item: 'troops', dq: 10000 }]);
+    });
+
+    test('and is refused when the narrative says no such number', () => {
+        const inv = new Map([[itemKey('crowbar'), { qty: 1 }]]);
+        const { accepted, rejected } = validateInventory({
+            inv,
+            deltas: [{ item: 'crowbar', dq: 500 }],
+            windowText: 'he picked up the crowbar and weighed it in his hand',
+        });
+        expect(accepted).toEqual([]);
+        expect(rejected[0].reason).toBe('implausible-delta');
+    });
+
+    test('magnitudeCorroborated reads digits, and leaves spelled-out numbers to the model\'s magnitude field', () => {
+        expect(magnitudeCorroborated(10000, 'a levy of 10,000')).toBe(true);
+        // "thousands" is a spelled-out scale word, the model reports magnitude:10000 now; fold
+        // does not guess the order from English.
+        expect(magnitudeCorroborated(10000, 'thousands answered the call')).toBe(false);
+        expect(magnitudeCorroborated(10000, 'he found a coin')).toBe(false);
+        // Small changes never need corroborating.
+        expect(magnitudeCorroborated(3, 'nothing numeric here')).toBe(true);
+    });
+});
+
+describe('staleness hides nothing at all, cap:stale-hidden retired by construction', () => {
+    test('a carried item nobody has mentioned is still carried', () => {
+        const inv = new Map([[itemKey('rope'), { qty: 1 }]]);
+        const since = new Map([[itemKey('rope'), STALE_THRESHOLD * 50]]);
+        expect(renderState({ inv, vitals: new Map(), marks: new Map(), since }))
+            .toContain('Carrying: rope');
+    });
+
+    test('the three items the live chat hid are all in the ledger block', () => {
+        // The exact class FOLD-RPG-GAP.md §4 names: "carried | knife, licence, pamphlet all
+        // silently hidden". Every one is past the old threshold and every one renders.
+        const inv = new Map([
+            [itemKey('goblin knife'), { qty: 1 }],
+            [itemKey('e-rank hunter licence'), { qty: 1 }],
+            [itemKey('hunter pamphlet'), { qty: 1 }],
+        ]);
+        const since = new Map([...inv.keys()].map(key => [key, STALE_THRESHOLD * 3]));
+        const { lines, shown } = renderLedger({ inv, vitals: new Map(), marks: new Map(), since });
+        const text = lines.join('\n');
+        expect(text).toContain('goblin knife');
+        expect(text).toContain('e-rank hunter licence');
+        expect(text).toContain('hunter pamphlet');
+        // And `shown` now equals what is held, which is what closes the last hole in the
+        // already-recorded gate: a stale item could previously be re-billed because the ledger
+        // never showed it.
+        expect(shown.size).toBe(inv.size);
+    });
+
+    test('renderState keeps stored items in the prompt indefinitely', () => {
+        const inv = new Map([
+            [itemKey('wallet'), { qty: 1 }],
+            [itemKey('shotgun', 'apartment'), { qty: 1 }],
+        ]);
+        const since = new Map([
+            [itemKey('wallet'), STALE_THRESHOLD],
+            [itemKey('shotgun', 'apartment'), STALE_THRESHOLD * 9],
+        ]);
+        const block = renderState({ inv, vitals: new Map(), marks: new Map(), since });
+        expect(block).toContain('Stored (apartment): shotgun');
+        // The wallet used to be asserted ABSENT here, on the strength of one carried-item
+        // measurement (mention gaps top out at 8 turns, n=25) applied to a question about belief.
+        // It is in the prompt now, and the case that settles it is a knife in a pocket during a
+        // conversation about noodles.
+        expect(block).toContain('wallet');
+    });
+});
+
+describe('a healed condition is recorded as on:false, not guessed from prose', () => {
+    test('an on:false flag is what stops a condition rendering', () => {
+        // Healing is the model's own report (`on: false`), never an English word list reading the
+        // phrase. "Otherwise uninjured" was never a condition a model should have stored as on:true;
+        // the schema forbids recording a reassurance, and a heal arrives as on:false.
+        const { marks: status } = deriveState([
+            ev(1, { st: [{ flag: 'mild arm fatigue', on: true }] }),
+            ev(2, { st: [{ flag: 'mild arm fatigue', on: false }] }),
+        ]);
+        expect([...status.values()].filter(v => v.on).map(v => v.phrase)).toEqual([]);
+    });
+
+    test('a real affliction is untouched', () => {
+        const { marks: status } = deriveState([ev(1, { st: [{ flag: 'sprained ankle', on: true }] })]);
+        expect(status.size).toBe(1);
+    });
+
+    test('turning something OFF with a negation phrase still works', () => {
+        // The read-time filter only drops negations asserted as true; it must not block a clear.
+        const { marks: status } = deriveState([
+            ev(1, { st: [{ flag: 'mild hangover', on: true }] }),
+            ev(2, { st: [{ flag: 'hangover gone', on: false }] }),
+        ]);
+        expect([...status.values()].every(v => !v.on)).toBe(true);
+    });
+});
+
+/*
+ * Categories. The whole inventory/assets/abilities divide, with no new table: `itemKey(name, place)`
+ * was already a product type and every stage of the pipeline already dispatched on the place half.
+ */
+describe('categories are places, and cost nothing', () => {
+    test('a category is a reserved place, keyed like any other', () => {
+        expect(splitItemKey(itemKey('farmstead', 'assets'))).toEqual({ who: '', place: ASSETS, name: 'farmstead' });
+        expect(splitItemKey(itemKey('second sight', 'abilities'))).toEqual({ who: '', place: ABILITIES, name: 'second sight' });
+    });
+
+    test('the protocol tokens reach the category; other words are literal places', () => {
+        for (const said of ['assets', 'Assets', 'the assets']) {
+            expect(normalizePlace(said)).toBe(ASSETS);
+        }
+        for (const said of ['abilities', 'Abilities', 'the abilities']) {
+            expect(normalizePlace(said)).toBe(ABILITIES);
+        }
+        // No English synonym guessing: a singular "ability" is a phrase, not the protocol token.
+        expect(normalizePlace('ability')).toBe('ability');
+        expect(normalizePlace('assets and property')).toBe('assets and property');
+    });
+
+    test('the protocol carried token stays CARRIED, no second equipment list', () => {
+        // Foundry dnd5e keeps ONE inventory with `equipped` as a flag, after a decade of iteration,
+        // specifically to kill the desync that two parallel lists guarantee. "worn"/"held" are
+        // English synonyms fold no longer guesses, the model writes "carried" per the schema.
+        expect(normalizePlace('carried')).toBe(CARRIED);
+        expect(normalizePlace('worn')).toBe('worn');
+    });
+
+    test('a leading article does not fork a place', () => {
+        expect(normalizePlace('the apartment')).toBe(normalizePlace('apartment'));
+        expect(normalizePlace('my locker')).toBe(normalizePlace('locker'));
+    });
+
+    test('the carried token survives the article strip', () => {
+        expect(normalizePlace('the carried')).toBe(CARRIED);
+    });
+
+    test('a category never collapses into carried, however phrased', () => {
+        expect(normalizePlace('assets')).not.toBe(CARRIED);
+        expect(normalizePlace('abilities')).not.toBe(CARRIED);
+    });
+
+    test('property, capability and pockets alike survive any amount of silence', () => {
+        const inv = new Map([
+            [itemKey('farmstead', ASSETS), { qty: 1 }],
+            [itemKey('second sight', ABILITIES), { qty: 1 }],
+            [itemKey('rope', CARRIED), { qty: 1 }],
+        ]);
+        const since = new Map([...inv.keys()].map(key => [key, 999]));
+        const block = renderState({ inv, vitals: new Map(), marks: new Map(), since });
+        expect(block).toContain('farmstead');
+        expect(block).toContain('second sight');
+        expect(block).toContain('rope');
+    });
+});
+
+/*
+ * Money has no play limit. The first version capped it at 1e12, a number chosen for feeling roomy,
+ * which is exactly how a ceiling becomes a bug in somebody's campaign. A trillionaire is a
+ * legitimate character and a national treasury is a legitimate quantity.
+ */
+describe('money is bounded by arithmetic, not by taste', () => {
+    test('a trillion is unremarkable', () => {
+        const table = new Map();
+        setQty(table, itemKey('won', MONEY), 4.2e12);
+        expect(table.get(itemKey('won', MONEY)).qty).toBe(4.2e12);
+    });
+
+    test('the only ceiling is where addition stops being exact', () => {
+        // Not a judgement about wealth: past MAX_SAFE_INTEGER, a + b silently returns the wrong
+        // total, and a wrong total is worse than a refused one.
+        expect(MAX_MONEY).toBe(Number.MAX_SAFE_INTEGER);
+        const table = new Map();
+        setQty(table, itemKey('credits', MONEY), Number.MAX_SAFE_INTEGER * 4);
+        expect(table.get(itemKey('credits', MONEY)).qty).toBe(MAX_MONEY);
+    });
+
+    test('items keep their own ceiling, which is a plausibility bound', () => {
+        // Four thousand crowbars IS a hallucination; four trillion won is a Tuesday.
+        const table = new Map();
+        setQty(table, itemKey('crowbar', CARRIED), 999999);
+        expect(table.get(itemKey('crowbar', CARRIED)).qty).toBe(MAX_QTY);
+    });
+
+    test('the delta allowance scales with the holding rather than capping it', () => {
+        // A ratio still catches a thousandfold jump at any scale; a fixed floor would have made
+        // every large transaction implausible.
+        expect(deltaAllowance(4.2e12, MONEY)).toBeGreaterThan(4.2e12);
+        expect(deltaAllowance(0, MONEY)).toBe(MAX_MONEY);
+    });
+});
+
+describe('the owner on an item key, whose it is, not only where it is', () => {
+    // Marks have carried an owner since Phase D (`markKey`). Items never did, so a party's gear had
+    // nowhere to go: New Eldoria's ironwood branch (chronicled at mid 82, "she cuts and takes an
+    // arm's-length branch") was dropped entirely, and Vexia picking up the sphere at mid 84 filed it
+    // in Solomon's pocket. Worst of the three, mid 108 recorded "Vexia accepts the coins and tucks
+    // them into her belt pouch" as `gold +17`: on the player's balance.
+
+    test('the player\'s keys are byte-identical to what they always were', () => {
+        // No migration, no rewrite: an absent owner is spelled by absence, so every stored baseline,
+        // crosswalk answer and `reachKeys` entry keeps resolving.
+        expect(itemKey('nightshade')).toBe(itemKey('nightshade', CARRIED, ''));
+        expect(itemKey('gold', MONEY)).toBe(itemKey('gold', MONEY, ''));
+    });
+
+    test('somebody else\'s belongings are a different row', () => {
+        expect(itemKey('ironwood branch', CARRIED, 'Kaelira')).not.toBe(itemKey('ironwood branch'));
+        expect(itemKey('gold', MONEY, 'Vexia')).not.toBe(itemKey('gold', MONEY));
+        // Two people can hold the same thing without merging.
+        expect(itemKey('gold', MONEY, 'Vexia')).not.toBe(itemKey('gold', MONEY, 'Kaelira'));
+    });
+
+    test('the key round-trips, and a legacy two-part key still reads as the player\'s', () => {
+        expect(splitItemKey(itemKey('ironwood branch', CARRIED, 'Kaelira')))
+            .toEqual({ who: 'kaelira', place: CARRIED, name: 'ironwood branch' });
+        expect(splitItemKey(itemKey('nightshade'))).toEqual({ who: '', place: CARRIED, name: 'nightshade' });
+        // Written before places existed: carried by definition, and nobody else's.
+        expect(splitItemKey('nightshade')).toEqual({ who: '', place: CARRIED, name: 'nightshade' });
+    });
+
+    test('a named owner nobody has heard of is refused, not invented', () => {
+        // Exactly the rule marks keep: an invented owner opens a row-shaped hole nothing will close.
+        const cast = new Map([['person\u0000vexia', { kind: 'person', name: 'Vexia' }]]);
+        const { accepted, rejected } = validateInventory({
+            inv: new Map(),
+            deltas: [{ item: 'ironwood branch', dq: 1, who: 'Kaelira' }],
+            windowText: 'Kaelira cuts an arm\'s length of ironwood and slings the branch across her back',
+            mentioned: new Set(['ironwood branch']),
+            cast,
+            pov: 'Solomon',
+        });
+        expect(accepted).toEqual([]);
+        expect(rejected).toEqual([expect.objectContaining({ item: 'Kaelira', reason: 'unknown-owner' })]);
+    });
+
+    test('an owner in the cast is resolved and carried on the accepted delta', () => {
+        const cast = new Map([['person\u0000kaelira', { kind: 'person', name: 'Kaelira' }]]);
+        const { accepted } = validateInventory({
+            inv: new Map(),
+            deltas: [{ item: 'ironwood branch', dq: 1, who: 'the tiefling' }],
+            windowText: 'the tiefling cuts an arm\'s length of ironwood and slings the branch across her back',
+            mentioned: new Set(['ironwood branch']),
+            cast: new Map([...cast, ['person\u0000kaelira', { kind: 'person', name: 'Kaelira', aka: 'the tiefling' }]]),
+            pov: 'Solomon',
+        });
+        // The DISPLAY name, not the table key, the same choice marks make, so a later merge that
+        // folds an alias into the keeper leaves the row findable by one-hop resolution.
+        expect(accepted).toEqual([{ item: 'ironwood branch', dq: 1, who: 'Kaelira' }]);
+    });
+
+    test('the point-of-view character named explicitly still keys as the player', () => {
+        const { accepted } = validateInventory({
+            inv: new Map(),
+            deltas: [{ item: 'nightshade', dq: 1, who: 'Solomon' }],
+            windowText: 'Solomon works the nightshade free, preserving the roots',
+            mentioned: new Set(['nightshade']),
+            cast: new Map(),
+            pov: 'Solomon',
+        });
+        expect(accepted).toEqual([{ item: 'nightshade', dq: 1 }]);
+    });
+
+    test('money handed to somebody else does not credit the player', () => {
+        // New Eldoria mids 106-108. The give and the take are one transfer; with no owner they were
+        // one balance, and the pair cancelled by luck. They are two rows now.
+        const { inv } = deriveState([
+            ev(1, { inv: [{ item: 'gold', dq: 33, at: 'money' }] }),
+            ev(2, { inv: [{ item: 'gold', dq: -16, at: 'money' }] }),
+            ev(3, { inv: [{ item: 'gold', dq: 16, at: 'money', who: 'Vexia' }] }),
+        ]);
+        expect(inv.get(itemKey('gold', MONEY))?.qty).toBe(17);
+        expect(inv.get(itemKey('gold', MONEY, 'Vexia'))?.qty).toBe(16);
+    });
+
+    test('renderLedger keeps somebody else\'s belongings off the player\'s lines', () => {
+        // Same rule `renderLedger` already keeps for standings and marks: the pov's on the ledger,
+        // everyone else's on their own cast line.
+        const inv = new Map([
+            [itemKey('nightshade'), { qty: 3 }],
+            [itemKey('ironwood branch', CARRIED, 'Kaelira'), { qty: 1 }],
+            [itemKey('gold', MONEY, 'Vexia'), { qty: 16 }],
+        ]);
+        const { lines, shown } = renderLedger({ inv, vitals: new Map(), marks: new Map(), pov: 'Solomon' });
+        const text = lines.join('\n');
+        expect(text).toContain('nightshade');
+        expect(text).not.toContain('ironwood branch');
+        expect(text).not.toMatch(/Money:/);
+        // And out of `shown`, so the already-recorded gate cannot refuse a delta on the strength of
+        // a line the model was never given.
+        expect(shown.has(itemKey('ironwood branch', CARRIED, 'Kaelira'))).toBe(false);
+        expect(shown.has(itemKey('nightshade'))).toBe(true);
+    });
+
+    test('what somebody else holds is readable per person, the way marks are', () => {
+        const inv = new Map([
+            [itemKey('nightshade'), { qty: 3 }],
+            [itemKey('ironwood branch', CARRIED, 'Kaelira'), { qty: 1 }],
+            [itemKey('gold', MONEY, 'Vexia'), { qty: 16 }],
+        ]);
+        expect(itemPhrases(inv, 'Kaelira')).toEqual(['ironwood branch']);
+        expect(itemPhrases(inv, 'Vexia')).toEqual(['16 gold']);
+        // Strictly that owner's bucket, the player's rows never leak onto a cast line.
+        expect(itemPhrases(inv, 'Sylanna')).toEqual([]);
+    });
+});
+
+describe('reject:already-recorded, the model was shown the line and billed it anyway', () => {
+    const held = new Map([[itemKey('wrapped candy'), { qty: 2 }]]);
+    const shown = new Set([itemKey('wrapped candy')]);
+    const windowText = 'she presses two wrapped candies into his palm, as if candy fixes lacerations';
+    // Coverage by report, the way production passes it: the model says the window names the item.
+    const mentioned = new Set(['wrapped candy']);
+    // The candies billed twice, at mids 54 and 58 of the live chat. The trail is the ledger's own
+    // record of the first bill; `visible` is the window the second pass was shown.
+    const trail = () => new Map([[itemKey('wrapped candy'), [{ dq: 2, mid: 54 }]]]);
+    const visible = new Set([53, 54, 55, 56, 57, 58]);
+
+    test('a re-report of a line already on the ledger is refused', () => {
+        const { accepted, rejected } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', dq: 2 }], windowText, shown, mentioned, contributors: trail(), visible });
+        expect(accepted).toEqual([]);
+        expect(rejected).toEqual([expect.objectContaining({ item: 'wrapped candy', reason: 'already-recorded' })]);
+    });
+
+    test('a re-report is NOT refused when the beat it would re-tell is out of sight', () => {
+        // The nightshade harvest of the live New Eldoria chat. One bundle picked at mid 76; a
+        // second, distinct bundle picked at mid 94, eighteen messages later. The ledger still shows
+        // `nightshade x1`, so `held >= dq` holds and the line was pinned, but the beat that put it
+        // there is nowhere in this pass's window. Refusing here is refusing a harvest that happened.
+        const inv = new Map([[itemKey('nightshade'), { qty: 1 }]]);
+        const contributors = new Map([[itemKey('nightshade'), [{ dq: 1, mid: 76 }]]]);
+        const { accepted } = validateInventory({
+            inv,
+            deltas: [{ item: 'nightshade', dq: 1 }],
+            windowText: 'You kneel by the reeds and work the nightshade free, preserving the roots',
+            shown: new Set([itemKey('nightshade')]),
+            mentioned: new Set(['nightshade']),
+            contributors,
+            visible: new Set([89, 90, 91, 92, 93, 94]),
+        });
+        expect(accepted).toEqual([{ item: 'nightshade', dq: 1 }]);
+    });
+
+    test('a shown line with no recorded beat behind it is not a re-report', () => {
+        // Same rule the debit side already keeps ("a loss with no trail is not a restatement"):
+        // with nothing on record there is no beat to have been re-told, so this is a fresh change.
+        const { accepted } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', dq: 2 }], windowText, shown, mentioned, contributors: new Map(), visible });
+        expect(accepted).toEqual([{ item: 'wrapped candy', dq: 2 }]);
+    });
+
+    test('nothing is refused when no ledger was pinned', () => {
+        // Block absorption never pins one, and a model that was told nothing cannot be blamed for
+        // not knowing. `shown` absent means the gate is off, not empty.
+        const { accepted } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', dq: 2 }], windowText, mentioned });
+        expect(accepted).toEqual([{ item: 'wrapped candy', dq: 2 }]);
+    });
+
+    test('nothing is refused for a line the ledger held but did not show', () => {
+        // Refusing against a line the model never saw would punish it for our own omission.
+        const { accepted } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', dq: 2 }], windowText, shown: new Set(), mentioned });
+        expect(accepted).toEqual([{ item: 'wrapped candy', dq: 2 }]);
+    });
+
+    test('a proposal bigger than the ledger covers is not a re-report', () => {
+        const { accepted } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', dq: 5 }], windowText, shown, mentioned });
+        expect(accepted).toEqual([{ item: 'wrapped candy', dq: 5 }]);
+    });
+
+    test('a loss with no trail is not a restatement', () => {
+        // No contributor trail means no recorded beat to be re-told, so a debit is a fresh change
+        // and is accepted. The old blanket claim, "nobody re-narrates dropping something", was
+        // falsified by the Time Stop RPG ledger (one spear billed twice, one room rented twice),
+        // which is why the trail now decides the question instead of the sign of `dq`.
+        const { accepted } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', dq: -1 }], windowText, shown, mentioned });
+        expect(accepted).toEqual([{ item: 'wrapped candy', dq: -1 }]);
+    });
+
+    test('a loss whose exact magnitude was already recorded is a re-tell, not a fresh debit', () => {
+        // The spear purchase billed at mids 36 AND 38 as `silver -10`: the second bill is the same
+        // event, and refusing it is what keeps the balance from draining to zero and the THIRD bill
+        // from reading as `remove-unknown`. An exact `dq` on the trail, with the magnitude fully
+        // covered by the held quantity, is arithmetic on fold's own numbers.
+        const inv = new Map([[itemKey('silver', 'money'), { qty: 10 }]]);
+        const contributors = new Map([[itemKey('silver', 'money'), [{ dq: -10, summary: 'buys an ash spear', mid: 36 }]]]);
+        const { accepted, rejected } = validateInventory({
+            inv,
+            deltas: [{ item: 'silver', dq: -10, at: 'money' }],
+            windowText: 'Sol purchased a spear from the smith for ten silver',
+            contributors,
+            visible: new Set([33, 34, 35, 36, 37, 38]),
+        });
+        expect(accepted).toEqual([]);
+        expect(rejected).toEqual([expect.objectContaining({ item: 'silver', reason: 'already-recorded' })]);
+    });
+
+    test('the same amount spent again, out of sight, is a second purchase', () => {
+        // Measured across the corpus: every duplicate that reached the ledger sits within two
+        // messages of its original, and every refusal past four is a purchase that really happened
+        //, the pack at New Eldoria mid 128 (matched at 115), the Time Stop waterskin and rope at
+        // mid 60 (matched at 38), Royal Succession's second `marks -500` at 295 (matched at 258).
+        // Two gold twice is two purchases unless the model can still see the first one.
+        const inv = new Map([[itemKey('gold', 'money'), { qty: 15 }]]);
+        const contributors = new Map([[itemKey('gold', 'money'), [{ dq: -2, summary: 'buys a mug of honey mead', mid: 115 }]]]);
+        const { accepted } = validateInventory({
+            inv,
+            deltas: [{ item: 'gold', dq: -2, at: 'money' }],
+            windowText: 'I take out two gold pieces and slide them over. The seamstress scoops them up.',
+            contributors,
+            visible: new Set([123, 124, 125, 126, 127, 128]),
+        });
+        expect(accepted).toEqual([{ item: 'gold', dq: -2, at: 'money' }]);
+    });
+
+    test('a loss of a different magnitude than anything recorded is accepted', () => {
+        // Same item, same trail, different amount, a real second transaction, not a re-tell.
+        const inv = new Map([[itemKey('silver', 'money'), { qty: 10 }]]);
+        const contributors = new Map([[itemKey('silver', 'money'), [{ dq: -10, summary: 'buys an ash spear', mid: 36 }]]]);
+        const { accepted } = validateInventory({
+            inv,
+            deltas: [{ item: 'silver', dq: -2, at: 'money' }],
+            windowText: 'Sol pays two silver for a room at the inn',
+            contributors,
+        });
+        expect(accepted).toEqual([{ item: 'silver', dq: -2, at: 'money' }]);
+    });
+
+    test('the contributor trail refuses a money re-record the shown gate exempts', () => {
+        // Money is exempt from the `shown` gate, a balance is not evidence about a payment, so
+        // the trail is the only thing that can refuse a re-credited payout. It does, when the
+        // crediting beat is still in the window.
+        //
+        // The docblock's Eunpyeong citation ("mids 128 and 142") is NOT reproducible against the
+        // live chat: `Solo Leveling The Eve of the Double Dungeon` carries `won +680000` exactly
+        // once, at mid 131, and has never recorded an `already-recorded` refusal. One of the pair
+        // may have been demoted (`demoteEvents` drops `d`). The mechanism is what this test pins;
+        // the distance-14 claim it was justified by has no surviving evidence.
+        const inv = new Map([[itemKey('won', 'money'), { qty: 2078000 }]]);
+        const contributors = new Map([[itemKey('won', 'money'), [{ dq: 680000, summary: 'Kang sends the raid payout', mid: 131 }]]]);
+        const { accepted, rejected } = validateInventory({
+            inv,
+            deltas: [{ item: 'won', dq: 680000, at: 'money' }],
+            windowText: 'Kang deposits the 680,000 won raid payout',
+            contributors,
+            visible: new Set([128, 129, 130, 131, 132, 133]),
+        });
+        expect(accepted).toEqual([]);
+        expect(rejected).toEqual([expect.objectContaining({ item: 'won', reason: 'already-recorded' })]);
+    });
+
+    test('a different amount on money is not a re-record', () => {
+        const inv = new Map([[itemKey('won', 'money'), { qty: 2078000 }]]);
+        const contributors = new Map([[itemKey('won', 'money'), [{ dq: 680000, summary: 'raid payout', mid: 128 }]]]);
+        const { accepted } = validateInventory({
+            inv,
+            deltas: [{ item: 'won', dq: 85000, at: 'money' }],
+            windowText: 'a sale nets 85,000 won',
+            contributors,
+        });
+        expect(accepted).toEqual([{ item: 'won', dq: 85000, at: 'money' }]);
+    });
+
+    test('the trail catches an item re-record the shown gate missed', () => {
+        // The goblin knife recorded at mids 22 and 38: the second window's ledger may not have
+        // shown it, but the trail has the +1, so the re-record is refused without needing `shown`.
+        const key = itemKey('rusty hunter\'s knife with sheath');
+        const inv = new Map([[key, { qty: 1 }]]);
+        const contributors = new Map([[key, [{ dq: 1, summary: 'takes its rusted knife', mid: 22 }]]]);
+        const { accepted, rejected } = validateInventory({
+            inv,
+            deltas: [{ item: 'rusty hunter\'s knife with sheath', dq: 1 }],
+            windowText: 'he picks up the rusty knife from the dead goblins',
+            contributors,
+            mentioned: new Set(['rusty hunter\'s knife with sheath']),
+            visible: new Set([20, 21, 22, 23, 24]),
+        });
+        expect(accepted).toEqual([]);
+        expect(rejected).toEqual([expect.objectContaining({ item: 'rusty hunter\'s knife with sheath', reason: 'already-recorded' })]);
+    });
+
+    test('an unbounded trail is not evidence: a contribution nobody can see refuses nothing', () => {
+        // The whole class, stated once. Sylanna hands over a stick of charcoal at mid 70; Solomon
+        // buys charcoal at Borin's general store at mid 180, a hundred and ten messages later, and
+        // the trail refused it. Nothing about a beat that far back is available to the pass that
+        // proposed this one, so it cannot be what the pass is re-telling.
+        const key = itemKey('charcoal');
+        const inv = new Map([[key, { qty: 1 }]]);
+        const contributors = new Map([[key, [{ dq: 1, summary: 'Sylanna hands over parchment and charcoal', mid: 70 }]]]);
+        const { accepted } = validateInventory({
+            inv,
+            deltas: [{ item: 'charcoal', dq: 1 }],
+            windowText: 'Borin sets the charcoal and paper on the counter with the rest of the trail kit',
+            contributors,
+            mentioned: new Set(['charcoal']),
+            visible: new Set([175, 176, 177, 178, 179, 180]),
+        });
+        expect(accepted).toEqual([{ item: 'charcoal', dq: 1 }]);
+    });
+
+    test('a restated total is exempt, because it is idempotent by construction', () => {
+        const { accepted } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', set: 2 }], windowText, shown, mentioned: new Set(['wrapped candy']) });
+        expect(accepted).toEqual([{ item: 'wrapped candy', set: 2 }]);
+    });
+
+    test('money is exempt, a balance is not evidence about a payment', () => {
+        // ₩360,000 after a raid and ₩85,000 from a sale are two payments, not one told twice. The
+        // measured money defects were the quantity-cap artefact and the missing debit side, never
+        // a duplicated credit.
+        const purse = new Map([[itemKey('won', MONEY), { qty: 330000 }]]);
+        const { accepted } = validateInventory({
+            inv: purse,
+            deltas: [{ item: 'won', dq: 85000, at: 'money' }],
+            windowText: 'eighty-five thousand won changes hands',
+            shown: new Set([itemKey('won', MONEY)]),
+            mentioned: new Set(['won']),
+        });
+        expect(accepted).toEqual([{ item: 'won', dq: 85000, at: MONEY }]);
+    });
+
+    test('the same name in another place is another thing', () => {
+        const { accepted } = validateInventory({ inv: held, deltas: [{ item: 'wrapped candy', dq: 2, at: 'desk drawer' }], windowText, shown, mentioned: new Set(['wrapped candy']) });
+        expect(accepted).toEqual([{ item: 'wrapped candy', dq: 2, at: 'desk drawer' }]);
+    });
+});
+
+describe('contact details are never items, the schema instruction is the contract', () => {
+    test('a contact row the model reports is stored, not refused by an English place list', () => {
+        // The delta instruction says "Contact details are NOT items, never record them as gained"
+        // and the entity probe reports `reach` structurally. The old `CONTACT_PLACE` regex was an
+        // English word list ("contacts", "phone book", "address book") that could only work in one
+        // language. fold stores what the model reports; a wrong row is the model's error, visible
+        // and correctable, and the review probe re-reads the ledger.
+        for (const at of ['contacts', 'contact', 'phone book', 'address book']) {
+            const { accepted, rejected } = validateInventory({
+                inv: new Map(),
+                deltas: [{ item: 'kang\'s phone number', dq: 1, at }],
+                windowText: 'he reads out Kang\'s number while Solomon types',
+                mentioned: new Set(['kang\'s phone number']),
+            });
+            expect(rejected).toEqual([]);
+            expect(accepted).toEqual([expect.objectContaining({ item: 'kang\'s phone number', dq: 1 })]);
+        }
+    });
+});
+
+describe('canonicalItemName, one name containing another is still two rows', () => {
+    test('a phone and a phone number stay two rows', () => {
+        // Measured: a block listing `phone` was absorbed into `solomon's phone number`.
+        const { inv } = deriveState([
+            ev(1, { inv: [{ item: 'solomon\'s phone number', dq: 1 }] }),
+            ev(2, { inv: [{ item: 'phone', dq: 1 }] }),
+        ]);
+        expect([...inv.keys()].sort()).toEqual([itemKey('phone'), itemKey('solomon\'s phone number')].sort());
+    });
+
+    test('one coat described twice is TWO rows until the model says same', () => {
+        // The old head-token rule merged these. Identity is exact now: whether "m-65 military
+        // jacket" is the same coat as "m-65 jacket" is the review probe's `[same?]` question, not a
+        // fold judgement made from English prepositions.
+        const { inv } = deriveState([
+            ev(1, { inv: [{ item: 'm-65 jacket', dq: 1 }] }),
+            ev(2, { inv: [{ item: 'm-65 military jacket', dq: 1 }] }),
+        ]);
+        expect([...inv.keys()].sort()).toEqual([itemKey('m-65 jacket'), itemKey('m-65 military jacket')].sort());
+        expect(inv.get(itemKey('m-65 jacket'))).toEqual({ qty: 1 });
+    });
+
+    test('two people\'s numbers do not collapse into one', () => {
+        const { inv } = deriveState([
+            ev(1, { inv: [{ item: 'kang\'s phone number', dq: 1 }] }),
+            ev(2, { inv: [{ item: 'jin-woo\'s phone number', dq: 1 }] }),
+        ]);
+        expect(inv.size).toBe(2);
+    });
+});
+
+describe('renderLedger, the pinned block, and what it says it showed', () => {
+    const state = deriveState([
+        ev(1, { inv: [{ item: 'won', set: 330000, at: 'money' }] }),
+        ev(2, { inv: [{ item: 'goblin knife', dq: 1 }, { item: 'laptop', dq: 1, at: 'goshiwon room' }] }),
+        ev(3, { st: [{ flag: 'bandaged left calf', on: true, turns: 0 }] }),
+    ]);
+
+    test('money reads as a balance, not as luggage', () => {
+        // `renderState` prints it as `Stored (money): won x330000`: a balance dressed as a thing
+        // in a bag, in the one prompt that is asking the model to record purchases.
+        const { lines } = renderLedger(state);
+        expect(lines[0]).toBe('Money: 330000 won');
+        expect(lines).toContain('Carrying: goblin knife');
+        expect(lines).toContain('Stored (goshiwon room): laptop');
+        expect(lines).toContain('Condition: bandaged left calf');
+    });
+
+    test('the shown set is exactly the inventory keys that reached the prompt', () => {
+        const { shown } = renderLedger(state);
+        expect([...shown].sort()).toEqual([
+            itemKey('goblin knife'),
+            itemKey('laptop', 'goshiwon room'),
+            itemKey('won', MONEY),
+        ].sort());
+    });
+
+    test('a carried item nothing has mentioned is both shown and claimed', () => {
+        // The inverse of the assertion that stood here. `shown` is what makes
+        // `reject:already-recorded` honest, and while `isFresh` hid stale rows the gate had a hole
+        // exactly the size of the hiding: an item too stale to be shown could be re-billed. Both
+        // ends closed at once.
+        const stale = { ...state, since: new Map([[itemKey('goblin knife'), STALE_THRESHOLD * 20]]) };
+        const { lines, shown } = renderLedger(stale);
+        expect(lines.join('\n')).toContain('goblin knife');
+        expect(shown.has(itemKey('goblin knife'))).toBe(true);
+    });
+
+    test('an empty state renders nothing at all', () => {
+        const { lines, shown } = renderLedger(deriveState([]));
+        expect(lines).toEqual([]);
+        expect(shown.size).toBe(0);
+    });
+});
+
+/*
+ * The ₩9,999 root, and it was deeper than the missing `at`.
+ *
+ * Phase A's window replay found it while measuring something else: `merge_qty` picks its ceiling
+ * with `maxQty(nu?.at ?? old?.at)`, and `bumpQty` handed it a bare `{dq}`: no `at` on the incoming
+ * value, and none on the stored one either, because the stored shape is `{qty}`. So EVERY dq-sourced
+ * change clamped at MAX_QTY, money included, and only `setQty` (the restated-total path) ever read
+ * the place off the key. The pinned `Money:` line then lied about the balance for the rest of the
+ * chat (FOLD-RPG-GAP.md §0: "money | won ×9,999 | ₩330,000").
+ */
+describe('a money delta is bounded by arithmetic, not by the pocket cap', () => {
+    test('a tagged money delta folds to its full amount', () => {
+        const inv = deriveState([ev(1, { inv: [{ item: 'won', dq: 360000, at: 'money' }] })]).inv;
+        expect(inv.get(itemKey('won', MONEY)).qty).toBe(360000);
+        expect(inv.get(itemKey('won', MONEY)).qty).not.toBe(MAX_QTY);
+    });
+
+    test('the raid payout at mid 46 is the case, and its recorded shape is the other half of it', () => {
+        // The event as it actually sits in the live ledger: `{"item":"won","dq":360000}`, with no
+        // `at` at all. It keys as a CARRIED "won" and is still capped, correctly, since a carried
+        // object is not a balance. Getting that delta into the money place is the delta
+        // instruction's job and the directed money question's, not a currency word list here
+        // (FOLD-REDESIGN.md §11 rules those out with a standing measurement). Asserted rather than
+        // hidden, so the remaining half of the defect is visible in the suite.
+        const asRecorded = deriveState([ev(1, { inv: [{ item: 'won', dq: 360000 }] })]).inv;
+        expect(asRecorded.get(itemKey('won', CARRIED)).qty).toBe(MAX_QTY);
+
+        const asTagged = deriveState([ev(1, { inv: [{ item: 'won', dq: 360000, at: 'money' }] })]).inv;
+        expect(asTagged.get(itemKey('won', MONEY)).qty).toBe(360000);
+    });
+
+    test('a validated money delta survives the whole pipeline at full size', () => {
+        const { accepted } = validateInventory({
+            inv: new Map(),
+            deltas: [{ item: 'won', dq: 360000, at: 'money' }],
+            windowText: 'his share came to 360,000 won',
+        });
+        expect(deriveState([ev(1, { inv: accepted })]).inv.get(itemKey('won', MONEY)).qty).toBe(360000);
+    });
+
+    test('and an ordinary item is still capped, because that guard was never the bug', () => {
+        const inv = deriveState([ev(1, { inv: [{ item: 'crowbar', dq: 999999 }] })]).inv;
+        expect(inv.get(itemKey('crowbar')).qty).toBe(MAX_QTY);
+    });
+});
+
+/*
+ * MAX_CHANGES_PER_TURN counted restatements against a budget named for changes. The measured shape:
+ * the message-72 reconciliation in Solo Leveling is one validateInventory call carrying 30 inventory
+ * lines, all restatements, and any genuine gain queued behind the twelfth would have been dropped.
+ */
+describe('the change budget counts changes', () => {
+    test('a restated total never consumes a change slot', () => {
+        const deltas = [
+            ...Array.from({ length: MAX_CHANGES_PER_TURN + 4 }, (_, n) => ({ item: `thing ${n}`, set: 1 })),
+            { item: 'goblin knife', dq: 1 },
+        ];
+        const windowText = `${deltas.map(d => d.item).join(' ')} goblin knife`;
+        const { accepted, rejected } = validateInventory({ inv: new Map(), deltas, windowText });
+        expect(rejected.filter(r => r.reason === 'rate-limited')).toEqual([]);
+        expect(accepted.some(entry => entry.item === 'goblin knife' && entry.dq === 1)).toBe(true);
+    });
+
+    test('and a genuine flood is still bounded', () => {
+        const deltas = Array.from({ length: MAX_CHANGES_PER_TURN + 3 }, (_, n) => ({ item: `thing ${n}`, dq: 1 }));
+        const { accepted, rejected } = validateInventory({
+            inv: new Map(), deltas, windowText: deltas.map(d => d.item).join(' '),
+        });
+        expect(accepted).toHaveLength(MAX_CHANGES_PER_TURN);
+        expect(rejected.filter(r => r.reason === 'rate-limited')).toHaveLength(3);
+    });
+
+    test('the bound clears the live observation by more than a factor of two', () => {
+        // Phase A measured it BINDING at 13 in one turn of the live chat; re-measured over all four
+        // ledger copies the largest per-turn total of non-restated changes is 11, and the largest in
+        // any single delta is 6. A cap's own victims are the rows missing from the file you measure
+        // it against, so the live count is the tighter observation.
+        expect(MAX_CHANGES_PER_TURN).toBeGreaterThanOrEqual(2 * 13);
+    });
+});
+
+/*
+ * Contact details are `reach` on a person, not a thing in a pocket. The read-heal is keyed on the
+ * migration's OWN record, the exact item keys it moved (`reachKeys`), never on an English place
+ * word. FOLD-REDESIGN.md §10, Phase B LANDED deviation 7.
+ */
+describe('the contact read-heal is keyed on the migration\'s own record', () => {
+    test('an exact key the migration recorded contributes no inventory row', () => {
+        const inv = deriveState([ev(1, {
+            inv: [
+                { item: 'kang\'s phone number', dq: 1, at: 'contacts' },
+                { item: 'jin-woo\'s phone number', dq: 1, at: 'contacts' },
+            ],
+        })], {
+            reachKeys: new Set([`contacts${'\u0000'}kang's phone number`, `contacts${'\u0000'}jin-woo's phone number`]),
+        }).inv;
+        expect(inv.size).toBe(0);
+    });
+
+    test('a spelling the migration did not record folds as the model reported it', () => {
+        // The old rule refused every spelling of the place ("contact list", "phonebook", "phone
+        // book", "address book") with an English word list. fold no longer reads place words to
+        // decide what is a contact; a row not in the migration's own reachKeys record folds.
+        for (const place of ['contact list', 'phonebook', 'phone book', 'address book']) {
+            const inv = deriveState([ev(1, { inv: [{ item: 'kang\'s number', dq: 1, at: place }] })]).inv;
+            expect(inv.size).toBe(1);
+        }
+    });
+
+    test('read-time, so nobody\'s ledger is rewritten and a rollback loses nothing', () => {
+        // The event is untouched, only the fold ignores it. Rewriting the ledger would destroy the
+        // evidence that the numbers were ever exchanged.
+        const events = [ev(1, { inv: [{ item: 'kang\'s phone number', dq: 1, at: 'contacts' }] })];
+        deriveState(events, { reachKeys: new Set(['kang\'s phone number']) });
+        expect(events[0].d.inv[0]).toEqual({ item: 'kang\'s phone number', dq: 1, at: 'contacts' });
+    });
+
+    test('an ordinary place is unaffected', () => {
+        const inv = deriveState([ev(1, { inv: [{ item: 'laptop', dq: 1, at: 'goshiwon room' }] })]).inv;
+        expect(inv.get(itemKey('laptop', 'goshiwon room')).qty).toBe(1);
+    });
+});
+
+describe('an `st` delta that named nobody is about the player, and folds under his key', () => {
+    // The unowned bucket and the pov are one person, so they must be one key.
+    //
+    // `deriveState`'s status fold already documented the intent, "fold-time default `who = pov`,
+    // read-time healing, no rewrite", and keyed the row `''` anyway.
+    //
+    // MEASURED in the live Isekai RPG chat. Mid 0 was extracted before the scene probe had
+    // established a point of view, so the crash trauma was recorded with `who: ''`; every later
+    // pass knew the pov and recorded the same trauma with `who: 'Ike Kōtoku'`. Two keys, one
+    // condition, one person, and the narrator was handed the prompt line
+    // `Status: right leg strain, bloody temple, traumatized by the bus crash, traumatized by the
+    // bus crash`.
+
+    const wounded = (who, subject, phrase) => ev(1, {
+        st: [{ who, subject, flag: phrase, on: true, severity: 'minor', turns: 0 }],
+    });
+
+    test('the unnamed and the named land on one row', () => {
+        const { marks } = deriveState([
+            wounded('', 'traumatized', 'traumatized by the bus crash'),
+            { ...wounded('Ike Kōtoku', 'traumatized', 'traumatized by the bus crash'), t: 2 },
+        ], { pov: 'Ike Kōtoku' });
+        expect(marks.size).toBe(1);
+        expect([...marks.keys()]).toEqual([markKey('Ike Kōtoku', 'traumatized')]);
+    });
+
+    test('somebody else\'s wound is still their own', () => {
+        // The collapse is only ever onto the pov. A named third party keeps their own row, or the
+        // fix would file every wound in the scene on the player.
+        const { marks } = deriveState([
+            wounded('', 'traumatized', 'traumatized by the bus crash'),
+            { ...wounded('Sato', 'shaking', 'hands shaking'), t: 2 },
+        ], { pov: 'Ike Kōtoku' });
+        expect(marks.size).toBe(2);
+        expect([...marks.keys()].sort()).toEqual([markKey('Ike Kōtoku', 'traumatized'), markKey('Sato', 'shaking')].sort());
+    });
+
+    test('with no pov to fold onto, the unowned bucket is unchanged', () => {
+        // The legacy shape: a chat whose scene probe has never run. Behaviour must not move, or
+        // every pre-pov chat re-keys on the first render after this lands.
+        const { marks } = deriveState([wounded('', 'traumatized', 'traumatized by the bus crash')]);
+        expect([...marks.keys()]).toEqual([markKey('', 'traumatized')]);
+    });
+
+    test('read-time, so the events still say what actually happened', () => {
+        // "Nobody said" is the truth about that pass and stays on the record; only the fold reads
+        // it as the player's. A chat whose pov later changes re-folds to the new answer for free.
+        const events = [wounded('', 'traumatized', 'traumatized by the bus crash')];
+        deriveState(events, { pov: 'Ike Kōtoku' });
+        expect(events[0].d.st[0].who).toBe('');
+    });
+});
+
+describe('the paid? answer faces the same re-tell gate as everything else', () => {
+    // One coin, two debits.
+    //
+    // MEASURED in the live Isekai RPG ledger:
+    //
+    //   mid 14  +15  "Quest completed: Eliminate the Scavengers, gaining 30 EXP and 15 Gold."
+    //   mid 42   -1  "Ike Kōtoku gives Brenn a gold coin for a bottle of cheap red wine"   src=llm
+    //   mid 45   -1  "Paid 1 gold for gold"                                             src=review
+    //
+    // The player spent one coin and the balance fell by two. The extraction pass recorded the
+    // payment when it read the scene; the review's `paid?` question then answered "1 gold" for the
+    // same purchase and billed it again.
+    //
+    // `validateInventory` already refuses exactly this, the trail carries a matching -1, but the
+    // refusal is bounded to deltas at a mid the model can still SEE, and that bound is a `visible`
+    // set. `applyMoney` passed none, so `inSight` was false for every candidate and the gate was
+    // dead on that path. These pin the gate itself; the wiring is one argument in `review.js`.
+
+    const trail = mid => new Map([[itemKey('gold', MONEY), [{ dq: -1, summary: 'gives Brenn a gold coin', mid }]]]);
+
+    test('a payment the ledger already carries, still on screen, is refused', () => {
+        const { accepted, rejected } = validateInventory({
+            inv: new Map([[itemKey('gold', MONEY), { qty: 14 }]]),
+            deltas: [{ item: 'gold', dq: -1, at: MONEY }],
+            windowText: 'Ike hands over a gold coin for the wine.',
+            contributors: trail(42),
+            // The window this pass displayed. Mid 42 is in it, so the earlier debit is something
+            // the model can still read, the only evidence a re-tell refusal may rest on.
+            visible: new Set([40, 41, 42, 43, 44, 45]),
+        });
+        expect(accepted).toEqual([]);
+        expect(rejected).toEqual([expect.objectContaining({ item: 'gold', reason: 'already-recorded' })]);
+    });
+
+    test('and the same payment out of sight is allowed, because it may be a second purchase', () => {
+        // The RC1 bound, unchanged: a refusal resting on a beat the model cannot see is refusing
+        // something it had no way to know about, and repeat purchases are ordinary.
+        const { accepted, rejected } = validateInventory({
+            inv: new Map([[itemKey('gold', MONEY), { qty: 14 }]]),
+            deltas: [{ item: 'gold', dq: -1, at: MONEY }],
+            windowText: 'Ike hands over a gold coin for another bottle.',
+            contributors: trail(2),
+            visible: new Set([40, 41, 42, 43, 44, 45]),
+        });
+        expect(rejected).toEqual([]);
+        expect(accepted).toEqual([expect.objectContaining({ item: 'gold', dq: -1 })]);
+    });
+
+    test('with no visibility set at all the gate cannot fire, which is the defect', () => {
+        // Pinned deliberately. This is the shape `applyMoney` was calling with, and it documents
+        // WHY the bug existed: the gate is not broken, it was handed nothing to judge against.
+        const { accepted } = validateInventory({
+            inv: new Map([[itemKey('gold', MONEY), { qty: 14 }]]),
+            deltas: [{ item: 'gold', dq: -1, at: MONEY }],
+            windowText: 'Ike hands over a gold coin for the wine.',
+            contributors: trail(42),
+            visible: null,
+        });
+        expect(accepted).toEqual([expect.objectContaining({ item: 'gold', dq: -1 })]);
+    });
+});
+
+describe('a gauge name is fold\'s key, so the prose is never asked to quote it', () => {
+    // The measured failure.
+    //
+    // Live Wuxia World RPG, 85 messages: EIGHT consecutive `hp` deltas refused `not-mentioned`:
+    // {dcur:-10}, {dcur:+30}, {dcur:-20}, {dcur:+20}, so the health bar never moved once across a
+    // campaign of boar fights and recoveries.
+    //
+    // The gate asked whether the token `hp` appeared in the window. It never does: a narrator
+    // writes "the tusk opens his flank", not "hp", because `hp` is fold's name for the gauge and
+    // not the story's. `validateStatus` documents this exact defect and fixed it by testing the
+    // PERSON instead of the flag word; a vital has no person to test, because it IS the pov's body,
+    // which that same docblock says "is in every scene by definition and is never rejected".
+
+    const bleeding = 'The tusk opens his flank and he sags against the rock, breath ragged.';
+
+    test('a wound the prose describes but never names moves the gauge', () => {
+        const { accepted, rejected } = validateVitals({
+            vitals: new Map(), deltas: [{ name: 'hp', dcur: -10, max: 0 }], windowText: bleeding,
+        });
+        expect(rejected).toEqual([]);
+        expect(accepted).toEqual([{ name: 'hp', dcur: -10 }]);
+    });
+
+    test('and so does recovery, in a window that mentions no gauge either', () => {
+        const { accepted, rejected } = validateVitals({
+            vitals: new Map([['hp', { cur: 40, max: 100 }]]),
+            deltas: [{ name: 'hp', dcur: 20, max: 0 }],
+            windowText: 'A night by the fire and the worst of it has closed over.',
+        });
+        expect(rejected).toEqual([]);
+        expect(accepted[0]).toMatchObject({ name: 'hp', dcur: 20 });
+    });
+
+    test('an empty `mentions` report no longer destroys the delta', () => {
+        // The report was the floor and the prose test the fallback; both failed on the same word,
+        // so an under-reporting model silently cost the campaign its health tracking.
+        const { rejected } = validateVitals({
+            vitals: new Map(), deltas: [{ name: 'qi', dcur: -5, max: 0 }],
+            windowText: bleeding, mentioned: new Set(),
+        });
+        expect(rejected).toEqual([]);
+    });
+
+    test('the structural bounds are untouched, they were never the bug', () => {
+        // A gauge still needs a usable name…
+        expect(validateVitals({ vitals: new Map(), deltas: [{ name: '  ', dcur: 1 }], windowText: '' })
+            .rejected).toEqual([expect.objectContaining({ reason: 'unusable-name' })]);
+        // …and a ceiling that leaps in one turn is still a hallucination, not a level-up.
+        const { rejected } = validateVitals({
+            vitals: new Map([['hp', { cur: 50, max: 100 }]]),
+            deltas: [{ name: 'hp', dcur: 0, max: 9000 }],
+            windowText: bleeding,
+        });
+        expect(rejected).toEqual([expect.objectContaining({ reason: 'implausible-max' })]);
+    });
+});
+
+/*
+ * "Still carrying?" asked about a row that is not on the pack.
+ *
+ * `review.js` turns a `settled`/`moot` on an item line into `dq: -1` at that row's own place, and
+ * that is the ONLY thing that removes an item. So a row posed to a question it cannot pass is a row
+ * scheduled for deletion. The selector excluded money and nothing else.
+ *
+ * Ground truth is the live Wuxia ledger
+ * (`data/default-user/extensions/sanguine-ledger/e8416d96-.../ledger.jsonl`, read through `replay`, not
+ * hand-folded): six techniques learned across the campaign, five destroyed by this, mid 34 took
+ * `mud-clearing breath` and `nine realms heavenly ascension technique`, mid 212 took
+ * `thunder-light escape art`, `purple-gold spear astral-qi` and `spiritual sense` in one pass.
+ * Across every campaign on disk, 11 of 38 review disposals fired at an off-pack row.
+ */
+describe('the disposition question is about the pack, and only the pack', () => {
+    const POV = 'Chí Guāngdé';
+
+    test('a carried row is posed, the question this was always for', () => {
+        expect(isDisposable(itemKey('jade pendant', CARRIED), POV)).toBe(true);
+        expect(isDisposable(itemKey('jade pendant', CARRIED, POV), POV)).toBe(true);
+    });
+
+    test('an ability is never posed, "no" is the only honest answer and it deleted the row', () => {
+        // Verbatim from mid 212. fold's own summary was "No longer carrying thunder-light escape
+        // art (technique learned as ability)", a sentence that refutes itself.
+        expect(isDisposable(itemKey('thunder-light escape art', ABILITIES), POV)).toBe(false);
+        expect(isDisposable(itemKey('spiritual sense', ABILITIES), POV)).toBe(false);
+    });
+
+    test('property is never posed, a house is not in a pocket', () => {
+        expect(isDisposable(itemKey('赤焰居', ASSETS), POV)).toBe(false);
+    });
+
+    test('a row already recorded elsewhere is not posed, its key is the answer', () => {
+        // mid 34: "No longer carrying sandstone slab (left at rocky ridge overhang)". The record
+        // already said `rocky ridge overhang`; the model agreed with it; the agreement was
+        // transcribed as a removal FROM the overhang.
+        expect(isDisposable(itemKey('sandstone slab', 'rocky ridge overhang'), POV)).toBe(false);
+        expect(isDisposable(itemKey('heavy iron-tusk pair', 'storage ring'), POV)).toBe(false);
+    });
+
+    test('money is still excluded, for the reason it always was', () => {
+        // A balance falls by being spent, which the `paid?` question covers.
+        expect(isDisposable(itemKey('low-grade spirit stones', MONEY), POV)).toBe(false);
+    });
+
+    test('somebody else\'s pack is theirs to lose', () => {
+        expect(isDisposable(itemKey('spear', CARRIED, 'Líng Xiāng'), POV)).toBe(false);
+    });
+
+    test('a genuine removal still arrives as an ordinary delta, nothing became unlosable', () => {
+        // The narrative pass is untouched: this only stops the review ASKING. An ability really
+        // lost still folds, which is what keeps the fix a subtraction rather than a new rule.
+        const { inv } = deriveState([
+            ev(1, { inv: [{ item: 'thunder-light escape art', dq: 1, at: ABILITIES }] }),
+            ev(2, { inv: [{ item: 'thunder-light escape art', dq: -1, at: ABILITIES }] }),
+        ]);
+        expect(inv.has(itemKey('thunder-light escape art', ABILITIES))).toBe(false);
+    });
+});
+
+/*
+ * A stated total that disagrees is a transaction that went unrecorded.
+ *
+ * Two thirds of the money on a completed Xianxia ledger arrived as `set`: the narrator's own
+ * printed balance, adopted verbatim, so fold was transcribing a total rather than computing one.
+ * Comparing every narrator-stated balance against what fold held at that point: 21 of 63 agreed
+ * (33%), 8 more were one beat behind, 34 were neither, worst gap 2604. None of it was visible
+ * anywhere in the product.
+ *
+ * Behaviour is unchanged: the stated total is still adopted, because fold misses extractions and
+ * refusing the narrator's number would entrench fold's error instead of correcting it. What is new
+ * is that the disagreement is now on the record.
+ */
+describe('the money drift detector', () => {
+    test('a restatement that agrees records nothing', () => {
+        const { drifted } = deriveState([
+            ev(1, { inv: [{ item: 'spirit stones', dq: 90, at: MONEY }] }),
+            ev(2, { inv: [{ item: 'spirit stones', set: 90, at: MONEY }] }),
+        ]);
+        expect(drifted).toEqual([]);
+    });
+
+    test('a restatement that disagrees records both numbers and the gap', () => {
+        // The live mid-286 shape: fold held 396, the story said 3000.
+        const { drifted, inv } = deriveState([
+            ev(1, { inv: [{ item: 'spirit stones', dq: 396, at: MONEY }] }),
+            { ...ev(2, { inv: [{ item: 'spirit stones', set: 3000, at: MONEY }] }), mid: 296 },
+        ]);
+        expect(drifted).toEqual([expect.objectContaining({ held: 396, said: 3000, gap: 2604, mid: 296 })]);
+        // …and the total is still adopted. The detector reports, it does not refuse.
+        expect(inv.get(itemKey('spirit stones', MONEY)).qty).toBe(3000);
+    });
+
+    test('the gap carries its sign, so a fall is distinguishable from a rise', () => {
+        const { drifted } = deriveState([
+            ev(1, { inv: [{ item: 'spirit stones', dq: 1273, at: MONEY }] }),
+            ev(2, { inv: [{ item: 'spirit stones', set: 373, at: MONEY }] }),
+        ]);
+        expect(drifted[0].gap).toBe(-900);
+    });
+
+    test('a first restatement is not a drift, there was nothing to disagree with', () => {
+        // Opening a row at a stated total is how most money rows begin. Counting that as drift would
+        // make the rate meaningless.
+        const { drifted } = deriveState([ev(1, { inv: [{ item: 'spirit stones', set: 500, at: MONEY }] })]);
+        expect(drifted).toEqual([]);
+    });
+
+    test('only money drifts, a restated pack count is a recount, not a discrepancy', () => {
+        // A carried list is routinely re-read and re-stated; a balance is arithmetic. Flagging every
+        // inventory restatement would bury the signal this exists to surface.
+        const { drifted } = deriveState([
+            ev(1, { inv: [{ item: 'arrows', dq: 30 }] }),
+            ev(2, { inv: [{ item: 'arrows', set: 12 }] }),
+        ]);
+        expect(drifted).toEqual([]);
+    });
+
+    test('the four Wuxia double-bills each leave a drift record', () => {
+        // Each one is the same shape: the narrative pass restates a balance that has already
+        // absorbed a purchase, and the review then bills the purchase again.
+        const { drifted } = deriveState([
+            ev(1, { inv: [{ item: 'spirit stones', dq: 563, at: MONEY }] }),
+            { ...ev(2, { inv: [{ item: 'spirit stones', set: 63, at: MONEY }] }), mid: 251 },
+            { ...ev(3, { inv: [{ item: 'spirit stones', set: 23, at: MONEY }] }), mid: 258 },
+            { ...ev(4, { inv: [{ item: 'spirit stones', set: 1273, at: MONEY }] }), mid: 277 },
+            { ...ev(5, { inv: [{ item: 'spirit stones', set: 373, at: MONEY }] }), mid: 286 },
+        ]);
+        expect(drifted.map(d => d.mid)).toEqual([251, 258, 277, 286]);
+        expect(drifted.map(d => d.gap)).toEqual([-500, -40, 1250, -900]);
+    });
+});
+
+/**
+ * Eviction carried credits and dropped debits, so the balance grew when history was forgotten.
+ *
+ * `carryForward` measures what eviction is about to destroy as a difference of two folds of the
+ * shipped `deriveState`, the ledger as it stands, against the ledger with the doomed events gone,
+ * and adds the difference to the baseline. Correct in shape. Two things were wrong in the body.
+ *
+ * First, `if (lost <= 0) continue;`. A batch whose net contribution to a key is NEGATIVE was
+ * silently skipped, so evicting a run of spending made the player richer. That has been masked
+ * because real event streams mix credits and debits and the net is usually positive, a recurring
+ * cost is the shape that makes negative-net batches ordinary, which is exactly what this round adds.
+ *
+ * Second, the loop iterated `now` only. A row the zero-floor DELETED in `now` (`deriveState` drops
+ * a row at `qty <= 0`) but which still stands in `after` is never visited at all, so the largest
+ * debits, the ones that emptied a row, were the ones most certainly missed. The keys have to be
+ * the union.
+ */
+describe('carriedBaseline, what eviction would destroy, in both directions', () => {
+    const inv = (rows) => new Map(Object.entries(rows).map(([key, qty]) => [key, { qty }]));
+
+    test('a credit that is about to be evicted is carried', () => {
+        // now 100, and without the doomed events it would be 40, 60 is leaving.
+        const { next, carried } = carriedBaseline(inv({ gold: 100 }), inv({ gold: 40 }), new Map());
+        expect(next.get('gold')).toEqual({ qty: 60 });
+        expect(carried).toBe(60);
+    });
+
+    test('a DEBIT that is about to be evicted is carried too, this is the bug', () => {
+        // now 40, and without the doomed events it would be 100: the evicted run SPENT 60.
+        // Dropping it makes the derived balance jump back up to 100 for free.
+        const { next, carried } = carriedBaseline(inv({ gold: 40 }), inv({ gold: 100 }), new Map());
+        expect(next.get('gold')).toEqual({ qty: -60 });
+        expect(carried).toBe(60);
+    });
+
+    test('a row the zero-floor deleted is still visited', () => {
+        // `deriveState` deletes a row at qty <= 0, so a fully-spent key is ABSENT from `now` while
+        // `after` still holds it. Iterating `now` alone never sees the key at all.
+        const { next, carried } = carriedBaseline(inv({}), inv({ rations: 12 }), new Map());
+        expect(next.get('rations')).toEqual({ qty: -12 });
+        expect(carried).toBe(12);
+    });
+
+    test('an unchanged row is not touched', () => {
+        const { next, carried } = carriedBaseline(inv({ gold: 100 }), inv({ gold: 100 }), new Map());
+        expect(next.size).toBe(0);
+        expect(carried).toBe(0);
+    });
+
+    test('the carry adds to what the baseline already holds', () => {
+        const { next } = carriedBaseline(inv({ gold: 100 }), inv({ gold: 40 }), inv({ gold: 500 }));
+        expect(next.get('gold')).toEqual({ qty: 560 });
+    });
+
+    test('a carried debit can cancel a carried credit across evictions', () => {
+        // Two evictions in sequence: +60 then -60 must leave the baseline where it started, or the
+        // ledger drifts by exactly the amount of history that happened to age out.
+        const first = carriedBaseline(inv({ gold: 100 }), inv({ gold: 40 }), new Map()).next;
+        const second = carriedBaseline(inv({ gold: 40 }), inv({ gold: 100 }), first).next;
+        expect(second.get('gold')).toEqual({ qty: 0 });
+    });
+
+    test('`carried` is a magnitude, so the counter reads as how much was rescued', () => {
+        const { carried } = carriedBaseline(inv({ gold: 40, silver: 10 }), inv({ gold: 100, silver: 4 }), new Map());
+        expect(carried).toBe(66);
     });
 });

@@ -111,7 +111,7 @@ export async function lastMessageText(page) {
  */
 export async function configureChronicle(page, options = {}) {
     await page.evaluate(async (options) => {
-        const { foldSettings } = await import('./scripts/extensions/fold/index.js');
+        const { foldSettings } = await import('./scripts/extensions/sanguine/index.js');
         Object.assign(foldSettings().chronicle, { enabled: true, ...options });
     }, options);
 }
@@ -124,7 +124,7 @@ export async function configureChronicle(page, options = {}) {
  */
 export async function configureState(page, enabled = true) {
     await page.evaluate(async (enabled) => {
-        const { foldSettings } = await import('./scripts/extensions/fold/index.js');
+        const { foldSettings } = await import('./scripts/extensions/sanguine/index.js');
         foldSettings().state.enabled = enabled;
     }, enabled);
 }
@@ -136,7 +136,7 @@ export async function configureState(page, enabled = true) {
  */
 export async function stateSnapshot(page) {
     return await page.evaluate(async () => {
-        const state = await import('./scripts/extensions/fold/state.js');
+        const state = await import('./scripts/extensions/sanguine/state.js');
         return state.snapshot();
     });
 }
@@ -148,7 +148,7 @@ export async function stateSnapshot(page) {
  */
 export async function stateBlock(page) {
     return await page.evaluate(async () => {
-        const state = await import('./scripts/extensions/fold/state.js');
+        const state = await import('./scripts/extensions/sanguine/state.js');
         return state.render();
     });
 }
@@ -160,8 +160,8 @@ export async function stateBlock(page) {
  */
 export async function extractNow(page) {
     return await page.evaluate(async () => {
-        const { runExtraction } = await import('./scripts/extensions/fold/extract.js');
-        const { foldSettings } = await import('./scripts/extensions/fold/index.js');
+        const { runExtraction } = await import('./scripts/extensions/sanguine/extract.js');
+        const { foldSettings } = await import('./scripts/extensions/sanguine/index.js');
         const settings = foldSettings().chronicle;
         return await runExtraction({
             windowSize: settings.window,
@@ -188,7 +188,7 @@ export async function extractNow(page) {
 export async function useExtractionProfile(page, { name, api, model }) {
     return await page.evaluate(async ({ name, api, model }) => {
         const { extension_settings } = await import('./scripts/extensions.js');
-        const { foldSettings } = await import('./scripts/extensions/fold/index.js');
+        const { foldSettings } = await import('./scripts/extensions/sanguine/index.js');
 
         extension_settings.connectionManager = extension_settings.connectionManager ?? { profiles: [], selectedProfile: null };
         extension_settings.disabledExtensions = (extension_settings.disabledExtensions ?? [])
@@ -258,7 +258,7 @@ export async function addWorldInfoEntry(page, { key, content }) {
 export async function recallBlock(page) {
     return await page.evaluate(async () => {
         const { extension_prompts } = await import('./script.js');
-        return String(extension_prompts?.['5_fold_recall']?.value ?? '');
+        return String(extension_prompts?.['5_sanguine_recall']?.value ?? '');
     });
 }
 
@@ -269,7 +269,7 @@ export async function recallBlock(page) {
  */
 export async function chronicleSnapshot(page) {
     return await page.evaluate(async () => {
-        const chronicle = await import('./scripts/extensions/fold/chronicle.js');
+        const chronicle = await import('./scripts/extensions/sanguine/chronicle.js');
         return chronicle.snapshot();
     });
 }
@@ -283,7 +283,7 @@ export async function chronicleSnapshot(page) {
  */
 export async function chronicleQuery(page, queryText, topK = 5) {
     return await page.evaluate(async ({ queryText, topK }) => {
-        const chronicle = await import('./scripts/extensions/fold/chronicle.js');
+        const chronicle = await import('./scripts/extensions/sanguine/chronicle.js');
         return chronicle.query(queryText, topK).map(r => r.event.s);
     }, { queryText, topK });
 }
@@ -337,7 +337,7 @@ export async function steerLastMessage(page, instruction) {
     await waitForIdle(page);
     return await page.evaluate(async (instruction) => {
         const { chat, eventSource, event_types } = await import('./script.js');
-        const { requestSteer } = await import('./scripts/extensions/fold/steer.js');
+        const { requestSteer } = await import('./scripts/extensions/sanguine/steer.js');
 
         const received = new Promise(resolve => eventSource.once(event_types.MESSAGE_RECEIVED, resolve));
         const started = await requestSteer(chat.length - 1, instruction, { source: 'ui' });
@@ -408,7 +408,7 @@ export async function lastMessageSwipeState(page) {
             swipeId: message.swipe_id ?? 0,
             swipeCount: Array.isArray(message.swipes) ? message.swipes.length : 0,
             swipes: (message.swipes ?? []).map(String),
-            steers: (message.swipe_info ?? []).map(info => info?.extra?.fold_steer?.text ?? null),
+            steers: (message.swipe_info ?? []).map(info => info?.extra?.sanguine_steer?.text ?? null),
         };
     });
 }

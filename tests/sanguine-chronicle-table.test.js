@@ -1,12 +1,12 @@
-import { describe, expect, test } from './test-harness.js';
+import { describe, expect, test } from '@jest/globals';
 
 import {
-    applyEvents,
-    buildKeywordIndex,
     DUPLICATE_WINDOW,
-    eventSignature,
     MAX_KEYWORDS,
     MAX_SUMMARY_CHARS,
+    applyEvents,
+    buildKeywordIndex,
+    eventSignature,
     normalizeEvent,
     pruneEvents,
     rankEvents,
@@ -28,7 +28,10 @@ function ledger(rows, startTime = 1000) {
 describe('normalizeEvent', () => {
     test('accepts both the wire shape and the stored shape', () => {
         expect(normalizeEvent({ summary: 'A thing happened', keywords: ['Thing'] }, { now: 5 }))
-            .toEqual({ s: 'A thing happened', kw: ['thing'], t: 5, src: 'llm' });
+            // `dropped` is transient, the caller counts it and strips it before storage, so it
+            // never reaches the ledger. It exists so a genuine clip can be told apart from a model
+            // that returned exactly the cap because the prompt asked for exactly the cap.
+            .toEqual({ s: 'A thing happened', kw: ['thing'], t: 5, src: 'llm', dropped: 0 });
         expect(normalizeEvent({ s: 'A thing happened', kw: ['thing'] }, { now: 5 }).s)
             .toBe('A thing happened');
     });
@@ -60,11 +63,12 @@ describe('normalizeEvent', () => {
     });
 
     test('falls back to summary tokens when the model returns no keywords', () => {
-        // An event with no keywords would be unreachable by retrieval — dead weight in the ledger.
+        // An event with no keywords would be unreachable by retrieval, dead weight in the ledger.
+        // The fallback tokenizes the summary structurally (length filter only; no English stoplist).
         const event = normalizeEvent({ summary: 'The party defeated the ancient dragon', keywords: [] });
         expect(event.kw.length).toBeGreaterThan(0);
         expect(event.kw).toContain('dragon');
-        expect(event.kw).not.toContain('the');
+        expect(event.kw).toContain('the');
     });
 
     test('records mid only when it is an integer', () => {
@@ -74,18 +78,22 @@ describe('normalizeEvent', () => {
 });
 
 describe('tokenize', () => {
-    test('drops stopwords and short noise, keeps content words', () => {
+    test('keeps content words and drops short noise, no English stoplist', () => {
+        // The old 90-word English stoplist is gone: the events carry model-chosen keywords, so a
+        // function word in the query ("the", "went") never matches an event keyword anyway. Only
+        // the structural length filter survives, it means the same in every language.
         expect(tokenize('The party went to the Dragon Keep'))
-            .toEqual(['party', 'went', 'dragon', 'keep']);
+            .toEqual(['the', 'party', 'went', 'the', 'dragon', 'keep']);
     });
 
     test('is total over junk input', () => {
         expect(tokenize(null)).toEqual([]);
         expect(tokenize('!!! ... ???')).toEqual([]);
+        expect(tokenize('a an to')).toEqual([]);
     });
 });
 
-describe('buildKeywordIndex — the Graph face', () => {
+describe('buildKeywordIndex, the Graph face', () => {
     test('maps each keyword to every event carrying it, in insertion order', () => {
         const events = ledger([
             ['a', 'Dragon slain', ['dragon', 'battle']],
@@ -153,10 +161,13 @@ describe('rankEvents', () => {
     ]);
     const kwIndex = buildKeywordIndex(events);
 
-    test('ranks by keyword overlap', () => {
+    test('ranks by relevance, and the ORDER is the contract', () => {
+        // `overlap` used to be a raw count of matched tokens and this asserted it was exactly 2.
+        // It is now a BM25 score, so its magnitude carries no promise, what a caller may rely on
+        // is which event comes first and which are present at all.
         const ranked = rankEvents({ events, kwIndex, queryText: 'what happened with the dragon battle?' });
         expect(ranked[0].key).toBe('a');
-        expect(ranked[0].overlap).toBe(2);
+        expect(ranked[0].score).toBeGreaterThan(0);
         expect(ranked.map(r => r.key)).toContain('c');
         expect(ranked.map(r => r.key)).not.toContain('b');
     });
@@ -201,7 +212,7 @@ describe('rankEvents', () => {
     });
 });
 
-describe('applyEvents — two dedup layers', () => {
+describe('applyEvents, two dedup layers', () => {
     test('a repeat of the same key overwrites rather than duplicating', () => {
         const events = ledger([['a', 'First version', ['x']]]);
         const result = applyEvents({
@@ -297,5 +308,104 @@ describe('renderEvents', () => {
     test('renders nothing at all when there are no events', () => {
         // An empty header spends tokens telling the model nothing.
         expect(renderEvents([], 'Past:\n{{text}}')).toBe('');
+    });
+});
+
+/*
+ * Silent losses. Extraction runs on overlapping windows, so the same message is often read twice,
+ * and the second reading may summarise an event without re-proposing the state change the first one
+ * caught. Under plain last-write that quietly un-does the change, leaving the state fold disagreeing
+ * with the story that produced it, with nothing anywhere recording that it happened.
+ */
+describe('replacing an event does not retract its delta', () => {
+    const withDelta = {
+        s: 'Solomon pockets the signet ring', kw: ['signet', 'ring', 'pocket'],
+        d: { inv: [{ item: 'signet ring', dq: 1, at: 'carried' }] },
+    };
+
+    test('a re-read that mentions no delta keeps the one already recorded', () => {
+        const first = applyEvents({ events: new Map(), incoming: [{ key: 'k', event: withDelta }] });
+        const again = applyEvents({
+            events: first.events,
+            incoming: [{ key: 'k', event: { s: 'Solomon pockets the ring', kw: ['signet', 'ring'] } }],
+        });
+
+        expect(again.replaced).toEqual(['k']);
+        expect(again.events.get('k').d).toEqual(withDelta.d);
+        // The summary itself is still superseded, only the omission is refused.
+        expect(again.events.get('k').s).toBe('Solomon pockets the ring');
+    });
+
+    test('a replacement that DOES carry a delta supersedes the old one', () => {
+        const first = applyEvents({ events: new Map(), incoming: [{ key: 'k', event: withDelta }] });
+        const corrected = { s: 'Solomon leaves the ring', kw: ['signet', 'ring'], d: { inv: [] } };
+        const again = applyEvents({ events: first.events, incoming: [{ key: 'k', event: corrected }] });
+
+        expect(again.events.get('k').d).toEqual({ inv: [] });
+    });
+
+    test('an event that never had a delta does not acquire one', () => {
+        const bare = { s: 'they talk', kw: ['talk', 'hall'] };
+        const first = applyEvents({ events: new Map(), incoming: [{ key: 'k', event: bare }] });
+        const again = applyEvents({ events: first.events, incoming: [{ key: 'k', event: bare }] });
+        expect(again.events.get('k').d).toBeUndefined();
+    });
+});
+
+describe('rankEvents, relevance, not raw overlap', () => {
+    const ev = (s, kw, t, src = 'llm') => ({ s, kw, t, src });
+    const index = (events) => ({ events, kwIndex: buildKeywordIndex(events) });
+
+    test('a name with diacritics survives tokenization', () => {
+        // `Chí Guāngdé` is the protagonist of a 277-message campaign and tokenized to ["ngd"],
+        // the third most common term in that chat was a meaningless 3-letter fragment. A Cyrillic
+        // or Hangul name produced [] outright: zero retrievable memory.
+        expect(tokenize('Chí Guāngdé')).toContain('guāngdé');
+        expect(tokenize('серебряных монет').length).toBeGreaterThan(0);
+        expect(tokenize('은화 스무닢').length).toBeGreaterThan(0);
+        expect(tokenize('Ike Kōtoku')).toContain('kōtoku');
+    });
+
+    test('ASCII tokenization is unchanged, so nothing already working regresses', () => {
+        expect(tokenize('the bus driver')).toEqual(['the', 'bus', 'driver']);
+        expect(tokenize('Jin-Woo\'s raid')).toEqual(['jin', 'woo\'s', 'raid']);
+    });
+
+    test('a keyword-dense closure does not outrank the scene it closed', () => {
+        // The measured failure: `Confirmed one thread: X = ...` events repeat the thread name AND
+        // its resolution, so they match more query tokens than the scene itself. Star Wars had all
+        // five top slots taken by them.
+        const events = new Map([
+            ['a', ev('Sol paid the smith for a spear', ['sol', 'smith', 'spear'], 1)],
+            ['b', ev('Confirmed one thread: the spear = Sol needed a spear from the smith',
+                ['sol', 'smith', 'spear', 'thread', 'confirmed', 'settled'], 2, 'review')],
+        ]);
+        const top = rankEvents({ ...index(events), queryText: 'sol spear smith', topK: 2 });
+        expect(top[0].event.src).toBe('llm');
+    });
+
+    test('a rare term outweighs a common one', () => {
+        // "sol" appears in 61 of 107 events in a live chat and discriminates nothing; the term that
+        // names the actual subject appears twice and decides everything.
+        const events = new Map([
+            ['a', ev('Sol walks', ['sol', 'walk'], 1)],
+            ['b', ev('Sol talks', ['sol', 'talk'], 2)],
+            ['c', ev('Sol finds the locket', ['sol', 'locket'], 3)],
+        ]);
+        const top = rankEvents({ ...index(events), queryText: 'sol locket', topK: 3 });
+        expect(top[0].key).toBe('c');
+    });
+
+    test('an unmatched query returns nothing rather than everything', () => {
+        const events = new Map([['a', ev('Sol walks', ['sol', 'walk'], 1)]]);
+        expect(rankEvents({ ...index(events), queryText: 'dragon castle', topK: 5 })).toEqual([]);
+    });
+
+    test('liveness still filters, and topK still bounds', () => {
+        const events = new Map([
+            ['a', ev('one', ['locket'], 1)],
+            ['b', ev('two', ['locket'], 2)],
+        ]);
+        expect(rankEvents({ ...index(events), queryText: 'locket', topK: 1 })).toHaveLength(1);
     });
 });

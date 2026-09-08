@@ -72,7 +72,6 @@ async function openApp(page, url) {
     await page.waitForFunction('document.getElementById("preloader") === null', { timeout: 120_000 });
 }
 
-<<<<<<< HEAD
 /**
  * Refuse to reconfigure an instance this driver was not pointed at deliberately.
  *
@@ -96,8 +95,6 @@ function assertSafeTarget(url, forced) {
     }
 }
 
-=======
->>>>>>> feat/sanguine-gloss-and-rename
 async function wireMockBackend(page, { mockPort, stream }) {
     await page.evaluate(async ({ mockPort, stream }) => {
         const { setOnlineStatus } = await import('./script.js');
@@ -129,11 +126,8 @@ if (!body && !args.keepOpen) {
     process.exit(2);
 }
 
-<<<<<<< HEAD
 assertSafeTarget(args.url, !!args.forceUrl);
 
-=======
->>>>>>> feat/sanguine-gloss-and-rename
 const mockServer = args.noMock ? null : new MockServer({ port: args.mockPort, host: '127.0.0.1' });
 if (mockServer && args.mockReply !== undefined) {
     mockServer.setResponder(() => args.mockReply);

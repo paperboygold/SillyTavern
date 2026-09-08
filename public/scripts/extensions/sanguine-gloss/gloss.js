@@ -195,8 +195,16 @@ export function renderGlossTokens(tokens, mode = READING_MODES.HOVER) {
         }
 
         const { text, entry } = token;
+        // ── A signal that marks everything marks nothing ──
+        //
+        // The per-character floor makes every ideograph hoverable, and painting all of them gold
+        // would not be better reading — it would replace a signal ("this is a term worth knowing")
+        // with wallpaper. A floor hit stays fully interactive and renders plainly; the curated and
+        // context tiers keep the gold.
         const span = el('span', {
-            class: 'sanguine-gloss-term gloss',
+            class: entry?.floor
+                ? 'sanguine-gloss-term gloss sanguine-gloss-floor'
+                : 'sanguine-gloss-term gloss',
             'data-term': text,
         }, text);
 
@@ -249,7 +257,7 @@ export function glossElement(rootElement, mode = READING_MODES.HOVER) {
                 if (tag === 'script' || tag === 'style' || tag === 'textarea' || tag === 'input') {
                     return NodeFilter.FILTER_REJECT;
                 }
-                if (parent.closest('.sanguine-gloss-term, .gloss, .gloss-card, .gloss-pop, .fold_steer_bar, .sanguine_steer_bar')) {
+                if (parent.closest('.sanguine-gloss-term, .gloss, .gloss-card, .gloss-pop, .sanguine_steer_bar, .sanguine_steer_bar')) {
                     return NodeFilter.FILTER_REJECT;
                 }
                 if (!CJK_CHAR_REGEX.test(node.nodeValue ?? '')) {

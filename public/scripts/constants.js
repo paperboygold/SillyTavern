@@ -178,7 +178,7 @@ export const SWIPE_SOURCE = {
     SLASH_COMMAND: 'slash_command',
     SWIPE_PICKER: 'swipe_picker',
     /**
-     * A swipe generated under an explicit user instruction (fold's steering).
+     * A swipe generated under an explicit user instruction (sanguine's steering).
      * Deliberately NOT in swipe()'s source bypass list: steering should obey the normal
      * isSwipingAllowed()/isGenerating() guards rather than skip them.
      */

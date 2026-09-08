@@ -48,7 +48,7 @@ test.describe('fold — the panel, hedged and polarised', () => {
             // (`entity-table.js` KIND_SEP). A fixture that uses a space builds LEAD rows by accident.
             const NUL = '\u0000';
             const { chat_metadata } = await import('./script.js');
-            const panel = await import('./scripts/extensions/fold/panel.js');
+            const panel = await import('./scripts/extensions/sanguine/panel.js');
             chat_metadata.fold = {
                 v: 2,
                 state: {
@@ -88,44 +88,44 @@ test.describe('fold — the panel, hedged and polarised', () => {
     });
 
     test('an unplaced person is in Here, dimmed, and says so', async ({ page }) => {
-        const here = page.locator('#foldTracker .fold_tracker_body .fold_row.fold_entity');
+        const here = page.locator('#sanguineTracker .sanguine_tracker_body .sanguine_row.sanguine_entity');
         await expect(here.filter({ hasText: 'the scarred broker' })).toHaveCount(1);
 
         const hedged = here.filter({ hasText: 'Kang Min-seo' });
-        await expect(hedged).toHaveClass(/fold_unplaced/);
+        await expect(hedged).toHaveClass(/sanguine_unplaced/);
         await expect(hedged).toContainText('whereabouts unstated');
         // And the person the scene actually contains is NOT hedged.
-        await expect(here.filter({ hasText: 'the scarred broker' })).not.toHaveClass(/fold_unplaced/);
+        await expect(here.filter({ hasText: 'the scarred broker' })).not.toHaveClass(/sanguine_unplaced/);
     });
 
     test('reach rides the row rather than the inventory', async ({ page }) => {
-        await expect(page.locator('#foldTracker .fold_tracker_body .fold_row.fold_entity').filter({ hasText: 'Kang Min-seo' }))
+        await expect(page.locator('#sanguineTracker .sanguine_tracker_body .sanguine_row.sanguine_entity').filter({ hasText: 'Kang Min-seo' }))
             .toContainText('phone number');
     });
 
     test('doom draws as a clock face; progress draws as a bar', async ({ page }) => {
-        const panel = page.locator('#foldTracker .fold_tracker_body');
+        const panel = page.locator('#sanguineTracker .sanguine_tracker_body');
         await expect(panel).toContainText('Pressure');
         await expect(panel).toContainText('Progress');
 
-        const doom = panel.locator('.fold_clock_row').filter({ hasText: 'residency window closes' });
-        await expect(doom.locator('.fold_dial .fold_seg')).toHaveCount(8);
-        await expect(doom.locator('.fold_track')).toHaveCount(0);
+        const doom = panel.locator('.sanguine_clock_row').filter({ hasText: 'residency window closes' });
+        await expect(doom.locator('.sanguine_dial .sanguine_seg')).toHaveCount(8);
+        await expect(doom.locator('.sanguine_track')).toHaveCount(0);
 
-        const progress = panel.locator('.fold_clock_row').filter({ hasText: 'Residency in Korea' });
-        await expect(progress).toHaveClass(/fold_progress_row/);
-        await expect(progress.locator('.fold_track')).toHaveCount(1);
-        await expect(progress.locator('.fold_dial')).toHaveCount(0);
+        const progress = panel.locator('.sanguine_clock_row').filter({ hasText: 'Residency in Korea' });
+        await expect(progress).toHaveClass(/sanguine_progress_row/);
+        await expect(progress.locator('.sanguine_track')).toHaveCount(1);
+        await expect(progress.locator('.sanguine_dial')).toHaveCount(0);
     });
 
     test('the progress dial is never under the Pressure heading', async ({ page }) => {
         // The headings are siblings in document order, so "under Pressure" means "between the
         // Pressure heading and the next one". That is the actual claim §0.1-3 is about.
         const between = await page.evaluate(() => {
-            const nodes = [...document.querySelectorAll('#foldTracker .fold_tracker_body > *')];
+            const nodes = [...document.querySelectorAll('#sanguineTracker .sanguine_tracker_body > *')];
             const start = nodes.findIndex(node => node.textContent.trim().startsWith('Pressure'));
             const rest = nodes.slice(start + 1);
-            const end = rest.findIndex(node => node.classList.contains('fold_sec'));
+            const end = rest.findIndex(node => node.classList.contains('sanguine_sec'));
             return rest.slice(0, end === -1 ? rest.length : end).map(node => node.textContent).join(' ');
         });
         expect(between).toContain('residency window closes');

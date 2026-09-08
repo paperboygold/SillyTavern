@@ -1,113 +1,160 @@
-<div class="sanguine_settings fold_settings">
+<div class="sanguine_settings">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b data-i18n="Sanguine">Sanguine</b>
+            <b data-i18n="Fold">Fold</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
-            <label class="checkbox_label" for="fold_rpg_mode">
-                <input id="fold_rpg_mode" type="checkbox" class="checkbox">
+            <label class="checkbox_label" for="sanguine_rpg_mode">
+                <input id="sanguine_rpg_mode" type="checkbox" class="checkbox">
                 <b data-i18n="RPG mode">RPG mode</b>
             </label>
             <small class="flex-container flexFlowColumn" data-i18n="Tracks vitals, status and inventory as you play, and shows them in a panel. Picks a small extraction model automatically if you have one. Everything below is a default you can change, not a decision you have to make first.">
                 Tracks vitals, status and inventory as you play, and shows them in a panel. Picks a small extraction model automatically if you have one. Everything below is a default you can change, not a decision you have to make first.
             </small>
-            <label class="checkbox_label" for="fold_panel">
-                <input id="fold_panel" type="checkbox" class="checkbox">
-                <span data-i18n="Show the tracker panel">Show the tracker panel</span>
+            <label class="checkbox_label" for="sanguine_panel">
+                <input id="sanguine_panel" type="checkbox" class="checkbox">
+                <span data-i18n="Expand the tracker panel">Expand the tracker panel</span>
             </label>
+            <small data-i18n="The sidebar sits on the right edge either way, a slim rail (time, place, money, the doom dial) when folded, the full tracker when expanded. Use the chevron on its left edge to fold and unfold it.">
+                The sidebar sits on the right edge either way, a slim rail (time, place, money, the doom dial) when folded, the full tracker when expanded. Use the chevron on its left edge to fold and unfold it.
+            </small>
 
             <hr>
 
-            <label class="checkbox_label" for="fold_enabled">
-                <input id="fold_enabled" type="checkbox" class="checkbox">
-                <span data-i18n="Enable Sanguine">Enable Sanguine</span>
+            <label class="checkbox_label" for="sanguine_enabled">
+                <input id="sanguine_enabled" type="checkbox" class="checkbox">
+                <span data-i18n="Enable Fold">Enable Fold</span>
             </label>
-            <label class="checkbox_label" for="fold_steer_enabled">
-                <input id="fold_steer_enabled" type="checkbox" class="checkbox">
+            <label class="checkbox_label" for="sanguine_steer_enabled">
+                <input id="sanguine_steer_enabled" type="checkbox" class="checkbox">
                 <span data-i18n="Enable swipe steering">Enable swipe steering</span>
             </label>
             <small class="flex-container flexFlowColumn" data-i18n="Adds a wand button to the last reply. Type an instruction and it generates a new swipe under it, keeping the existing ones.">
                 Adds a wand button to the last reply. Type an instruction and it generates a new swipe under it, keeping the existing ones.
             </small>
-            <label class="checkbox_label" for="fold_steer_remember">
-                <input id="fold_steer_remember" type="checkbox" class="checkbox">
+            <label class="checkbox_label" for="sanguine_steer_remember">
+                <input id="sanguine_steer_remember" type="checkbox" class="checkbox">
                 <span data-i18n="Prefill the last instruction">Prefill the last instruction</span>
             </label>
-            <label class="checkbox_label" for="fold_steer_badge">
-                <input id="fold_steer_badge" type="checkbox" class="checkbox">
+            <label class="checkbox_label" for="sanguine_steer_badge">
+                <input id="sanguine_steer_badge" type="checkbox" class="checkbox">
                 <span data-i18n="Show a badge on steered swipes">Show a badge on steered swipes</span>
             </label>
-            <label for="fold_steer_template">
+            <label for="sanguine_steer_template">
                 <span data-i18n="Steering template">Steering template</span>
-                <div id="fold_steer_template_restore" title="Restore default" data-i18n="[title]Restore default" class="right_menu_button fa-solid fa-clock-rotate-left"></div>
+                <div id="sanguine_steer_template_restore" title="Restore default" data-i18n="[title]Restore default" class="right_menu_button fa-solid fa-clock-rotate-left"></div>
             </label>
             <small data-i18n="Use {{instruction}} for your text. The instruction is appended to the prompt as if you said it, and is also visible to World Info scanning for that one generation.">
                 Use <code>&#123;&#123;instruction&#125;&#125;</code> for your text. The instruction is appended to the prompt as if you said it, and is also visible to World Info scanning for that one generation.
             </small>
-            <textarea id="fold_steer_template" class="text_pole textarea_compact" rows="2"></textarea>
+            <textarea id="sanguine_steer_template" class="text_pole textarea_compact" rows="2"></textarea>
 
             <hr>
 
-            <label class="checkbox_label" for="fold_chronicle_enabled">
-                <input id="fold_chronicle_enabled" type="checkbox" class="checkbox">
+            <hr>
+
+            <label class="checkbox_label" for="sanguine_bilingual">
+                <input id="sanguine_bilingual" type="checkbox" class="checkbox">
+                <span data-i18n="Language mode: characters speak a language you are learning">Language mode: characters speak a language you are learning</span>
+            </label>
+            <label for="sanguine_bilingual_language">
+                <span data-i18n="Target language">Target language</span>
+            </label>
+            <input id="sanguine_bilingual_language" type="text" class="text_pole" autocomplete="off">
+            <small data-i18n="Spoken dialogue is written in this language and its own script, with an English translation after every line. Narration stays in English so the dialogue stays understandable, and names keep their native script throughout.">
+                Spoken dialogue is written in this language and its own script, with an English translation after every line. Narration stays in English so the dialogue stays understandable, and names keep their native script throughout.
+            </small>
+            <label for="sanguine_plot_guide">
+                <span data-i18n="Story direction (plot guide)">Story direction (plot guide)</span>
+            </label>
+            <small data-i18n="The overarching plot the narrator must follow, a synopsis, a scene outline, a direction. Unlike steer it is NOT forgotten next message: it is injected into every narrator prompt until you change it. It is injected as the hidden hand: the characters never know it, only the narrator. Write events, not 'X realizes Y', solution language in here gets copied into character dialogue.">
+                The overarching plot the narrator must follow, a synopsis, a scene outline, a direction. Unlike steer it is <b>not</b> forgotten next message: it is injected into every narrator prompt until you change it. It is injected as the <b>hidden hand</b>: the characters never know it, only the narrator. Write events, not "X realizes Y", solution language in here gets copied into character dialogue.
+            </small>
+            <textarea id="sanguine_plot_guide" class="text_pole textarea_compact" rows="6"></textarea>
+
+            <hr>
+
+            <label class="checkbox_label" for="sanguine_chronicle_enabled">
+                <input id="sanguine_chronicle_enabled" type="checkbox" class="checkbox">
                 <span data-i18n="Enable chronicle">Enable chronicle</span>
             </label>
             <small class="flex-container flexFlowColumn" data-i18n="Keeps an append-only ledger of significant events and injects the relevant ones. Unlike a rolling summary, nothing is overwritten. Costs one extra request every few replies.">
                 Keeps an append-only ledger of significant events and injects the relevant ones. Unlike a rolling summary, nothing is overwritten. Costs one extra request every few replies.
             </small>
-            <div id="fold_chronicle_profile_block" class="flex-container flexFlowColumn">
-                <label for="fold_chronicle_profile" data-i18n="Extraction model">Extraction model</label>
-                <small data-i18n="Runs extraction on a separate connection profile. Pick something small and cheap — this is mechanical summarization, not roleplay. Leave unset to use the chat's own model.">
-                    Runs extraction on a separate connection profile. Pick something small and cheap — this is mechanical summarization, not roleplay. Leave unset to use the chat's own model.
+            <div id="sanguine_chronicle_profile_block" class="flex-container flexFlowColumn">
+                <label for="sanguine_chronicle_profile" data-i18n="Extraction model">Extraction model</label>
+                <small data-i18n="Runs extraction on a separate connection profile. Pick something small and cheap, this is mechanical summarization, not roleplay. Leave unset to use the chat's own model.">
+                    Runs extraction on a separate connection profile. Pick something small and cheap, this is mechanical summarization, not roleplay. Leave unset to use the chat's own model.
                 </small>
-                <select id="fold_chronicle_profile" class="text_pole"></select>
+                <select id="sanguine_chronicle_profile" class="text_pole"></select>
+            </div>
+            <div id="sanguine_chronicle_profile_warn" class="sanguine_settings_warn" style="display:none">
+                <span data-i18n="No extraction model set, extraction runs on the chat's own model. A reasoning roleplay model frequently returns no JSON at all (the #1 cause of stale state). Set a small model that reliably emits JSON here to meet the SLA.">
+                    No extraction model set, extraction runs on the chat's own model. A reasoning roleplay model frequently returns no JSON at all (the #1 cause of stale state). Set a small model that reliably emits JSON here to meet the SLA.
+                </span>
             </div>
             <div class="flex-container">
                 <div class="flex1">
-                    <label for="fold_chronicle_interval" data-i18n="Extract every N replies">Extract every N replies</label>
-                    <input id="fold_chronicle_interval" class="text_pole textarea_compact" type="number" min="1" max="50">
+                    <label for="sanguine_chronicle_interval" data-i18n="Extract every N replies">Extract every N replies</label>
+                    <input id="sanguine_chronicle_interval" class="text_pole textarea_compact" type="number" min="1" max="50">
                 </div>
                 <div class="flex1">
-                    <label for="fold_chronicle_window" data-i18n="Messages to read">Messages to read</label>
-                    <input id="fold_chronicle_window" class="text_pole textarea_compact" type="number" min="1" max="40">
+                    <label for="sanguine_chronicle_window" data-i18n="Messages to read">Messages to read</label>
+                    <input id="sanguine_chronicle_window" class="text_pole textarea_compact" type="number" min="1" max="40">
                 </div>
             </div>
             <div class="flex-container">
                 <div class="flex1">
-                    <label for="fold_chronicle_topk" data-i18n="Events to inject">Events to inject</label>
-                    <input id="fold_chronicle_topk" class="text_pole textarea_compact" type="number" min="0" max="20">
+                    <label for="sanguine_chronicle_response" data-i18n="Extraction token budget">Extraction token budget</label>
+                    <input id="sanguine_chronicle_response" class="text_pole textarea_compact" type="number" min="512" max="65536">
                 </div>
                 <div class="flex1">
-                    <label for="fold_chronicle_depth" data-i18n="Injection depth">Injection depth</label>
-                    <input id="fold_chronicle_depth" class="text_pole textarea_compact" type="number" min="0" max="100">
+                    <label for="sanguine_chronicle_topk" data-i18n="Events to inject">Events to inject</label>
+                    <input id="sanguine_chronicle_topk" class="text_pole textarea_compact" type="number" min="0" max="20">
                 </div>
             </div>
-            <label for="fold_chronicle_template" data-i18n="Chronicle template">Chronicle template</label>
-            <textarea id="fold_chronicle_template" class="text_pole textarea_compact" rows="2"></textarea>
             <div class="flex-container">
-                <div id="fold_chronicle_extract_now" class="menu_button" data-i18n="Extract now">Extract now</div>
-                <div id="fold_chronicle_view" class="menu_button" data-i18n="View ledger">View ledger</div>
+                <label class="checkbox_label" for="sanguine_chronicle_reasoning">
+                    <input id="sanguine_chronicle_reasoning" type="checkbox" class="checkbox">
+                    <span data-i18n="Allow extraction reasoning">Allow extraction reasoning</span>
+                </label>
+                <small data-i18n="Off (default): disables the model's thinking for extraction, much faster and avoids the empty-reply failure. On: full reasoning, slower.">
+                    Off (default): disables the model's thinking for extraction, much faster and avoids the empty-reply failure. On: full reasoning, slower.
+                </small>
+            </div>
+            <label for="sanguine_chronicle_template" data-i18n="Chronicle template">Chronicle template</label>
+            <textarea id="sanguine_chronicle_template" class="text_pole textarea_compact" rows="2"></textarea>
+            <div class="flex-container">
+                <div id="sanguine_chronicle_extract_now" class="menu_button" data-i18n="Extract now">Extract now</div>
+                <div id="sanguine_chronicle_view" class="menu_button" data-i18n="View ledger">View ledger</div>
             </div>
 
             <hr>
 
-            <label class="checkbox_label" for="fold_state_enabled">
-                <input id="fold_state_enabled" type="checkbox" class="checkbox">
+            <label class="checkbox_label" for="sanguine_state_enabled">
+                <input id="sanguine_state_enabled" type="checkbox" class="checkbox">
                 <span data-i18n="Track inventory and vitals">Track inventory and vitals</span>
             </label>
             <small class="flex-container flexFlowColumn" data-i18n="Tracks what the character carries, their vitals, and status effects. The model proposes changes; implausible ones are rejected rather than trusted. Rides the same extraction call as the chronicle.">
                 Tracks what the character carries, their vitals, and status effects. The model proposes changes; implausible ones are rejected rather than trusted. Rides the same extraction call as the chronicle.
             </small>
+            <label class="checkbox_label" for="sanguine_state_absorb">
+                <input id="sanguine_state_absorb" type="checkbox" class="checkbox">
+                <span data-i18n="Absorb the card's own status block">Absorb the card's own status block</span>
+            </label>
+            <small class="flex-container flexFlowColumn" data-i18n="Some cards end every reply with a status line. This lifts it out of the message, folds it into tracked state, and shows it in the panel instead, so you read prose, and the model gets one current block rather than every past one.">
+                Some cards end every reply with a status line. This lifts it out of the message, folds it into tracked state, and shows it in the panel instead, so you read prose, and the model gets one current block rather than every past one.
+            </small>
             <div class="flex-container">
                 <div class="flex1">
-                    <label for="fold_state_depth" data-i18n="State injection depth">State injection depth</label>
-                    <input id="fold_state_depth" class="text_pole textarea_compact" type="number" min="0" max="100">
+                    <label for="sanguine_state_depth" data-i18n="State injection depth">State injection depth</label>
+                    <input id="sanguine_state_depth" class="text_pole textarea_compact" type="number" min="0" max="100">
                 </div>
             </div>
             <div class="flex-container">
-                <div id="fold_state_view" class="menu_button" data-i18n="View state">View state</div>
-                <div id="fold_state_clear" class="menu_button" data-i18n="Clear state">Clear state</div>
+                <div id="sanguine_state_view" class="menu_button" data-i18n="View state">View state</div>
+                <div id="sanguine_state_clear" class="menu_button" data-i18n="Clear state">Clear state</div>
             </div>
         </div>
     </div>

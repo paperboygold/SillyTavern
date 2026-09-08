@@ -1,0 +1,121 @@
+/*
+ * sanguine/overlay-prompts.css: the Prompts tab.
+ *
+ * A sheet of its own for the same reason every other tab owns one: the manifest declares exactly
+ * one stylesheet and `style.css` holds it, so a surface that needs its own brings it itself,
+ * injected at import time by `overlay-prompts.js`.
+ *
+ * The design system is the panel's: the type scale (`--s-title`…`--s-micro`), the opacity stops
+ * (`--o-now`…`--o-dormant`), the semantic hues. The fragment ids are fold's own keys, so they take
+ * the mono face; the hints and labels are UI text and take the body face.
+ */
+
+.sanguine_prompt_title {
+    font-size: var(--s-title);
+    font-weight: 600;
+    margin: 0 0 0.3em;
+    opacity: var(--o-now);
+}
+
+.sanguine_prompt_lede {
+    font-size: var(--s-sub);
+    line-height: 1.4;
+    opacity: var(--o-standing);
+    margin: 0 0 1em;
+    max-width: 46em;
+}
+
+.sanguine_prompt_list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6em;
+    max-width: 46em;
+}
+
+.sanguine_prompt_fragment {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3em;
+    padding: 0.55em 0.7em;
+    border: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 3%, transparent);
+}
+
+.sanguine_prompt_head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.6em;
+    flex-wrap: wrap;
+}
+
+/* The fragment id is fold's own key, so it takes the instrument face. */
+.sanguine_prompt_id {
+    font-family: var(--fold-mono);
+    font-size: var(--s-sub);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--fold-fresh);
+    opacity: var(--o-now);
+}
+
+.sanguine_prompt_custom_label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4em;
+    font-size: var(--s-micro);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    opacity: var(--o-standing);
+    cursor: pointer;
+}
+
+.sanguine_prompt_hint {
+    font-size: var(--s-sub);
+    line-height: 1.4;
+    opacity: var(--o-standing);
+    margin: 0;
+}
+
+.sanguine_prompt_textarea {
+    font-size: var(--s-sub);
+    line-height: 1.35;
+    resize: vertical;
+    min-height: 4em;
+}
+
+.sanguine_prompt_textarea:disabled {
+    opacity: var(--o-dormant);
+    cursor: not-allowed;
+}
+
+.sanguine_prompt_actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.sanguine_prompt_reset {
+    padding: 0.2em 0.6em;
+    border: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+    border-radius: 3px;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: var(--s-micro);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    opacity: var(--o-standing);
+}
+
+.sanguine_prompt_reset:hover:not(:disabled) {
+    opacity: var(--o-now);
+    border-color: var(--fold-warn);
+    color: var(--fold-warn);
+}
+
+.sanguine_prompt_reset:disabled {
+    opacity: var(--o-dormant);
+    cursor: default;
+}

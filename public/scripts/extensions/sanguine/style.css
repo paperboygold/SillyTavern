@@ -1,35 +1,29 @@
 /*
- * fold — swipe steering controls.
+ * fold: swipe steering controls.
  *
  * Visibility is CSS-only, gated on `.last_mes` + `body.fold-steer-enabled`. This mirrors
  * how core binds `.swipe_right` only on `.last_mes` (script.js:11086) and means the
- * controls need no per-message JS bookkeeping — they survive addOneMessage() re-rendering
+ * controls need no per-message JS bookkeeping, they survive addOneMessage() re-rendering
  * from #message_template on every single swipe.
  */
 
-.fold_hidden,
 .sanguine_hidden {
     display: none;
 }
 
 /* The wand button: last AI message only, and only while steering is enabled. */
-body.sanguine-steer-enabled #chat .mes.last_mes:not([is_user="true"]):not([is_system="true"]) .mes_steer.fold_hidden,
-body.sanguine-steer-enabled #chat .mes.last_mes:not([is_user="true"]):not([is_system="true"]) .mes_steer.sanguine_hidden,
-body.fold-steer-enabled #chat .mes.last_mes:not([is_user="true"]):not([is_system="true"]) .mes_steer.fold_hidden {
+body.fold-steer-enabled #chat .mes.last_mes:not([is_user="true"]):not([is_system="true"]) .mes_steer.sanguine_hidden {
     display: flex;
 }
 
-/* The inline bar, opened per-message by removing .fold_hidden. */
-body.sanguine-steer-enabled #chat .mes.last_mes .fold_steer_bar:not(.fold_hidden):not(.sanguine_hidden),
-body.sanguine-steer-enabled #chat .mes.last_mes .sanguine_steer_bar:not(.sanguine_hidden),
-body.fold-steer-enabled #chat .mes.last_mes .fold_steer_bar:not(.fold_hidden) {
+/* The inline bar, opened per-message by removing .sanguine_hidden. */
+body.fold-steer-enabled #chat .mes.last_mes .sanguine_steer_bar:not(.sanguine_hidden) {
     display: flex;
     align-items: center;
     gap: 5px;
     margin-top: 5px;
 }
 
-.fold_steer_bar .fold_steer_input,
 .sanguine_steer_bar .sanguine_steer_input {
     flex: 1;
     resize: vertical;
@@ -37,7 +31,6 @@ body.fold-steer-enabled #chat .mes.last_mes .fold_steer_bar:not(.fold_hidden) {
     margin: 0;
 }
 
-.fold_steer_bar .menu_button,
 .sanguine_steer_bar .menu_button {
     flex: 0 0 auto;
     margin: 0;
@@ -45,150 +38,2304 @@ body.fold-steer-enabled #chat .mes.last_mes .fold_steer_bar:not(.fold_hidden) {
 
 /* Follow core's generation lock: script.js sets data-swiping on <body> while a swipe runs. */
 body[data-swiping] .mes_steer,
-body[data-swiping] .fold_steer_bar,
 body[data-swiping] .sanguine_steer_bar {
     display: none !important;
 }
 
 /* Badge on a message whose active swipe was steered. */
-.fold_steer_badge,
 .sanguine_steer_badge {
-    opacity: 0.6;
+    opacity: var(--o-standing);
     margin-left: 0.5em;
     cursor: help;
 }
 
-/* ── Tracker panel ─────────────────────────────────────────────────────────────
-   Sized and coloured through SillyTavern's own theme variables so it inherits the
-   user's theme rather than imposing one. */
+/* Tracker panel.
+ *
+ * Colour comes from SillyTavern's own theme variables, so the panel inherits whatever the user
+ * runs rather than imposing a look. What fold owns is the SEMANTIC axis, fresh, expiring,
+ * critical: which is deliberately kept off the theme accent: a tracker that borrows the accent
+ * for urgency has no way left to say "urgent".
+ *
+ * Two type rules carry the whole thing. Derived numbers are set in the monospace face and use
+ * tabular figures; anything a narrator wrote is set as prose. If you can see the typeface, you
+ * know whether a model or a fold produced the value.
+ */
 
-/* .drawer-content supplies the tint, border and radius, but is sized for a full-width drawer —
+:root {
+    /* The semantic axis. Named rather than inlined so a future skin can rebind them in one place. */
+    --fold-fresh: var(--SmartThemeQuoteColor, #d4a753);
+    --fold-warn: #d67a46;
+    --fold-crit: #c94d5f;
+    --fold-rel: #8b73d4;
+    --fold-hair: rgba(128, 128, 128, 0.22);
+    --fold-mono: var(--monoFontFamily, ui-monospace, 'Geist Mono', SFMono-Regular, Menlo, monospace);
+
+    /* The type scale: six steps, and there is no seventh.
+     *
+     * This sheet had EIGHTEEN distinct multipliers between 0.6 and 1.55, 0.66, 0.68, 0.7, 0.72,
+     * 0.74, 0.75, 0.76, 0.78, 0.8, 0.85, 0.86, 0.88, 0.9, 0.92, which is the panel's central
+     * defect stated in numbers. Steps that close cannot RANK anything: at an 11.7px base, 0.72 and
+     * 0.74 differ by a fifth of a pixel, so a reader cannot tell which of two things is meant to
+     * matter more, and the surface reads as one undifferentiated field of text. That is what an
+     * excel-spreadsheet UI IS, not too much information, but no answer to "which of these first".
+     *
+     * Six steps at a ~1.25 ratio, so adjacent ranks differ by at least 2px and are separable at a
+     * glance. Two rules go with them:
+     *
+     *   · Nothing renders between steps. A rule that "needs" 0.85 has not decided whether it is a
+     *     name or a description, and the fix is that decision, not a nineteenth number.
+     *   · Adjacent ranks differ by at least TWO devices, size plus weight, or size plus opacity,
+     *     never size alone. One device carrying a whole rank is a rank nobody notices.
+     */
+    --s-display: calc(var(--mainFontSize) * 1.55);  /* 23.3px, the clock hour. Only that. */
+    --s-title: calc(var(--mainFontSize) * 1.15);    /* 17.3px, who this is. */
+    --s-body: calc(var(--mainFontSize) * 0.92);     /* 13.8px, names of people, things, stakes. */
+    --s-sub: calc(var(--mainFontSize) * 0.78);      /* 11.7px, prose about them. */
+    --s-meta: calc(var(--mainFontSize) * 0.70);     /* 10.5px, derived values. Mono, tabular. */
+    --s-micro: calc(var(--mainFontSize) * 0.62);    /* 9.3px, THE FLOOR. See below. */
+
+    /* `--s-micro` is for uppercase, letter-spaced labels ONLY: section headings, chips, badges,
+     * status words. Lowercase prose at 9.3px is not small, it is unread, tracked capitals survive
+     * the size because their word-shapes are rectangles and their spacing is doing the work.
+     * Every class assigned to this step was checked for `text-transform: uppercase` first, and the
+     * lowercase ones that used to sit at 0.6-0.62 (`.sanguine_src`, the trace metadata, the log
+     * turn counter) were moved UP to `--s-meta` rather than left illegible.
+     */
+
+    /* Opacity: four stops, meaning TIME.
+     *
+     * Twenty distinct values lived here, from 0.16 to 1. Opacity now answers exactly one question,
+     * how current is this?, and answers it in four steps a reader can actually distinguish. It
+     * never doubles as emphasis, and it never encodes severity: that is the hue axis's job, and an
+     * axis with two meanings has none.
+     *
+     * Structural alphas (hairlines, rails, borders, the hidden-until-hovered controls) are NOT on
+     * this scale and keep their own values, they are not making a claim about time.
+     */
+    --o-now: 1;        /* true this turn */
+    --o-context: 0.75; /* true in this scene */
+    --o-standing: 0.55;/* true generally, a fact that does not tick */
+    --o-dormant: 0.38; /* over, moot, or left behind */
+}
+
+/* .drawer-content supplies the tint, border and radius, but is sized for a full-width drawer,
    these override its 450px minimum. The blur is what turns the semi-transparent tint into a
    readable surface rather than a ghost over the chat. */
-#sanguineTracker,
-#foldTracker {
+#sanguineTracker {
     position: fixed;
     /* .drawer-content sets left:0; right:0; margin:0 auto to centre a full-width drawer. Setting
        `right` alone loses to the inherited `left`, so the panel drifts to the middle. */
     left: auto !important;
-    right: 1em;
+    right: 0;
     top: 6em;
     margin: 0 !important;
-    width: 250px !important;
-    min-width: 160px !important;
-    min-height: 80px !important;
-    max-height: 60vh;
+    /* .drawer-content hides us until .openDrawer; fold mounts with its own class and shows only
+       the collapsed rail by default. */
+    display: none;
     z-index: 3000;
-    padding: 0.4em 0.6em 0.6em;
+    /* The collapse handle straddles the left edge, so the panel box must not clip it. */
+    overflow: visible;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(128, 128, 128, 0.35));
+    border-right: none;
+    border-radius: 10px 0 0 10px;
+    box-shadow: 0 2px 14px rgba(0, 0, 0, 0.4);
     backdrop-filter: blur(var(--SmartThemeBlurStrength));
     -webkit-backdrop-filter: blur(var(--SmartThemeBlurStrength));
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+    transition: width 0.3s ease;
 }
 
-/* Toggled by a class rather than jQuery show/hide: .show() writes an inline `display: block`,
-   which beats the stylesheet and collapses the flex column into stacked blocks. */
-#sanguineTracker.sanguine_open,
-#sanguineTracker.fold_open,
-#foldTracker.fold_open {
+/* Mounted = present at all, as the collapsed rail at minimum. The surface is the theme's own
+   drawer tint, the same colour the expanded panel already wears, never the foreground. */
+#sanguineTracker.sanguine_mounted {
     display: flex;
     flex-direction: column;
+    background: var(--SmartThemeBlurTintColor, rgba(24, 24, 28, 0.92));
+    /* The panel was inheriting the ACCENT as its body colour.
+     *
+     * Measured: `#movingDivs` resolves to the theme's body colour (off-white), and
+     * `#sanguineTracker` resolved to `rgb(225,138,36)`, the quote colour, because `.drawer-content`
+     * carries it. So every value on the panel rendered amber: names, places, counts, prose, all of
+     * it one hue.
+     *
+     * That silently destroyed the entire colour axis. `--fold-fresh` IS the accent, and the sheet's
+     * founding rule is that the semantic hues stay off it precisely so "fresh" and "urgent" have
+     * something left to say. When the default text is already the accent, a fresh rail and a plain
+     * one are the same colour, and hue stops carrying information at all, which is why the panel
+     * read as a wall of orange with no ranking in it.
+     *
+     * Stated explicitly rather than inherited, because what a floating drawer does with colour is
+     * not this panel's business and should not be able to change what its values mean. */
+    color: var(--SmartThemeBodyColor, #dcdad2);
 }
 
-.sanguine_tracker_title,
-.fold_tracker_title {
-    font-size: calc(var(--mainFontSize) * 0.75);
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    opacity: 0.5;
-    /* Leaves room for the control bar, which sits absolutely over the top-right corner. */
-    padding-right: 3.5em;
+/* Expanded: the full tracker. Toggled by a class rather than jQuery show/hide: .show() writes an
+   inline `display: block`, which beats the stylesheet and collapses the flex column. */
+#sanguineTracker.sanguine_open {
+    width: 288px !important;
+    min-width: 180px !important;
+    min-height: 80px !important;
+    max-height: 70vh;
+    padding: 0.4em 0.7em 0.7em;
 }
 
-.sanguine_tracker_body,
-.fold_tracker_body {
+/* Collapsed: a slim rail stuck to the right edge, the old top bar, relocated and repainted.
+   Wide enough to set its labels the way they are read. It was 42px and the text ran top-to-bottom
+   to fit; a rail you have to tilt your head to read is not a glance, which is the only thing the
+   collapsed altitude is for. See `.sanguine_strip_seg`. */
+#sanguineTracker:not(.sanguine_open) {
+    width: 108px !important;
+    min-width: 108px !important;
+    min-height: 120px !important;
+    max-height: 70vh;
+    padding: 0.6em 0.5em;
+    cursor: pointer;
+}
+#sanguineTracker:not(.sanguine_open) .sanguine_tracker_body,
+#sanguineTracker:not(.sanguine_open) .panelControlBar {
+    display: none;
+}
+
+/* The collapse handle, the RPG-companion chevron tab straddling the left edge. */
+.sanguine_toggle {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    left: -1.4rem;
+    width: 1.4rem;
+    height: 4.5rem;
     display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--SmartThemeBlurTintColor, rgba(24, 24, 28, 0.92));
+    border: 1px solid var(--SmartThemeBorderColor, rgba(128, 128, 128, 0.35));
+    border-right: none;
+    border-radius: 0.6em 0 0 0.6em;
+    color: var(--SmartThemeMainColor, #ddd);
+    cursor: pointer;
+    z-index: 3001;
+    font-size: 0.85rem;
+    box-shadow: -2px 0 8px rgba(0, 0, 0, 0.3);
+    transition: color 0.15s ease;
+}
+.sanguine_toggle:hover {
+    color: var(--fold-fresh, #d4a753);
+}
+
+/* The collapsed rail's contents: the §8 segments stacked spine-wise, clickable to expand. */
+.sanguine_collapsed_body {
+    display: none;
+    flex: 1 1 auto;
+    min-height: 0;
     flex-direction: column;
-    gap: 0.5em;
-    overflow-y: auto;
-    padding-top: 0.2em;
-}
-
-.fold_vital { display: flex; flex-direction: column; gap: 0.15em; }
-
-.fold_vital_head {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    font-size: calc(var(--mainFontSize) * 0.9);
-}
-
-.fold_vital_name { text-transform: capitalize; }
-.fold_vital_num { opacity: 0.7; font-variant-numeric: tabular-nums; }
-
-.fold_bar {
-    height: 5px;
-    border-radius: 3px;
-    background: rgba(128, 128, 128, 0.25);
+    align-items: center;
+    justify-content: center;
+    gap: 0.35em;
     overflow: hidden;
+    font-size: var(--s-sub);
+    line-height: 1.3;
+    color: var(--SmartThemeMainColor, #ddd);
+}
+#sanguineTracker:not(.sanguine_open) .sanguine_collapsed_body {
+    display: flex;
+}
+.sanguine_collapsed_body.sanguine_collapsed_empty {
+    display: none;
+}
+/* Segments stack as rows and read left-to-right, like every other label in the panel.
+   They used to be set `writing-mode: vertical-lr` so a long place name could not widen a 42px
+   rail. That bought the width at the cost of the reading: the rail exists so a glance answers
+   "when, where, how much" without opening anything, and rotated text is not glanceable. The rail
+   is wider instead, and the one segment that can run long is clamped rather than turned. */
+.sanguine_collapsed_body .sanguine_strip_seg {
+    display: block;
+    max-width: 100%;
+    text-align: center;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+}
+/* The place is the only free-text segment, a name can be four words long, and unclamped it would
+   push the clock and the balance off the bottom of the rail. Three lines, then an ellipsis. */
+.sanguine_collapsed_body .sanguine_strip_place {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    -webkit-box-orient: vertical;
+    opacity: var(--o-now);
+}
+/* Rows need a seam now that they are rows: stacked horizontal text with no rule between reads as
+   one wrapped paragraph. */
+.sanguine_collapsed_body .sanguine_strip_seg + .sanguine_strip_seg {
+    border-top: 1px solid var(--fold-hair);
+    padding-top: 0.35em;
+    width: 100%;
+}
+.sanguine_collapsed_body .sanguine_strip_time,
+.sanguine_collapsed_body .sanguine_strip_money,
+.sanguine_collapsed_body .sanguine_strip_dial {
+    font-family: var(--fold-mono);
+}
+.sanguine_collapsed_body .sanguine_strip_money {
+    color: var(--fold-fresh);
+}
+.sanguine_collapsed_body .sanguine_strip_dial::before {
+    content: "◔";
+    opacity: 0.7;
+}
+/* A transient verdict cue: the rail flashes the band's colour and fades back (§8). */
+.sanguine_collapsed_body.sanguine_flash_clear {
+    background: color-mix(in srgb, #3fa06a 45%, var(--SmartThemeBlurTintColor, rgba(24, 24, 28, 0.92)));
+}
+.sanguine_collapsed_body.sanguine_flash_cost {
+    background: color-mix(in srgb, var(--fold-warn) 45%, var(--SmartThemeBlurTintColor, rgba(24, 24, 28, 0.92)));
+}
+.sanguine_collapsed_body.sanguine_flash_setback {
+    background: color-mix(in srgb, var(--fold-crit) 50%, var(--SmartThemeBlurTintColor, rgba(24, 24, 28, 0.92)));
 }
 
-.fold_bar span { display: block; height: 100%; transition: width 0.25s ease; }
-.fold_bar span.ok { background: var(--SmartThemeQuoteColor); }
-.fold_bar span.low { background: #d9a441; }
-.fold_bar span.critical { background: #c94d5f; }
-
-.fold_flags { display: flex; flex-wrap: wrap; gap: 0.25em; }
-
-.fold_flag {
-    font-size: calc(var(--mainFontSize) * 0.8);
-    padding: 0.05em 0.4em;
-    border-radius: 3px;
-    background: rgba(201, 77, 95, 0.18);
-    color: var(--SmartThemeBodyColor);
-    text-transform: capitalize;
+@media (max-width: 1000px) {
+    /* SillyTavern's mobile sheet forces every moving-div child to the full viewport; fold's panel
+       must be allowed to be a panel again, and the rail must not become a full-width banner. */
+    #sanguineTracker.sanguine_open {
+        width: min(92vw, 288px) !important;
+        min-width: 0 !important;
+    }
+    #sanguineTracker:not(.sanguine_open) {
+        width: 92px !important;
+        min-width: 0 !important;
+    }
 }
 
-.fold_section {
-    font-size: calc(var(--mainFontSize) * 0.75);
+/* dragging.
+ *
+ * The panel is `position: fixed` with `left: auto !important`, so it is pinned to the right edge
+ * and only its vertical position is the player's to choose. These are the surfaces that move it,
+ * the chevron tab and the grip while expanded, the whole rail while collapsed, so there is a
+ * handle at BOTH altitudes rather than only inside a control bar the rail hides.
+ *
+ * `touch-action: none` is what makes it work on a touchscreen: without it the browser claims the
+ * gesture as a scroll before the first pointermove arrives, and the panel never sees the drag.
+ */
+#sanguineTracker .sanguine_toggle,
+#sanguineTracker .drag-grabber,
+#sanguineTracker:not(.sanguine_open) .sanguine_collapsed_body {
+    touch-action: none;
+}
+/* SillyTavern hides `.drag-grabber` unless Moving UI is switched on, because Moving UI is what
+   would have moved it. Fold's panel moves without it, so the grip is shown regardless, an
+   affordance that is there but invisible is not an affordance. The mobile sheet still hides it with
+   `!important`, which is correct: the tab and the rail are the handles on a touchscreen. */
+#sanguineTracker .drag-grabber {
+    display: inline;
+    cursor: grab;
+}
+/* While a drag is live the cursor must not flicker back to `pointer` as it crosses a child. */
+#sanguineTracker.sanguine_dragging,
+#sanguineTracker.sanguine_dragging * {
+    cursor: grabbing !important;
+    user-select: none;
+}
+
+/* Grouping is a whitespace RATIO, not one flat gap.
+ *
+ * This was `gap: 0.55em` between every child, which meant a section heading sat exactly as far
+ * from its own list as from the next section, so the panel offered no visual grouping at all and
+ * spent ~96px doing it. Whitespace only groups when the space WITHIN a group is visibly smaller
+ * than the space between groups; equal spacing is the same failure as equal type sizes, in the
+ * other axis.
+ *
+ * So: a tight gap everywhere, and section headings buy their own separation above. Roughly 3:1,
+ * which is the ratio that survives the squint test.
+ */
+.sanguine_tracker_body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25em;
+    overflow-y: auto;
+    /* Clears the control bar, which SillyTavern positions absolutely over the top-right corner. */
+    padding: 1.4em 0 0;
+}
+.sanguine_tracker_body > .sanguine_sec { margin-top: 0.55em; }
+/* Nothing to separate from above the first one. */
+.sanguine_tracker_body > .sanguine_sec:first-child { margin-top: 0; }
+
+/* the header: when and where. */
+
+.sanguine_head {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2em;
+}
+
+/* One line, not two rows. You glance at a clock; you do not read it. */
+/* The clock, seated opposite the name.
+ *
+ * Was a full-width row of its own under the portrait; now the right half of the masthead. The dial
+ * and the readout stack, so a long date cannot set the header's width, the number stays put and
+ * the calendar wraps under it.
+ */
+.sanguine_clock {
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+    flex: 0 0 auto;
+    margin-left: auto;
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+}
+.sanguine_clock_read {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.1em;
+    min-width: 0;
+}
+
+/* The date, right-aligned under the time so the two read as one instrument at two tempos. */
+.sanguine_dateline {
+    display: flex;
+    justify-content: flex-end;
+    font-family: var(--fold-mono);
+    margin-top: 0.1em;
+}
+
+/* A flex item's default `min-width: auto` refuses to shrink below its content, so a wide sibling
+   pushes rather than squeezes, which is how a 176px date left four pixels for the name and set
+   "Solomon" one letter per line. The name column may shrink; it may not be crushed. */
+.sanguine_ident > .sanguine_pov {
+    min-width: 4.5em;
+}
+
+/* The face.
+ *
+ * 22px, hairline, two hands. It carries one thing the digits cannot: the fill says day or night, so
+ * "is it dark out" is answered by colour rather than by doing arithmetic on 09:11. Everything else
+ * about it is redundant with the number beside it ON PURPOSE, a form to glance at, a number to
+ * read, which is this panel's rule everywhere else.
+ */
+.sanguine_face {
+    width: 22px;
+    height: 22px;
+    flex: 0 0 auto;
+    overflow: visible;
+}
+.sanguine_face_ring {
+    fill: color-mix(in srgb, var(--SmartThemeBodyColor) 7%, transparent);
+    stroke: var(--fold-hair);
+    stroke-width: 1;
+}
+/* Day reads as the lit face; night inverts it, so the widget is legible as a silhouette at a
+   glance rather than needing to be inspected. */
+.sanguine_face_day .sanguine_face_ring {
+    fill: color-mix(in srgb, var(--fold-fresh) 16%, transparent);
+    stroke: color-mix(in srgb, var(--fold-fresh) 45%, transparent);
+}
+.sanguine_face_night .sanguine_face_ring {
+    fill: color-mix(in srgb, var(--fold-rel) 15%, transparent);
+    stroke: color-mix(in srgb, var(--fold-rel) 45%, transparent);
+}
+.sanguine_face_hour,
+.sanguine_face_minute {
+    stroke: var(--SmartThemeBodyColor);
+    stroke-linecap: round;
+}
+.sanguine_face_hour { stroke-width: 2; }
+.sanguine_face_minute { stroke-width: 1.25; opacity: var(--o-context); }
+
+/* A clock the story has stopped confirming is not the time. The face says so too, rather than
+   leaving the age counter to carry it alone. */
+.sanguine_clock_stale .sanguine_face { opacity: var(--o-dormant); }
+.sanguine_clock_stale .sanguine_face_ring { fill: none; }
+
+.sanguine_hh {
+    /* One step down from `--s-display`. At 23px it out-shouted the protagonist's name beside it,
+       and the masthead's job is "who, and when", not "when, and incidentally who". It is still the
+       largest mono value anywhere on the panel. */
+    font-size: var(--s-title);
+    line-height: 1;
+    letter-spacing: -0.02em;
+}
+
+.sanguine_dd {
+    font-size: var(--s-micro);
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    opacity: var(--o-standing);
+}
+
+/* A clock the story has outrun. Dimmed and aged rather than shown as the time, the panel used to
+   assert a stale hour with full confidence, which is how an entire afternoon went missing. */
+.sanguine_clock.sanguine_clock_stale .sanguine_hh { opacity: var(--o-dormant); }
+.sanguine_clock_age { color: var(--fold-warn); opacity: var(--o-context); }
+
+/* The card's own stat line.
+ *
+ * A label/value grid, not a stack of sections. `auto 1fr` lets the labels form a column that is
+ * exactly as wide as the longest of them, so the values line up without a fixed width that a card
+ * with a longer label would break. Values are set in the mono face for the same reason every other
+ * derived number is: you can see at a glance that the card reported it rather than wrote it. */
+.sanguine_stats {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.15em 0.7em;
+    align-items: baseline;
+    font-size: var(--s-sub);
+    line-height: 1.35;
+    padding: 0.15em 0 0.1em;
+}
+.sanguine_stat_k {
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    opacity: 0.55;
-    border-top: 1px solid rgba(128, 128, 128, 0.25);
-    padding-top: 0.4em;
+    font-size: var(--s-micro);
+    opacity: var(--o-standing);
+    white-space: nowrap;
+}
+/* What the card says the character IS, beside their name. Quiet, because it is the one line on the
+   panel that will not change for a hundred turns. */
+.sanguine_pov_is {
+    opacity: var(--o-standing);
+    font-size: var(--s-body);
+}
+.sanguine_pov_is::before {
+    content: "·";
+    margin: 0 0.4em;
+    opacity: 0.7;
 }
 
-.fold_items { display: flex; flex-direction: column; }
+.sanguine_stat_v {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+}
 
-.fold_item {
+/* A pinned scene field. The rail is the same two pixels the rest of the panel uses for recency,
+   reused here for authorship: gold on the left means "you said this, not the narrator". */
+/* `.sanguine_locked`, `.sanguine_lockable` and `.sanguine_contested` are gone with the mechanism
+   they drew. Pinning a scene field meant "the narrator may not change this", which is the opposite
+   of what pinning is for, see `panel.js` where `lockable` used to live. */
+.sanguine_loc {
+    font-size: var(--s-body);
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+
+.sanguine_loc_place { font-weight: 600; }
+.sanguine_loc_q { opacity: var(--o-standing); }
+
+/*
+ * The location block: four registers that age at four different rates.
+ *
+ * The whole section was one line for as long as it existed, because one string was all the scene
+ * probe stored. These rules are the other three registers, and the ranking between them is by how
+ * fast each changes, not by how interesting it is:
+ *
+ *   ancestry  quiet and small, orientation you mostly already have
+ *   place     the existing weight, unchanged; it is still the answer to "where am I"
+ *   detail    the brightest of the added lines, because it is the half that just changed
+ *   facts     standing, so it sits at the same rank as any other permanent truth on the panel
+ *   inside    context weight, and mono for the names, because it is a list of destinations rather
+ *             than a sentence, the same authorship rule the chips and the stat grid follow
+ *
+ * Nothing here uses the accent. `--fold-fresh` is spent on the deadline and on unresolved
+ * questions, and a room you are standing in is not urgent by virtue of being a room.
+ */
+.sanguine_place {
     display: flex;
-    justify-content: space-between;
-    gap: 0.5em;
-    font-size: calc(var(--mainFontSize) * 0.9);
-    padding: 0.1em 0;
-    cursor: help;
+    flex-direction: column;
+    gap: 0.1em;
 }
 
-.fold_item_name { text-transform: capitalize; overflow-wrap: anywhere; }
-.fold_item_qty { opacity: 0.7; font-variant-numeric: tabular-nums; flex: none; }
-
-.fold_empty {
-    font-size: calc(var(--mainFontSize) * 0.85);
-    opacity: 0.6;
-    line-height: 1.4;
+.sanguine_loc_up {
+    font-weight: 400;
+    opacity: var(--o-standing);
 }
 
-@media (prefers-reduced-motion: reduce) {
-    .fold_bar span { transition: none; }
+.sanguine_loc_sep {
+    margin: 0 0.3em;
+    opacity: var(--o-dormant);
 }
 
-/* Chip in the swipe picker showing the instruction a variant was generated under. */
-.fold_swipe_picker_steer {
+/* Destroyed, or sealed inside something destroyed. The one line here that takes a semantic hue,
+   because it changes what every line under it means. */
+.sanguine_place_gone {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--fold-crit);
+    opacity: var(--o-now);
+}
+
+.sanguine_place_facts {
+    font-size: var(--s-sub);
+    line-height: 1.35;
+    opacity: var(--o-standing);
+    overflow-wrap: anywhere;
+}
+
+.sanguine_place_detail {
+    font-size: var(--s-sub);
+    line-height: 1.35;
+    opacity: var(--o-now);
+    overflow-wrap: anywhere;
+}
+
+.sanguine_place_in {
     display: flex;
     align-items: baseline;
     gap: 0.4em;
-    opacity: 0.75;
-    font-size: calc(var(--mainFontSize) * 0.9);
+    font-size: var(--s-meta);
+    opacity: var(--o-context);
+}
+
+.sanguine_place_in_label {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    opacity: var(--o-dormant);
+    flex: none;
+}
+
+.sanguine_place_in_names {
+    font-family: var(--fold-mono);
+    overflow-wrap: anywhere;
+}
+
+.sanguine_place_in_more {
+    opacity: var(--o-dormant);
+    flex: none;
+}
+
+.sanguine_chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3em;
+    margin-top: 0.25em;
+}
+
+.sanguine_chip {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    border: 1px solid var(--fold-hair);
+    border-radius: 999px;
+    padding: 0.15em 0.5em;
+    opacity: var(--o-context);
+}
+
+.sanguine_cond_rest { margin-top: 0.15em; }
+
+/* the deadline: the one loud element, and it earns it by being the only thing that expires. */
+
+.sanguine_alert {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6em;
+    border: 1px solid var(--fold-warn);
+    border-left-width: 2px;
+    border-radius: 4px;
+    padding: 0.45em 0.6em;
+    background: rgba(214, 122, 70, 0.09);
+}
+
+/* The second enclosure: the thread the player said they are on.
+ *
+ * Enclosure is the scarcest device in this panel, at most two at rest, because a third box means
+ * nothing is emphasised. This one is the accent rather than the warning hue: a pinned thread is not
+ * a threat, it is a declaration of intent, and it is the only thing on the panel the PLAYER asserts
+ * rather than the story. Coverage, the model's report of what it is currently handling, gets no
+ * box at all, because it is information rather than a decision.
+ */
+.sanguine_active {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2em;
+    border: 1px solid color-mix(in srgb, var(--fold-fresh) 55%, transparent);
+    border-left-width: 2px;
+    border-radius: 4px;
+    padding: 0.4em 0.55em;
+    background: color-mix(in srgb, var(--fold-fresh) 8%, transparent);
+}
+.sanguine_active_head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.4em;
+}
+.sanguine_active_tag {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--fold-fresh);
+}
+.sanguine_active .sanguine_open_link {
+    font-size: var(--s-body);
+}
+/* Unclamped, unlike every other thread line here, this is the one stake worth its full height. */
+.sanguine_active .sanguine_unresolved,
+.sanguine_active_open {
+    display: block;
+    -webkit-line-clamp: none;
+    line-clamp: none;
+    overflow: visible;
+    font-size: var(--s-sub);
+    opacity: var(--o-context);
+    line-height: 1.35;
+}
+.sanguine_active_lost {
+    font-size: var(--s-sub);
+    opacity: var(--o-standing);
+}
+.sanguine_active .sanguine_act { opacity: var(--o-standing); }
+.sanguine_active:hover .sanguine_act { opacity: var(--o-now); }
+
+/* One line for what used to be four. */
+.sanguine_glance {
+    grid-column: 2 / -1;
+    font-size: var(--s-sub);
+    opacity: var(--o-standing);
+    line-height: 1.35;
+    /* One line. `wants … · knows … · facts` is three sentences interleaved, and the point is that
+       it occupies the space of one, the full text is in the title and in the Cast dossier. */
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* The opener at the foot of a truncated place. Reads as a count and a way onward, not a button. */
+.sanguine_more {
+    align-self: flex-start;
+    margin: 0.1em 0 0.2em;
+    padding: 0;
+    border: none;
+    background: none;
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    color: inherit;
+    opacity: var(--o-standing);
+    cursor: pointer;
+}
+.sanguine_more:hover { color: var(--fold-fresh); opacity: var(--o-now); }
+.sanguine_more:focus-visible { outline: 1px solid var(--fold-fresh); outline-offset: 2px; }
+
+.sanguine_alert.passed {
+    border-color: var(--fold-hair);
+    background: rgba(128, 128, 128, 0.08);
+}
+
+.sanguine_alert_text { flex: 1; min-width: 0; }
+
+.sanguine_alert_name {
+    font-size: var(--s-body);
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+
+.sanguine_alert_gap {
+    flex: none;
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    color: var(--fold-warn);
+    white-space: nowrap;
+}
+
+.sanguine_alert.passed .sanguine_alert_gap { color: inherit; opacity: var(--o-dormant); }
+
+/* sections. */
+
+.sanguine_sec {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    opacity: var(--o-standing);
+    border-top: 1px solid var(--fold-hair);
+    padding-top: 0.5em;
+}
+
+.sanguine_sec_n { font-variant-numeric: tabular-nums; }
+
+.sanguine_list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35em;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+/* rows and the recency rail.
+   Two pixels of accent down the left of every row answers "what changed this turn"
+   peripherally, with no diff view and no extra word. */
+
+.sanguine_row {
+    display: grid;
+    grid-template-columns: 2px 1fr auto;
+    gap: 0 0.6em;
+    align-items: baseline;
+    font-size: var(--s-body);
+    line-height: 1.35;
+}
+
+/* A row with one child must not land in the 2px rail column.
+ *
+ * The template above starts with the recency rail, so a row built from a single span put that span
+ * in a 2px box. With `overflow-wrap: anywhere` a 2px box does not overflow, it wraps, once per
+ * CHARACTER. Measured on the "Not parsed" list, which renders exactly one span per entry: the
+ * card's `Threat: Moderate` came out as M/o/d/e/r/a/t/e, one letter per line. Spanning every column
+ * fixes it for any single-child row rather than for that list. */
+.sanguine_row > :only-child {
+    grid-column: 1 / -1;
+}
+
+.sanguine_rail {
+    align-self: stretch;
+    border-radius: 2px;
+    background: var(--SmartThemeBodyColor);
+    opacity: 0.16;
+}
+
+.sanguine_rail.fresh { background: var(--fold-fresh); opacity: 1; }
+.sanguine_rail.warm { background: var(--fold-fresh); opacity: 0.45; }
+
+/* Anything the fold derived: quantities, counts, states. Mono and tabular, always. */
+.sanguine_meta {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    opacity: var(--o-standing);
+    white-space: nowrap;
+}
+
+.sanguine_sub {
+    grid-column: 2 / -1;
+    font-size: var(--s-sub);
+    opacity: var(--o-standing);
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+/*
+ * Pressure.
+ *
+ * A segmented dial, filled as things go wrong. Blades makes these deliberately player-facing:
+ * watching the kidnapper's clock tick is what makes a table tense and lets people price a risk,
+ * where being told after the fact that you failed is just an announcement.
+ */
+.sanguine_dial {
+    display: inline-flex;
+    gap: 0.12em;
+    align-items: center;
+    align-self: center;
+    margin-left: 0.15em;
+    color: var(--fold-warn);
+}
+
+.sanguine_dial.urgent {
+    color: var(--fold-crit);
+}
+
+.sanguine_seg {
+    width: 0.3em;
+    height: 0.52em;
+    border-radius: 0.08em;
+    background: currentColor;
+    opacity: 0.2;
+}
+
+.sanguine_seg.on {
+    opacity: 1;
+}
+
+/*
+ * A threat the character cannot perceive: named, never quantified. One hatched mark says "something
+ * is closing in" without saying how near, which is the honest thing to show and, not incidentally,
+ * the more frightening one.
+ */
+.sanguine_seg.unknown {
+    width: 1.1em;
+    opacity: 0.55;
+    background: repeating-linear-gradient(115deg,
+        currentColor 0 2px, transparent 2px 4px);
+}
+
+.sanguine_dial.hidden {
+    color: var(--fold-rel);
+}
+
+/*
+ * Progress.
+ *
+ * A dial that fills toward what the characters WANT, and it must not look like the one that fills
+ * toward what they fear. Two dials for one stake sat side by side in the live chat, "the residency
+ * window closes" and "Solomon completes 20 D-rank raids and gains residency", drawn identically
+ * and both filed under Pressure, which reads the player's own achievement as a countdown.
+ *
+ * So: a continuous bar rather than discrete segments, in the fresh hue rather than the warning one,
+ * and no urgency state at all. Segments say "how many turns left"; a bar says "how far along". Up
+ * to twenty steps also stops being drawable as twenty little marks at this size, which is the same
+ * reason Ironsworn draws a track and Blades draws a clock.
+ */
+.sanguine_track {
+    display: inline-block;
+    align-self: center;
+    width: 4.2em;
+    height: 0.34em;
+    margin-left: 0.3em;
+    border-radius: 0.17em;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--fold-fresh) 22%, transparent);
+}
+
+.sanguine_track i {
+    display: block;
+    height: 100%;
+    background: var(--fold-fresh);
+    transition: width 0.25s ease;
+}
+
+/*
+ * Not retracted is not the same as here.
+ *
+ * Someone fold cannot place. They belong in Here, nothing said they left, but the row must never
+ * read as a claim about the room, because for as long as it did the panel asserted people into
+ * scenes the narration never put them in. Dimmed, with the uncertainty spelled out beside the name
+ * rather than encoded in the styling alone.
+ */
+.sanguine_unplaced {
+    opacity: var(--o-standing);
+}
+
+.sanguine_hedge {
+    font-style: italic;
+    color: var(--fold-hair);
+}
+
+/* A thread that stopped being about anything, as against one that was finished. */
+.sanguine_is_moot .sanguine_entity_name {
+    opacity: var(--o-dormant);
+    text-decoration: line-through;
+    text-decoration-style: dotted;
+}
+
+.sanguine_is_moot .sanguine_sub,
+.sanguine_is_moot .sanguine_unresolved {
+    opacity: var(--o-dormant);
+}
+
+/*
+ * How someone regards you.
+ *
+ * Five pips filled to rank, hue carrying the sign. A shape reads as an ordinal faster than a word
+ * does, and it takes a quarter of the width. The word survives in the title attribute, so nothing
+ * depends on distinguishing the hues.
+ */
+.sanguine_feels {
+    display: inline-flex;
+    gap: 0.14em;
+    align-items: center;
+    align-self: center;
+    margin-left: 0.15em;
+}
+
+.sanguine_pip {
+    width: 0.32em;
+    height: 0.32em;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.22;
+}
+
+.sanguine_pip.on {
+    opacity: 1;
+}
+
+.sanguine_feels_hostile { color: var(--fold-crit); }
+.sanguine_feels_wary { color: var(--fold-warn); }
+.sanguine_feels_neutral { color: var(--fold-hair); }
+.sanguine_feels_friendly { color: var(--fold-rel); }
+.sanguine_feels_devoted { color: var(--fold-fresh); }
+
+/* What they are after, and what they have on you, motives, set as prose rather than as fields. */
+.sanguine_wants,
+.sanguine_knows {
+    grid-column: 2 / -1;
+    font-size: var(--s-sub);
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    opacity: var(--o-context);
+}
+
+.sanguine_knows {
+    color: var(--fold-warn);
+    opacity: var(--o-context);
+}
+
+/*
+ * What changed this turn.
+ *
+ * A measurement equal to the prediction carries no information, and most of this panel is
+ * restatement. These are the only rows that are not, so they are the only rows that get colour.
+ * The word rather than a dot alone: a colour difference nobody can see is not a signal.
+ */
+.sanguine_badge {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 0.05em 0.4em;
+    border-radius: 0.5em;
+    align-self: center;
+    white-space: nowrap;
+}
+
+.sanguine_badge_new {
+    color: var(--fold-fresh);
+    box-shadow: inset 0 0 0 1px currentColor;
+}
+
+.sanguine_badge_updated {
+    color: var(--fold-rel);
+    box-shadow: inset 0 0 0 1px currentColor;
+    opacity: var(--o-context);
+}
+
+.sanguine_badge_resolved {
+    color: var(--fold-hair);
+    box-shadow: inset 0 0 0 1px currentColor;
+}
+
+/* Struck through for its last turn on screen, so the completion is witnessed before it goes. */
+.sanguine_is_resolved .sanguine_entity_name {
+    text-decoration: line-through;
+    opacity: var(--o-dormant);
+}
+
+.sanguine_is_resolved .sanguine_sub,
+.sanguine_is_resolved .sanguine_unresolved,
+.sanguine_is_resolved .sanguine_pred {
+    opacity: var(--o-dormant);
+}
+
+/*
+ * People the story has left behind. Present but recessive, they are context, not cast, and the
+ * eye should pass over them unless it is looking for them. Demotion is the whole point: deleting
+ * them loses the memory, showing them at full weight is the bug this replaced.
+ */
+.sanguine_head_quiet,
+.sanguine_list_quiet {
+    opacity: var(--o-standing);
+}
+
+.sanguine_list_quiet .sanguine_entity_name {
+    font-weight: 400;
+}
+
+/*
+ * Whose story this is. Set as the panel's title, larger than anything under it and the only line
+ * with real weight, because everything below is about this character and nothing said so.
+ */
+/* Portrait beside the name block. `align-items: center` rather than baseline: an image has no
+   baseline to share, and aligning its bottom edge to the name's would hang it below the block. */
+.sanguine_ident {
+    display: flex;
+    align-items: center;
+    gap: 0.55em;
+    min-width: 0;
+}
+.sanguine_ident > .sanguine_pov {
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+/* 40×48, a 5:6 portrait frame, the CRPG party-member shape. A circle here would read as the
+   account you are signed in as; this reads as the character the panel is about. Fixed in pixels
+   because it is an image and must not resize with the type scale. */
+.sanguine_portrait {
+    flex: 0 0 auto;
+    width: 40px;
+    height: 48px;
+    object-fit: cover;
+    object-position: center top;
+    border: 1px solid var(--fold-hair);
+    border-radius: 2px;
+    /* The one image on the panel, so it must not out-shout the name it sits beside. */
+    filter: saturate(0.9);
+}
+
+.sanguine_pov {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4em;
+    margin-bottom: 0.15em;
+    flex-wrap: wrap;
+}
+
+.sanguine_pov_name {
+    font-size: var(--s-title);
+    font-weight: 600;
+    letter-spacing: 0.01em;
+}
+
+/*
+ * The unresolved part of a lead. Set apart from `.sanguine_sub` and given the fresh accent because it
+ * is the only line in the row that asks for something: the detail says what the thread is, this
+ * says why it is still on the panel. A leading marker rather than a colour alone, so the
+ * distinction survives for anyone who cannot see the hue difference.
+ */
+/*
+ * Named `unresolved`, not `open`, because `open` was already taken by the PANEL.
+ *
+ * This class and the panel's expanded-state class were both called `sanguine_open`, and the panel
+ * root wears its own state class, `panel.classList.add('sanguine_mounted', 'sanguine_open')`. So
+ * every declaration in this rule applied to the whole 288px panel whenever it was expanded, and
+ * the ones no ID selector happened to contest went through unopposed:
+ *
+ *   · `opacity: var(--o-context)` faded the ENTIRE panel, which multiplied every one of the four
+ *     opacity stops down by a constant and quietly flattened the hierarchy they exist to express,
+ *     `--o-now` and `--o-standing` cannot rank anything from inside a parent that is already faded.
+ *   · `font-size: var(--s-sub)` made the sub step the panel's BASE size, so the six type steps were
+ *     all resolving against the wrong root. An earlier fix here blamed `#sanguineTracker`'s own
+ *     `font-size` and removed it; the real opponent was this line.
+ *   · `overflow: hidden` overrode the deliberate `overflow: visible` on `#sanguineTracker`, whose
+ *     comment says the collapse handle straddles the left edge and must not be clipped.
+ *   · `::before { content: '? ' }` printed a bare question mark at the panel's top-left corner,
+ *     which is the only part of this anyone could see, and which read as a broken icon.
+ *
+ * `color` and `display` were the only two neutralised, by `#sanguineTracker.sanguine_mounted`
+ * winning on ID specificity, which is why the collision survived a colour audit and a type audit
+ * without being caught by either.
+ *
+ * The panel-state class kept the name (ten selectors and three call sites); this one changed, and
+ * `unresolved` is the better word regardless, it is the term the clocks schema already uses for
+ * exactly this property.
+ */
+.sanguine_unresolved {
+    grid-column: 2 / -1;
+    font-size: var(--s-sub);
+    color: var(--fold-fresh);
+    opacity: var(--o-context);
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    /* Two lines, not unbounded. An open question is a sentence the model wrote and some of them run
+       long; at the glance altitude the first clause is the question and the rest is the tab's. The
+       active-thread card deliberately overrides this back to unclamped, that is what the panel's
+       one enclosure buys. */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.sanguine_unresolved::before {
+    content: '? ';
+    opacity: 0.6;
+}
+
+.sanguine_prose {
+    font-size: var(--s-sub);
+    line-height: 1.4;
+    opacity: var(--o-context);
+    overflow-wrap: anywhere;
+}
+
+.sanguine_bullets {
+    display: flex;
+    flex-direction: column;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.sanguine_bullets li {
+    position: relative;
+    padding-left: 0.85em;
+    font-size: var(--s-sub);
+    line-height: 1.35;
+}
+
+.sanguine_bullets li::before {
+    content: "·";
+    position: absolute;
+    left: 0.15em;
+    opacity: 0.5;
+}
+
+/* conditions that tick. */
+
+.sanguine_dur {
+    grid-column: 2 / -1;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--fold-hair);
+    margin-top: 0.3em;
+    overflow: hidden;
+}
+
+.sanguine_dur i {
+    display: block;
+    height: 100%;
+    background: var(--fold-warn);
+    transition: width 0.25s ease;
+}
+
+/* vitals. */
+
+.sanguine_vital { display: flex; flex-direction: column; gap: 0.15em; }
+
+.sanguine_vital_head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: var(--s-body);
+}
+
+.sanguine_bar {
+    height: 4px;
+    border-radius: 3px;
+    background: var(--fold-hair);
+    overflow: hidden;
+}
+
+.sanguine_bar span { display: block; height: 100%; transition: width 0.25s ease; }
+.sanguine_bar span.ok { background: var(--fold-fresh); }
+.sanguine_bar span.low { background: var(--fold-warn); }
+.sanguine_bar span.critical { background: var(--fold-crit); }
+
+/* inventory. */
+
+.sanguine_item_head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.4em;
+    min-width: 0;
+}
+
+.sanguine_item_name { overflow-wrap: anywhere; }
+
+/* The grade the story gave a row, `(E)`, `+2`, `masterwork`. Set in the instrument face like every
+   other derived value, and quieter than the name because it modifies the name rather than competing
+   with it. Never compared or ordered by fold; it is the model's own word, shown as written. */
+.sanguine_rank {
+    flex: 0 0 auto;
+    margin-left: 0.4em;
+    opacity: var(--o-context);
+    white-space: nowrap;
+}
+
+/* Only rows with a trail behind them are interactive, so a plain row never invites a dead click. */
+.sanguine_item.sanguine_has_trail > .sanguine_item_head { cursor: pointer; }
+.sanguine_item.sanguine_has_trail > .sanguine_item_head:focus-visible {
+    outline: 1px solid var(--fold-fresh);
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
+.sanguine_caret {
+    flex: none;
+    opacity: var(--o-dormant);
+    font-size: var(--s-meta);
+    display: inline-block;
+    transition: transform 0.15s ease;
+}
+
+.sanguine_item.sanguine_open_trail > .sanguine_item_head .sanguine_caret { transform: rotate(90deg); }
+
+/* The audit trail: why the quantity is what it is. Collapsed by default, because it answers a
+   question you only occasionally ask and a panel that answers it unprompted is a spreadsheet.
+   It replaced a `title` attribute, which the browser rendered as an unstyled OS tooltip. */
+.sanguine_trail { display: none; }
+
+.sanguine_item.sanguine_open_trail .sanguine_trail {
+    grid-column: 2 / -1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.1em;
+    margin: 0.35em 0 0.2em;
+    padding: 0.35em 0.5em;
+    border-left: 2px solid var(--fold-hair);
+    background: rgba(128, 128, 128, 0.07);
+    border-radius: 0 3px 3px 0;
+}
+
+.sanguine_trail_row {
+    display: grid;
+    grid-template-columns: 2.1em 1fr 2em;
+    gap: 0.4em;
+    align-items: baseline;
+    font-size: var(--s-meta);
+    line-height: 1.35;
+}
+
+.sanguine_trail_dq {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.sanguine_trail_dq.gain { color: #6fae6f; }
+.sanguine_trail_dq.loss { color: var(--fold-crit); }
+.sanguine_trail_sum { opacity: var(--o-context); overflow-wrap: anywhere; }
+
+/* The running total, so the arithmetic is checkable rather than asserted. */
+.sanguine_trail_run {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    opacity: var(--o-dormant);
+}
+
+/* card-authored statements.
+   Leads and contacts before extraction has turned them into entities. Long ones clamp
+   to two lines and open on click: six leads stay scannable and none is hidden. */
+
+.sanguine_stmt_text { overflow-wrap: anywhere; }
+
+.sanguine_stmt.sanguine_clamped > .sanguine_stmt_text {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    cursor: pointer;
+}
+
+.sanguine_stmt.sanguine_clamped.sanguine_open_clamp > .sanguine_stmt_text {
+    display: block;
+    overflow: visible;
+}
+
+.sanguine_stmt.sanguine_clamped > .sanguine_stmt_text:focus-visible {
+    outline: 1px solid var(--fold-fresh);
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
+.sanguine_stmt.sanguine_open_clamp > .sanguine_caret { transform: rotate(90deg); }
+
+/* people and leads.
+   The pairing the card's flat block destroyed: a person and how to reach them are
+   one object. The predicate is set in the relation colour directly beneath the name,
+   never as a sibling bullet. */
+
+.sanguine_entity_name { font-weight: 600; overflow-wrap: anywhere; }
+
+/* The way into the overlay, dressed as the text it replaced.
+ *
+ * Every summary row's name is now a real `<button>`: the panel stopped printing four sublines per
+ * person on the promise that the full record is one click away, and that promise has to be
+ * keyboard-reachable and announce itself as something that does anything.
+ *
+ * But a button chrome on every row of a 288px column would be forty buttons, and the panel would
+ * read as a form. So the element is a button and the styling is text, the affordance is the
+ * cursor, the hover colour and the focus ring, which is exactly how a link behaves and how the
+ * existing `.sanguine_editable` fields already behave here.
+ */
+.sanguine_open_link {
+    display: inline;
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: none;
+    font: inherit;
+    font-weight: 600;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    overflow-wrap: anywhere;
+}
+.sanguine_open_link:hover {
+    color: var(--fold-fresh);
+}
+.sanguine_open_link:focus-visible {
+    outline: 1px solid var(--fold-fresh);
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
+.sanguine_pred {
+    grid-column: 2 / -1;
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    letter-spacing: 0.03em;
+    color: var(--fold-rel);
+    margin-top: 0.1em;
+    overflow-wrap: anywhere;
+}
+
+/* Where a lead came from, a citation, set in the instrument face rather than as prose. */
+/*
+ * Marks: what is wrong with somebody, on their own row.
+ *
+ * Chips rather than a list, because a mark is a phrase and the row already has three prose lines
+ * under it (place, wants, knows); a fourth would bury the wound. Severity is a hue and never a
+ * number: the phrase-over-number rule (`entity-table.js` DISPOSITIONS) extended to consequences,
+ * FOLD-REDESIGN.md §1. Only `severe` gets the alarming colour: `moderate` is the default every
+ * legacy row and every card block carries, so colouring it would light the whole panel up and say
+ * nothing.
+ */
+.sanguine_marks {
+    grid-column: 2 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25em;
+    margin-top: 0.15em;
+}
+
+.sanguine_mark {
+    font-size: var(--s-meta);
+    border: 1px solid var(--fold-hair);
+    border-radius: 3px;
+    padding: 0.05em 0.4em;
+    opacity: var(--o-context);
+}
+
+.sanguine_mark_severe {
+    border-color: var(--fold-crit);
+    color: var(--fold-crit);
+    opacity: var(--o-now);
+}
+
+.sanguine_mark_moderate { border-color: var(--fold-warn); }
+
+/*
+ * What a companion is carrying, on their row. Same strip geometry as the marks above, it answers
+ * the same shape of question about the same person, but unbordered and dimmer, because a wound is
+ * a consequence you have to act on and a satchel is a fact you have to remember.
+ */
+.sanguine_holds {
+    grid-column: 2 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25em;
+    margin-top: 0.15em;
+}
+
+.sanguine_holds_item {
+    font-size: var(--s-meta);
+    font-family: var(--monoFontFamily);
+    opacity: var(--o-context);
+}
+
+.sanguine_holds_item::before {
+    content: '· ';
+    opacity: 0.5;
+}
+
+/* The pov's own marks keep the Condition row's shape; only the severity word is new. */
+li.sanguine_cond.sanguine_mark_severe { color: var(--fold-crit); }
+.sanguine_sev { color: var(--fold-crit); opacity: var(--o-now); }
+
+/*
+ * One small integer, and only while somebody is actually dangerous. Set in the mono face for the
+ * reason every other number on this panel is: it is a quantity fold does arithmetic on, not prose.
+ *
+ * Placed as a full-width row field like the other derived lines (`grid-column: 2 / -1`) and kept
+ * to a bounded chip. Without the placement, the span auto-placed into the grid's `1fr` column and
+ * rendered as an unbroken horizontal run, "threat 6" stretched across the row instead of sitting
+ * as a chip beside the description (measured: Vesk's row in Time Stop RPG).
+ */
+.sanguine_threat {
+    grid-column: 2 / -1;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    width: fit-content;
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    color: var(--fold-crit);
+    letter-spacing: 0.04em;
+    border: 1px solid var(--fold-crit);
+    border-radius: 3px;
+    padding: 0.05em 0.45em;
+    margin-top: 0.15em;
+    overflow-wrap: anywhere;
+    max-width: 100%;
+}
+
+/* Standing truths that never age. Quiet, because they never change and never need looking at. */
+.sanguine_facts {
+    grid-column: 2 / -1;
+    font-size: var(--s-meta);
+    opacity: var(--o-standing);
+    overflow-wrap: anywhere;
+}
+
+.sanguine_src {
+    grid-column: 2 / -1;
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    letter-spacing: 0.04em;
+    opacity: var(--o-standing);
+    margin-top: 0.1em;
+    overflow-wrap: anywhere;
+}
+
+.sanguine_status_open { color: var(--fold-fresh); opacity: var(--o-now); }
+.sanguine_status_stalled { opacity: var(--o-dormant); }
+.sanguine_status_unreachable { color: var(--fold-crit); opacity: var(--o-context); }
+
+/* footer. */
+
+.sanguine_foot {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    opacity: var(--o-dormant);
+    border-top: 1px solid var(--fold-hair);
+    padding-top: 0.5em;
+}
+
+.sanguine_hidden_note {
+    font-size: var(--s-meta);
+    opacity: 0.45;
+    font-style: italic;
+}
+
+.sanguine_foot_gap { color: var(--fold-warn); opacity: var(--o-context); }
+
+/* Footer counts that open the diagnostics log: a tally that is one click from its causes. */
+.sanguine_foot_count {
+    cursor: pointer;
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+}
+.sanguine_foot_count:hover { opacity: var(--o-now); }
+.sanguine_foot_rejects { color: var(--fold-crit); opacity: var(--o-now); }
+.sanguine_foot_extract { color: var(--fold-warn); opacity: var(--o-now); }
+
+/* the diagnostics log. */
+
+.sanguine_log {
+    border-top: 1px solid var(--fold-hair);
+    padding-top: 0.5em;
+}
+.sanguine_log_closed { display: none; }
+.sanguine_log_head {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    opacity: var(--o-standing);
+    margin-bottom: 0.3em;
+}
+.sanguine_log_list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 14em;
+    overflow-y: auto;
+}
+.sanguine_log_row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 0 0.6em;
+    align-items: baseline;
+    font-size: var(--s-meta);
+    line-height: 1.35;
+    padding: 0.15em 0;
+}
+.sanguine_log_tag {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+}
+.sanguine_log_reject .sanguine_log_tag { color: var(--fold-crit); }
+.sanguine_log_extract .sanguine_log_tag { color: var(--fold-warn); }
+.sanguine_log_item { font-weight: 600; }
+.sanguine_log_reason {
+    font-family: var(--fold-mono);
+    opacity: var(--o-context);
+}
+.sanguine_log_turn {
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    opacity: var(--o-standing);
+    white-space: nowrap;
+}
+.sanguine_log_jump { cursor: pointer; }
+.sanguine_log_jump:hover { background: rgba(128, 128, 128, 0.08); }
+.sanguine_log_note {
+    font-size: var(--s-meta);
+    font-style: italic;
+    opacity: var(--o-standing);
+    line-height: 1.4;
+    margin: 0.2em 0 0.4em;
+}
+
+/* The caret-level report: raw proposal, underline, window, help, song's `error L:C` shape. */
+.sanguine_log_report {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1em;
+    min-width: 0;
+}
+.sanguine_log_line {
+    display: flex;
+    gap: 0.5em;
+    align-items: baseline;
+    flex-wrap: wrap;
+}
+.sanguine_log_sep { opacity: 0.4; }
+
+/* The record-health strip.
+ *
+ * Sync, trace and reconcile: three controls that all answer "is what I am looking at still true",
+ * and that used to render as three loose siblings in the content column between the scene header
+ * and the first fact about the story. Grouped, docked right, and set at the panel's lowest rank,
+ * this is looked FOR, never read at a glance.
+ *
+ * The old trace row spelled six values across the panel (`ok · t5 · #0 · interval · 23:49:49 ·
+ * click to print…`) at the same weight as the fiction. They are all in the button's tooltip now.
+ * `.sanguine_trace_tag/_meta/_hint` are gone with it.
+ */
+.sanguine_health {
+    display: flex;
+    align-items: center;
+    /* Left, at the panel's top-left corner, opposite the clock in the header below it. Was
+       `flex-end` while the strip lived under the stat grid; see `recordStrip` in `panel.js` for
+       why depth was the wrong way to express its rank. */
+    justify-content: flex-start;
+    gap: 0.3em;
+    margin: 0 0 0.1em;
+    /* Quiet, but not hidden.
+     *
+     * The brief for this strip was that reconcile was HARD TO SEE, and the first pass answered the
+     * grouping half of that and not the visibility half: at `--o-standing` on a dark panel, two
+     * 22px outlines in the corner are close to invisible until you already know they are there.
+     * `--o-context` is still clearly subordinate to the fiction and is actually findable. This is
+     * the one control group on the panel a player goes LOOKING for, so it has to survive a glance
+     * that is not looking for it. */
+    opacity: var(--o-context);
+    transition: opacity 0.12s ease;
+}
+.sanguine_health:hover,
+.sanguine_health:focus-within {
+    opacity: var(--o-now);
+}
+
+/* One shape for every control in the strip, so the group reads as a group. */
+.sanguine_health_btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    font-size: var(--s-meta);
+    color: var(--SmartThemeBodyColor);
+    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
+    border-radius: 0.3em;
+    cursor: pointer;
+}
+.sanguine_health_btn:hover {
+    border-color: var(--fold-fresh);
+    color: var(--fold-fresh);
+}
+.sanguine_health_btn:focus-visible {
+    outline: 1px solid var(--fold-fresh);
+    outline-offset: 1px;
+}
+/* A pass that failed is the one thing in this strip worth a colour. */
+.sanguine_trace_failed { color: var(--fold-crit); border-color: color-mix(in srgb, var(--fold-crit) 55%, transparent); }
+
+@media (hover: none), (pointer: coarse) {
+    /* Nothing reveals the strip on touch, so it stays legible, and its controls get a real target. */
+    .sanguine_health { opacity: var(--o-context); }
+    .sanguine_health_btn { width: 24px; height: 24px; }
+}
+.sanguine_log_raw,
+.sanguine_log_caret {
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.25;
+}
+.sanguine_log_raw { color: var(--SmartThemeBodyColor); opacity: var(--o-now); }
+.sanguine_log_caret {
+    color: var(--fold-crit);
+    user-select: none;
+}
+.sanguine_log_snippet {
+    font-style: italic;
+    opacity: var(--o-standing);
+    font-size: var(--s-meta);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.sanguine_log_help {
+    color: var(--fold-fresh);
+    opacity: var(--o-context);
+    font-size: var(--s-meta);
+    font-family: var(--fold-mono);
+    word-break: break-word;
+}
+.sanguine_log_extract .sanguine_log_help { color: var(--fold-warn); }
+
+
+.sanguine_empty {
+    font-size: var(--s-sub);
+    opacity: var(--o-standing);
+    line-height: 1.4;
+}
+
+/* the extraction lifecycle chip (FOLD-SLA.md §2). */
+
+.sanguine_sync {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    font-size: var(--s-micro);
+    font-family: var(--fold-mono);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    opacity: var(--o-now);
+    margin: 0 0 0.4em;
+}
+.sanguine_sync_dot {
+    width: 0.5em;
+    height: 0.5em;
+    border-radius: 50%;
+    background: currentColor;
+    flex: none;
+}
+.sanguine_sync_up_to_date { color: var(--fold-ok, #5aa26f); }
+.sanguine_sync_acknowledged,
+.sanguine_sync_behind { color: var(--fold-warn); }
+.sanguine_sync_syncing { color: var(--fold-rel); }
+.sanguine_sync_failed { color: var(--fold-crit); font-weight: 700; }
+.sanguine_sync_unknown { color: var(--fold-warn); }
+.sanguine_sync_syncing .sanguine_sync_dot {
+    animation: sanguine_sync_pulse 1s ease-in-out infinite;
+}
+@keyframes sanguine_sync_pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.25; }
+}
+/* The collapsed-rail form is a bare dot; the strip is already dense. */
+.sanguine_sync_compact { margin: 0; }
+.sanguine_sync_compact .sanguine_sync_dot {
+    width: 0.45em;
+    height: 0.45em;
+}
+
+/* Warning line in the settings: e.g. no extraction model set (FOLD-SLA.md §3). */
+.sanguine_settings_warn {
+    font-size: var(--s-sub);
+    color: var(--fold-warn);
+    opacity: var(--o-now);
+    margin: 0.3em 0;
+    line-height: 1.35;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .sanguine_bar span,
+    .sanguine_dur i,
+    .sanguine_caret { transition: none; }
+}
+
+
+/* Chip in the swipe picker showing the instruction a variant was generated under. */
+.sanguine_swipe_picker_steer {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4em;
+    opacity: var(--o-context);
+    font-size: var(--s-body);
     font-style: italic;
     margin-bottom: 0.25em;
     overflow-wrap: anywhere;
+}
+
+/* An amount, set in the instrument face with grouped digits, money is read, not counted. */
+.sanguine_money {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    opacity: var(--o-now);
+}
+
+/*
+ * A pinned field the story keeps contradicting.
+ *
+ * Deliberately the same rail `.sanguine_locked` already draws, in the warning hue rather than the
+ * fresh one, no new control, no new row, no badge. The lock is still winning, which is what a
+ * lock is for; the colour says only that it is winning an argument. Measured motivation: the
+ * location lock on the live Solo Leveling chat blocked seven writes and the panel showed an empty
+ * room in a scene containing the player, with nothing on screen to say why (FOLD-REDESIGN.md
+ * §0.1-2). The one-click accept/keep pair is Phase F's; this is the signal that makes it worth
+ * building.
+/*
+ * Cause-link (§8, altitude 3): a contributor with a `mid` is a jump to its causing message.
+ */
+.sanguine_trail_row.sanguine_trail_jump {
+    cursor: pointer;
+}
+.sanguine_trail_row.sanguine_trail_jump:hover {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 12%, transparent);
+}
+.sanguine_trail_row.sanguine_trail_jump:hover .sanguine_trail_sum {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+/* The flash on the message the jump landed on. */
+.mes.sanguine_jump_target {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: -2px;
+    border-radius: 8px;
+}
+
+/* Edit-in-place (§8): the display form hints it can be edited, then swaps to contenteditable. */
+.sanguine_editable {
+    cursor: text;
+    border-bottom: 1px dotted transparent;
+    transition: border-color 0.15s ease;
+}
+.sanguine_editable:hover {
+    border-bottom-color: var(--fold-hair);
+}
+.sanguine_editable:focus,
+.sanguine_editable[contenteditable="plaintext-only"] {
+    outline: none;
+    border-bottom-color: var(--SmartThemeQuoteColor, #d4a753);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 10%, transparent);
+    border-radius: 3px;
+}
+.sanguine_editable.sanguine_empty {
+    font-style: italic;
+    opacity: var(--o-standing);
+}
+
+/* Phase F follow-up: layout fixes the live panel surfaced. */
+
+/* The time must never break across lines ("10:0" + "0"). */
+.sanguine_hh { white-space: nowrap; }
+
+/* Progress: the bar and its fraction share the right cell on the NAME line; the about
+   ("visa granted") drops to its own row instead of colliding with the fraction. */
+.sanguine_progress_tail {
+    grid-column: 3;
+    grid-row: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4em;
+    justify-self: end;
+}
+
+/* Row tail: lifecycle badge + presence status + disposition pips share ONE right cell,
+   side by side, instead of auto-placing down the column and stacking onto the description
+   row (the "NEW forces open onto a newline" defect). */
+.sanguine_row_tail {
+    grid-column: 3;
+    grid-row: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5em;
+    justify-self: end;
+    min-width: 0;
+}
+
+/* Collapsible sections: a header is clickable; the list that follows hides when collapsed. */
+.sanguine_sec { cursor: pointer; user-select: none; }
+.sanguine_sec:hover { color: var(--SmartThemeQuoteColor, #d4a753); }
+.sanguine_sec.sanguine_collapsed + .sanguine_list { display: none; }
+
+/* A collapsed section needs to look folded, not empty. Sections now start collapsed by default
+   (property, capability, things left in another place), so "Abilities 6" with nothing under it has
+   to read as "six, folded away" rather than as a heading whose list failed to render. On the header
+   rather than on the count, so a section rendered without one gets the affordance too. */
+.sanguine_sec::after {
+    content: '';
+    flex: none;
+    margin-left: 0.5em;
+    border: 0.3em solid transparent;
+    border-top-color: currentColor;
+    transform: translateY(0.15em);
+    transition: transform 0.12s ease;
+}
+
+/* Transform order, which is why the panel had a horizontal scrollbar.
+ *
+ * This read `rotate(-90deg) translateY(0.15em)`. Transforms compose right-to-left, so the translate
+ * was applied in the ALREADY-ROTATED frame: what was meant to nudge the caret down instead pushed
+ * it sideways, past the right edge of a 271px column. Transformed boxes count toward scrollable
+ * overflow, so every collapsed section contributed ~2px of horizontal scroll, and the panel hung a
+ * scrollbar under itself advertising nothing.
+ *
+ * Swapping the order puts the translate back in the parent's frame, where "down" means down. */
+.sanguine_sec.sanguine_collapsed::after {
+    transform: translateY(0.15em) rotate(-90deg);
+}
+
+/* Row controls: a panel at a glance, a console when reached for.
+   Hidden until the row is hovered or a control has keyboard focus, so reading the panel is
+   unchanged and correcting it is one reach away. `−` records that something left the story; `×`
+   erases the claim that it was ever there, and is coloured to say so. */
+.sanguine_actions {
+    display: inline-flex;
+    gap: 0.15em;
+    margin-left: 0.4em;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+}
+
+.sanguine_row:hover .sanguine_actions,
+.sanguine_vital:hover .sanguine_actions,
+.sanguine_sec:hover .sanguine_actions,
+.sanguine_actions:focus-within {
+    opacity: 1;
+}
+
+/* The one row action that is navigation rather than a console: visible at rest, because a way out
+   of the panel that only appears on hover is a way out nobody finds. Quiet enough that four section
+   headings carrying one do not read as a toolbar. */
+.sanguine_open_win {
+    opacity: var(--o-standing);
+}
+.sanguine_actions:has(.sanguine_open_win) { opacity: 1; }
+.sanguine_actions:has(.sanguine_open_win) > .sanguine_act:not(.sanguine_open_win) { opacity: 0; }
+.sanguine_sec:hover .sanguine_actions > .sanguine_act,
+.sanguine_actions:focus-within > .sanguine_act { opacity: 1; }
+
+.sanguine_act {
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    color: var(--SmartThemeBodyColor, #cdc8bf);
+    cursor: pointer;
+    font-size: var(--s-meta);
+    line-height: 1;
+    opacity: 0.65;
+    padding: 0.1em 0.3em;
+}
+
+.sanguine_act:hover {
+    background: rgba(212, 167, 83, 0.14);
+    border-color: rgba(212, 167, 83, 0.5);
+    color: #f3d48d;
+    opacity: var(--o-now);
+}
+
+.sanguine_act_danger:hover {
+    background: rgba(200, 70, 60, 0.16);
+    border-color: rgba(200, 70, 60, 0.55);
+    color: #f0a29a;
+}
+
+/* A lone item shows its count only while the row is being worked on, the ×1 is noise at rest and
+   the only way to count it up when it is wrong. */
+.sanguine_qty_one { opacity: 0; transition: opacity 0.12s ease; }
+.sanguine_row:hover .sanguine_qty_one { opacity: 0.7; }
+
+/* Where there is no hover, `opacity: 0` is worse than hiding.
+ *
+ * Everything above reveals on `:hover`, which is the right trade on a pointer: the panel reads as a
+ * panel and becomes a console when reached for. On a touch device `:hover` never latches, so those
+ * controls sit at `opacity: 0`: and an element at zero opacity is still LAID OUT and still
+ * HIT-TESTABLE. They were not hidden. They were invisible and tappable, which is the one combination
+ * worse than either, because `×` on an item row erases the events that claimed it.
+ *
+ * The measured symptom: on a small display the only thing that ever surfaced was the native `title`
+ * on long-press, "Edit person", "Not a real person, drop this row", so the panel appeared to
+ * offer exactly two actions, both on cast rows, and none of the four on an item row.
+ *
+ * `hover: none` rather than a width breakpoint: this is a question about the INPUT, not the screen.
+ * A tablet at 1400px has no hover and a laptop at 900px does, and the existing `max-width: 1000px`
+ * query, the only responsive rule in this sheet, adjusts width alone and says nothing about either.
+ *
+ * They are shown quietly rather than at full strength: the glance discipline is still worth keeping
+ * when the reveal is unavailable, and a row of four controls at full contrast on every line is the
+ * console-at-rest this treatment exists to avoid.
+ */
+@media (hover: none), (pointer: coarse) {
+    .sanguine_actions { opacity: 0.55; }
+    .sanguine_qty_one { opacity: 0.55; }
+
+    /* A 10.8px glyph with 0.1em of padding is a four-pixel target. Nothing about the visual size
+       changes, only the reachable area around it, so the row reads the same and can be hit.
+       24px is WCAG 2.5.8 (Target Size, Minimum) and it is stated in PIXELS deliberately: `em` here
+       resolves against the control's own 0.72× font-size, so `1.9em` would have been ~20px, and
+       would have shrunk further for any user who lowered `--mainFontSize`: a target that gets
+       smaller exactly for the person who needed it bigger.
+       Stops short of the 44px AAA ideal on purpose: four controls at 44px is 176px of a 288px row,
+       which would push the name out of the panel it is meant to annotate. */
+    .sanguine_act {
+        min-width: 24px;
+        min-height: 24px;
+        padding: 0.35em 0.5em;
+    }
+
+    .sanguine_actions { gap: 0.3em; }
+
+    /* No hover state to promise anything, so the feedback has to be on the press itself. */
+    .sanguine_act:active {
+        background: rgba(212, 167, 83, 0.14);
+        border-color: rgba(212, 167, 83, 0.5);
+        opacity: var(--o-now);
+    }
+    .sanguine_act_danger:active {
+        background: rgba(200, 70, 60, 0.16);
+        border-color: rgba(200, 70, 60, 0.55);
+    }
+}
+
+/* The row editor.
+   Rendered inside SillyTavern's own popup, so it inherits the theme and needs only layout. */
+.sanguine_editform { display: flex; flex-direction: column; gap: 0.6em; text-align: left; }
+.sanguine_editform h3 { margin: 0 0 0.2em; }
+.sanguine_editfield { display: flex; flex-direction: column; gap: 0.2em; }
+
+.sanguine_editlabel {
+    font-family: var(--sanguine-mono, monospace);
+    font-size: var(--s-micro);
+    letter-spacing: 0.12em;
+    opacity: var(--o-standing);
+    text-transform: uppercase;
+}
+
+.sanguine_edithint { font-size: var(--s-meta); opacity: var(--o-standing); }
+
+/* Reconcile.
+ *
+ * The button sits beside the sync chip: both answer "is what I am looking at still true?", one
+ * passively and one on demand. The dialog's job is that no retraction is applied unnoticed, so the
+ * model's stated evidence is given as much room as the row name.
+ */
+/* Shape, size and colour now come from `.sanguine_health_btn`: it is one of three controls in the
+   strip and looked adrift while it was the only one styling itself. It keeps the round border,
+   because circular arrows in a circle is the one place the shape says what the control does, and it
+   keeps the tilt on hover. `align-self`, `margin` and its own `font-size: 0.82em` are gone: the
+   strip lays it out, and that em was the last size in the sheet off the six-step scale. */
+.sanguine_reconcile_btn {
+    border-radius: 50%;
+    transition: transform 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.sanguine_reconcile_btn:hover {
+    transform: rotate(-30deg);
+}
+
+/* Spinning is the only signal that the call is in flight, so the disabled state must not hide it. */
+.sanguine_reconcile_btn:disabled {
+    cursor: progress;
+    transform: none;
+}
+
+/* The pending-questions badge.
+ *
+ * The pass no longer gates its value behind a modal: conserving repairs land on sight and the
+ * questions persist as record state. This count is the whole of the invitation to read them, the
+ * overlay is never forced open after a run, because a forced surface is the modal's DNA and the
+ * modal measured 80 asked / 0 applied.
+ *
+ * A separate button rather than a span inside the icon button, because a button may not contain a
+ * button and this one has a job: it opens the Repairs tab. The wrapper exists only to give it
+ * something to be positioned against.
+ */
+.sanguine_reconcile_wrap {
+    position: relative;
+    display: inline-flex;
+}
+
+.sanguine_reconcile_badge {
+    position: absolute;
+    top: -0.35em;
+    right: -0.5em;
+    min-width: 1.35em;
+    padding: 0 0.35em;
+    /* Crit, and earned: an unanswered question is the one thing in this strip that is waiting on the
+       player. It is also a number in a pill, which is the shape a count wears everywhere else in
+       this app, so the hue is not the only thing saying "unread". */
+    background: var(--fold-crit);
+    color: #fff;
+    border: none;
+    border-radius: 0.7em;
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.5;
+    text-align: center;
+    cursor: pointer;
+}
+
+.sanguine_reconcile_badge:hover {
+    filter: brightness(1.15);
+}
+
+.sanguine_reconcile_badge:focus-visible {
+    outline: 2px solid var(--fold-fresh);
+    outline-offset: 1px;
+}
+
+.sanguine_reconcile_list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 46vh;
+    overflow-y: auto;
+    margin: 8px 0;
+    padding-left: 0;
+    list-style: none;
+}
+
+.sanguine_reconcile_list li {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 5px 8px;
+    border-left: 2px solid color-mix(in srgb, var(--SmartThemeQuoteColor) 60%, transparent);
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 45%, transparent);
+    border-radius: 0 6px 6px 0;
+}
+
+.sanguine_reconcile_name { font-weight: 600; }
+
+/* The model's own words, never parsed. This is what the player is actually judging. */
+.sanguine_reconcile_why {
+    font-size: 0.86em;
+    opacity: var(--o-context);
+    font-style: italic;
+}
+
+.sanguine_reconcile_refused { font-size: 0.86em; opacity: var(--o-context); }
+
+/* A narrator that stopped emitting status blocks: stated, not alarmed about. `sanguine_foot_gap`
+ * keeps the warning colour for a real gap; this is the quiet sibling for a disused feature. */
+.sanguine_foot_quiet {
+    opacity: var(--o-standing);
+    font-style: italic;
+}
+
+/* Read-through audit.
+ *
+ * A report, never a control surface: every line carries the message number it came from so the
+ * player can go and read it, and acting on a finding happens through the panel's own edit controls.
+ */
+.sanguine_audit_list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 56vh;
+    overflow-y: auto;
+    margin: 10px 0;
+    padding-left: 0;
+    list-style: none;
+}
+
+.sanguine_audit_item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 9px;
+    border-left: 3px solid color-mix(in srgb, var(--SmartThemeQuoteColor) 55%, transparent);
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 45%, transparent);
+    border-radius: 0 6px 6px 0;
+}
+
+.sanguine_audit_missing { border-left-color: #c9a227; }
+.sanguine_audit_extra { border-left-color: #8a6fc4; }
+.sanguine_audit_wrong-amount { border-left-color: #c26b3d; }
+.sanguine_audit_contradiction { border-left-color: #b04a4a; }
+.sanguine_audit_stale { border-left-color: #5f7f8f; }
+
+.sanguine_audit_head { font-weight: 600; }
+.sanguine_audit_story,
+.sanguine_audit_record { font-size: 0.86em; opacity: var(--o-context); }
+.sanguine_audit_record { opacity: var(--o-standing); }
+.sanguine_audit_where { font-size: 0.86em; opacity: var(--o-standing); }
+
+/* Per-row picks: a rename and a recount are separate judgements, so they get separate answers. */
+.sanguine_reconcile_pick {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    cursor: pointer;
+}
+
+.sanguine_reconcile_pick input { flex: 0 0 auto; }
+.sanguine_reconcile_why { margin-left: 22px; }
+
+/* Running: the section that shows a derivative rather than a level.
+ *
+ * Everything else on the panel reports what IS. This reports what is CHANGING, which is the only
+ * part a person watches rather than reads. The rate carries the weight, colour by direction, so a
+ * drain and a gain are told apart before either is read, and the row's own name stays quiet, which
+ * is the reverse of every other section here and deliberate: you scan this column for arrows.
+ */
+.sanguine_flow .sanguine_item_name {
+    overflow-wrap: anywhere;
+    opacity: var(--o-context);
+}
+
+.sanguine_item_qty {
+    flex: none;
+    font-variant-numeric: tabular-nums;
+    opacity: var(--o-context);
+}
+
+.sanguine_rate {
+    flex: none;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+/* Direction rides the semantic axis that already exists rather than introducing two more colours:
+ * a drain is the same register as an expiring thing, a gain the same as something newly true. The
+ * doctrine above is explicit that urgency must stay off the theme accent, and `--fold-warn` is
+ * where a drain belongs, `--fold-crit` is reserved for the row that is actually about to empty. */
+.sanguine_rate_down { color: var(--fold-warn); }
+.sanguine_rate_up { color: var(--fold-fresh); }
+
+.sanguine_item_foot {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6em;
+    margin-top: 0.15em;
+}
+
+/* Under one period left. Same threshold shape as a dial past three quarters, and the same colour
+ * `.sanguine_dial.urgent` already uses, not a new knob and not a new hue. */
+.sanguine_urgent {
+    color: var(--fold-crit);
+}
+
+/* The state card under the latest reply (Megumin's block card, adapted).
+ *
+ * DOM-only, a top-level child of `#chat` beside the message, never part of the stored text. It
+ * renders the same derived state as the panel, so it uses the same type scale, opacity stops and
+ * semantic hues, and the two surfaces cannot disagree about what is true.
+ */
+.sanguine_card {
+    flex: none;
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 0.6em;
+    padding: 0.45em 0.6em 0.55em;
+    border: 1px solid var(--fold-hair);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, rgba(24, 24, 28, 0.92)) 55%, transparent);
+    font-size: var(--s-sub);
+    line-height: 1.35;
+}
+.sanguine_card_head {
+    list-style: none;
+    cursor: pointer;
+    display: flex;
+    align-items: baseline;
+    user-select: none;
+}
+.sanguine_card_head::-webkit-details-marker { display: none; }
+.sanguine_card_label {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fold-fresh);
+    opacity: var(--o-standing);
+}
+.sanguine_card_body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25em;
+    margin-top: 0.4em;
+}
+.sanguine_card_chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3em;
+    margin-bottom: 0.1em;
+}
+.sanguine_card_chip {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    opacity: var(--o-standing);
+    padding: 0.05em 0.4em;
+    border: 1px solid var(--fold-hair);
+    border-radius: 999px;
+    white-space: nowrap;
+}
+.sanguine_card_row {
+    display: grid;
+    grid-template-columns: minmax(5em, auto) 1fr auto;
+    gap: 0 0.5em;
+    align-items: baseline;
+}
+.sanguine_card_k {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    opacity: var(--o-standing);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.sanguine_card_v {
+    opacity: var(--o-now);
+    overflow-wrap: anywhere;
+}
+.sanguine_card_bar {
+    display: block;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--fold-hair);
+    overflow: hidden;
+}
+.sanguine_card_fill {
+    display: block;
+    height: 100%;
+    background: var(--fold-fresh);
+}
+.sanguine_card_conds {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3em;
+}
+.sanguine_card_cond {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    border: 1px solid var(--fold-hair);
+    border-radius: 3px;
+    padding: 0.05em 0.45em;
+    opacity: var(--o-now);
+}
+.sanguine_card_choices {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4em;
+    margin-top: 0.15em;
+}
+.sanguine_card_choice {
+    font-family: inherit;
+    font-size: var(--s-sub);
+    color: var(--SmartThemeBodyColor);
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 7%, transparent);
+    border: 1px solid var(--fold-hair);
+    border-radius: 0.3em;
+    padding: 0.25em 0.6em;
+    cursor: pointer;
+    text-align: start;
+}
+.sanguine_card_choice:hover {
+    border-color: var(--fold-fresh);
+    color: var(--fold-fresh);
 }

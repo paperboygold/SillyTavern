@@ -258,7 +258,7 @@ export async function addWorldInfoEntry(page, { key, content }) {
 export async function recallBlock(page) {
     return await page.evaluate(async () => {
         const { extension_prompts } = await import('./script.js');
-        return String(extension_prompts?.['5_fold_recall']?.value ?? '');
+        return String(extension_prompts?.['5_sanguine_recall']?.value ?? '');
     });
 }
 
@@ -408,7 +408,7 @@ export async function lastMessageSwipeState(page) {
             swipeId: message.swipe_id ?? 0,
             swipeCount: Array.isArray(message.swipes) ? message.swipes.length : 0,
             swipes: (message.swipes ?? []).map(String),
-            steers: (message.swipe_info ?? []).map(info => info?.extra?.fold_steer?.text ?? null),
+            steers: (message.swipe_info ?? []).map(info => info?.extra?.sanguine_steer?.text ?? null),
         };
     });
 }

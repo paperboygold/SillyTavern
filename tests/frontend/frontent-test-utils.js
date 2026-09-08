@@ -13,7 +13,6 @@ export const testSetup = {
      *
      * Handles both shapes of a first page load: an install with a user picker (click through it)
      * and a single passwordless install, which drops straight into the app with no picker at all.
-<<<<<<< HEAD
      *
      * The picker is detected by asking whether this IS the login page, rather than by waiting to
      * see whether one appears — a timeout that expires is indistinguishable from a slow render, and
@@ -38,7 +37,7 @@ export const testSetup = {
             for (let i = userCount - 1; i >= 0; i--) {
                 await userSelects.nth(i).click();
                 const loggedIn = await page
-                    .waitForURL(url => url.toString().startsWith(baseURL) && url.pathname !== '/login', { timeout: 3000 })
+                    .waitForURL(url => url.pathname !== '/login', { timeout: 3000 })
                     .then(() => true, () => false);
                 if (loggedIn) {
                     break;

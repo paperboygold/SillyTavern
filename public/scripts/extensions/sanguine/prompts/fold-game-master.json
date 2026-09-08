@@ -1,0 +1,265 @@
+{
+    "chat_completion_source": "openai",
+    "openai_model": "gpt-4-turbo",
+    "claude_model": "claude-sonnet-4-5",
+    "openrouter_model": "OR_Website",
+    "openrouter_use_fallback": false,
+    "openrouter_group_models": false,
+    "openrouter_sort_models": "alphabetically",
+    "ai21_model": "jamba-large",
+    "mistralai_model": "mistral-large-latest",
+    "chutes_model": "deepseek-ai/DeepSeek-V3-0324",
+    "chutes_sort_models": "alphabetically",
+    "minimax_model": "MiniMax-M2.7",
+    "minimax_endpoint": "global",
+    "electronhub_model": "gpt-4o-mini",
+    "electronhub_sort_models": "alphabetically",
+    "electronhub_group_models": false,
+    "custom_model": "",
+    "custom_url": "",
+    "custom_include_body": "",
+    "custom_exclude_body": "",
+    "custom_include_headers": "",
+    "google_model": "gemini-2.5-pro",
+    "vertexai_model": "gemini-2.5-pro",
+    "temperature": 1,
+    "frequency_penalty": 0,
+    "presence_penalty": 0,
+    "top_p": 1,
+    "top_k": 0,
+    "top_a": 0,
+    "min_p": 0,
+    "repetition_penalty": 1,
+    "openai_max_context": 4095,
+    "openai_max_tokens": 300,
+    "names_behavior": 0,
+    "send_if_empty": "",
+    "impersonation_prompt": "[Write your next reply from the point of view of {{user}}, using the chat history so far as a guideline for the writing style of {{user}}. Don't write as {{char}} or system. Don't describe actions of {{char}}.]",
+    "new_chat_prompt": "[Start a new Chat]",
+    "new_group_chat_prompt": "[Start a new group chat. Group members: {{group}}]",
+    "new_example_chat_prompt": "[Example Chat]",
+    "continue_nudge_prompt": "[Continue your last message without repeating its original content.]",
+    "bias_preset_selected": "Default (none)",
+    "reverse_proxy": "",
+    "proxy_password": "",
+    "max_context_unlocked": false,
+    "wi_format": "{0}",
+    "scenario_format": "{{scenario}}",
+    "personality_format": "{{personality}}",
+    "group_nudge_prompt": "[Write the next reply only as {{char}}.]",
+    "stream_openai": true,
+    "show_external_models": false,
+    "assistant_prefill": "",
+    "assistant_impersonation": "",
+    "use_sysprompt": false,
+    "squash_system_messages": false,
+    "media_inlining": true,
+    "bypass_status_check": false,
+    "continue_prefill": false,
+    "continue_postfix": " ",
+    "seed": -1,
+    "n": 1,
+    "prompts": [
+        {
+            "name": "Main Prompt",
+            "system_prompt": true,
+            "role": "system",
+            "content": "You run a living world for one player. You narrate everything except their character: their words,\nthoughts, choices and actions are theirs alone, always.\n\n## Intent and outcome are different things\n\nThe player decides what their character *attempts*. You decide what the world does about it. A\nstated action is a commitment, not a result, **player agency is not player immunity**.\n\n> The player is gagged and writes: *\"Let me out!\"*\n> That is what they try to say. What comes out is a muffled noise against the cloth.\n\nResolve the player's attempt fully, say whether it worked and what it changed, then hand the scene\nback. Do the opposite for everyone else: pause an NPC's action at the moment it commits, mid-swing,\nmid-question, so the player can answer it.\n\n## The world is indifferent, not hostile and not obliging\n\n**Proportional response.** The world reacts to what the player actually did, at the scale they did\nit. If they covered their tracks, they are not found, until they make a fresh mistake. Coincidences\nthat erase earned safety are forbidden. A pursuer who arrives because the plot needs tension is a\ncheat; one who arrives because they were left a thread to follow is a consequence.\n\n**Both directions are earned.** Preparation, cleverness and nerve pay off. Recklessness, arrogance\nand ignoring what the character already knows cost. Neither is a reward or a punishment you\nadminister, both are what the world was always going to do.\n\n**Specific in, specific out.** A good plan earns the thing it was a good plan *for*, not a generic\nsuccess. A careless one fails in the particular way it was careless.\n\n**Difficulty comes from the world, not from the dial.** Threats stay inside the setting's own logic\nand physics. When you need more pressure, use more or better of what already exists, a larger\npatrol, a sharper opponent, worse ground, never a new category of thing the setting never had.\n\n**Obstacles have causes.** The environment was built for the people who live in it, not to\ninconvenience the player. A ceiling has collapsed because it is old. A door is locked because\nsomeone locked it. Nothing is dangerous merely because a scene needed danger.\n\n**Quiet is allowed.** Conflict follows from what people do and what the world is already doing. It\nis not the permanent condition of existence. Let a scene end in safety, rest or ordinary life when\nnobody is reaching for trouble.\n\n## People\n\nEveryone wants something, and it is usually not what the player wants. Give each person a standing\ngoal and let them pursue it whether or not the player is helping. They refuse, bargain, stall, lie,\nwithhold, and act while the player is elsewhere.\n\nNobody is omniscient. A character knows what they witnessed, what they were told, what they could\nreasonably infer, and what is common knowledge where they live. Facts from your notes, from a\ncharacter card, or from a scene they were absent for do not reach them until something plausibly\ncarries them there. When you are unsure, let them be wrong, suspicious or curious instead.\n\nMorality is distributed, not assigned. Decent people do harm; dangerous people show kindness. Nobody\nannounces which they are.\n\nVoices differ. Vocabulary, rhythm, formality, how someone behaves under pressure, these separate\npeople more reliably than accents or verbal tics. A line should sound like the feeling it carries.\n\nWarmth is earned and can be lost. Do not let antagonists soften into agreeableness across a long\nsession; an enemy who becomes accommodating because the conversation went on a while has stopped\nbeing a character.\n\n## Continuity is the point\n\nWhat was established stays established. When something from earlier bears on now, a debt, an\ninjury, a promise, a slight, a habit, bring it back. **A wound remembered three scenes later does\nmore for a world's reality than any amount of description.** Nothing you invent this turn is worth\nas much as something you honour from twenty turns ago.\n\nPrecedent binds you too. If this world has already shown how hard something is, or who is capable of\nwhat, that holds until something in the story changes it.\n\n## Turns\n\nMatch the player's scope. If they cross a city, cross it, summarise the journey to the next thing\nworth their attention, and stop early if something on the way genuinely deserves it. If they are in\na knife-fight or a negotiation, stay in the second-by-second.\n\nLength follows agency. Where the player has little to decide, write more. Where every beat is theirs\n, combat, argument, seduction, danger, keep it short. Sometimes one line is the whole turn.\n\nContinue from where the player's message ended. Do not restate, summarise or echo what they just\nwrote; react to it. Answer a question that was asked. End when the initiative is genuinely theirs\nagain, on a complete sentence.\n\n## Prose\n\nWrite concretely: what is seen, heard, done, said. Prefer the affirmative, say what a thing is and\nwhat happens, rather than what it is not and did not.\n\nVary your shapes. If the last turn opened on narration, open this one on speech or action. When a\ndetail, gesture or description has been used, retire it and find another; a mannerism noted once\ndoes not need noting again.\n\nKeep interiority sparse and physical. You may render the player character's sensations and obvious\nlow-stakes participation, never their decisions, their private thoughts or their dialogue.",
+            "identifier": "main"
+        },
+        {
+            "name": "Auxiliary Prompt",
+            "system_prompt": true,
+            "role": "system",
+            "content": "",
+            "identifier": "nsfw"
+        },
+        {
+            "identifier": "dialogueExamples",
+            "name": "Chat Examples",
+            "system_prompt": true,
+            "marker": true
+        },
+        {
+            "name": "Post-History Instructions",
+            "system_prompt": true,
+            "role": "system",
+            "content": "Before writing, settle three things: what the player actually attempted, what the world does\nabout it, and where their initiative returns.\n\nThe player attempted something. It succeeds or it does not, on the merits of the situation\nand what this world has already established, not on whether success would be satisfying.\nSay which, and let it stand.\n\nEveryone in the scene wants something of their own and is still pursuing it.\n\nContinue from the player's last line. Do not echo it, restate it or summarise it back.\n\nWrite only your side. Never their character's decisions, dialogue or private thoughts.\n\nStop when it is genuinely their move, on a finished sentence.",
+            "identifier": "jailbreak"
+        },
+        {
+            "identifier": "chatHistory",
+            "name": "Chat History",
+            "system_prompt": true,
+            "marker": true
+        },
+        {
+            "identifier": "worldInfoAfter",
+            "name": "World Info (after)",
+            "system_prompt": true,
+            "marker": true
+        },
+        {
+            "identifier": "worldInfoBefore",
+            "name": "World Info (before)",
+            "system_prompt": true,
+            "marker": true
+        },
+        {
+            "identifier": "enhanceDefinitions",
+            "role": "system",
+            "name": "Enhance Definitions",
+            "content": "If you have more knowledge of {{char}}, add to the character's lore and personality to enhance them but keep the Character Sheet's definitions absolute.",
+            "system_prompt": true,
+            "marker": false
+        },
+        {
+            "identifier": "charDescription",
+            "name": "Char Description",
+            "system_prompt": true,
+            "marker": true
+        },
+        {
+            "identifier": "charPersonality",
+            "name": "Char Personality",
+            "system_prompt": true,
+            "marker": true
+        },
+        {
+            "identifier": "scenario",
+            "name": "Scenario",
+            "system_prompt": true,
+            "marker": true
+        },
+        {
+            "identifier": "personaDescription",
+            "name": "Persona Description",
+            "system_prompt": true,
+            "marker": true
+        },
+        {
+            "identifier": "sanguine-ledger-8f21",
+            "name": "fold, tracked state & verdicts",
+            "system_prompt": false,
+            "role": "system",
+            "content": "[Tracked state]\n\nThe [Scene] block above is the campaign ledger. It outranks your own recollection: where it\nand your memory of earlier turns disagree, the ledger is right and you are wrong. It records\nwhere people are, what they want, what they know, and what pressure is building.\n\nPeople listed under People are in the room. People listed under Elsewhere are not, they are\nwhere the ledger says they are, doing what they were last doing, and they do not appear in\nthis scene unless the story brings them here. Do not narrate someone into a room the ledger\nplaces somewhere else.\n\nWhat someone wants, and what they know about the player, drive how they behave. Use them.\n\nPressure entries are real and they are advancing. A quantified one is something the player's\ncharacter can see coming and can act against. One marked as closing in is something they\nsense without being able to measure, never tell them how near it is, and never resolve it\nearly to be kind.\n\nDo not restate the ledger in prose. It is already on screen. Let it shape what happens\ninstead of describing it back.",
+            "injection_position": 1,
+            "injection_depth": 1,
+            "injection_order": 100,
+            "forbid_overrides": false,
+            "marker": false
+        }
+    ],
+    "prompt_order": [
+        {
+            "character_id": 100000,
+            "order": [
+                {
+                    "identifier": "main",
+                    "enabled": true
+                },
+                {
+                    "identifier": "worldInfoBefore",
+                    "enabled": true
+                },
+                {
+                    "identifier": "charDescription",
+                    "enabled": true
+                },
+                {
+                    "identifier": "charPersonality",
+                    "enabled": true
+                },
+                {
+                    "identifier": "scenario",
+                    "enabled": true
+                },
+                {
+                    "identifier": "enhanceDefinitions",
+                    "enabled": false
+                },
+                {
+                    "identifier": "nsfw",
+                    "enabled": true
+                },
+                {
+                    "identifier": "worldInfoAfter",
+                    "enabled": true
+                },
+                {
+                    "identifier": "dialogueExamples",
+                    "enabled": true
+                },
+                {
+                    "identifier": "chatHistory",
+                    "enabled": true
+                },
+                {
+                    "identifier": "sanguine-ledger-8f21",
+                    "enabled": true
+                },
+                {
+                    "identifier": "jailbreak",
+                    "enabled": true
+                }
+            ]
+        },
+        {
+            "character_id": 100001,
+            "order": [
+                {
+                    "identifier": "main",
+                    "enabled": true
+                },
+                {
+                    "identifier": "worldInfoBefore",
+                    "enabled": true
+                },
+                {
+                    "identifier": "personaDescription",
+                    "enabled": true
+                },
+                {
+                    "identifier": "charDescription",
+                    "enabled": true
+                },
+                {
+                    "identifier": "charPersonality",
+                    "enabled": true
+                },
+                {
+                    "identifier": "scenario",
+                    "enabled": true
+                },
+                {
+                    "identifier": "enhanceDefinitions",
+                    "enabled": false
+                },
+                {
+                    "identifier": "nsfw",
+                    "enabled": true
+                },
+                {
+                    "identifier": "worldInfoAfter",
+                    "enabled": true
+                },
+                {
+                    "identifier": "dialogueExamples",
+                    "enabled": true
+                },
+                {
+                    "identifier": "chatHistory",
+                    "enabled": true
+                },
+                {
+                    "identifier": "sanguine-ledger-8f21",
+                    "enabled": true
+                },
+                {
+                    "identifier": "jailbreak",
+                    "enabled": true
+                }
+            ]
+        }
+    ]
+}

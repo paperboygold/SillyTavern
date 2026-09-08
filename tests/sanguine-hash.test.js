@@ -1,4 +1,4 @@
-import { describe, expect, test } from './test-harness.js';
+import { describe, expect, test } from '@jest/globals';
 
 import {
     fold,
@@ -16,12 +16,12 @@ import {
 } from '../public/scripts/extensions/sanguine/lib/hash.js';
 
 /**
- * hash.js is vendored verbatim from the Sanguine proof corpus — it is the JavaScript mirror of
+ * hash.js is vendored verbatim from the Sanguine proof corpus, it is the JavaScript mirror of
  * proof/Substrate/Algebra/HashTrinity.lean and lyrium's src/hash.rs. These tests assert the
  * properties that define each merge, so that if the vendored copy ever drifts from the mirror,
  * this file fails before anything downstream misbehaves.
  */
-describe('hash.js — the vendored mirror', () => {
+describe('hash.js, the vendored mirror', () => {
     test('self_test() holds', () => {
         expect(self_test()).toBe('hash.js: all merges hold');
     });
@@ -41,7 +41,7 @@ describe('hash.js — the vendored mirror', () => {
 });
 
 describe('the trinity of merges', () => {
-    test('NB / Set — idempotent: once in, in', () => {
+    test('NB / Set, idempotent: once in, in', () => {
         const s = new Map();
         insert_with(s, merge_nb, 'x', true);
         insert_with(s, merge_nb, 'x', false);
@@ -50,14 +50,14 @@ describe('the trinity of merges', () => {
         expect(merge_nb(true, true)).toBe(true);
     });
 
-    test('B / Map — last write wins', () => {
+    test('B / Map, last write wins', () => {
         const m = new Map();
         insert_with(m, merge_b, 'k', 1);
         insert_with(m, merge_b, 'k', 9);
         expect(lookup(m, 'k', null)).toBe(9);
     });
 
-    test('B/U / Count — associative accumulation', () => {
+    test('B/U / Count, associative accumulation', () => {
         const a = new Map();
         [1, 2, 3].forEach(n => insert_with(a, merge_bu, 'k', n));
         expect(lookup(a, 'k', 0)).toBe(6);
@@ -67,14 +67,14 @@ describe('the trinity of merges', () => {
         expect(lookup(b, 'k', 0)).toBe(lookup(a, 'k', 0));
     });
 
-    test('B/U / Accumulator — the pair monoid combines componentwise', () => {
+    test('B/U / Accumulator, the pair monoid combines componentwise', () => {
         const acc = new Map();
         insert_with(acc, merge_acc, 'f', { sum: 3, n: 1 });
         insert_with(acc, merge_acc, 'f', { sum: 5, n: 1 });
         expect(lookup(acc, 'f', { sum: 0, n: 0 })).toEqual({ sum: 8, n: 2 });
     });
 
-    test('Graph — ++ over keys PRESERVES INSERTION ORDER', () => {
+    test('Graph, ++ over keys PRESERVES INSERTION ORDER', () => {
         // Load-bearing for fold's swipe steering: swipe N's instruction must stay attached to
         // swipe N, which only holds because merge_graph is old.concat(nu) and not the reverse.
         const g = new Map();
@@ -107,7 +107,7 @@ describe('recursor helpers', () => {
         expect(lookup(by, 'z', [])).toEqual([]);
     });
 
-    test('table_from accepts a different merge — the merge is the only freedom', () => {
+    test('table_from accepts a different merge, the merge is the only freedom', () => {
         const counts = table_from(['aa', 'b', 'ac'], x => x[0], () => 1, merge_bu);
         expect(lookup(counts, 'a', 0)).toBe(2);
         expect(lookup(counts, 'b', 0)).toBe(1);

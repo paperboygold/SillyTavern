@@ -47,7 +47,7 @@ test.describe('fold — the three-altitude UI affordances', () => {
     async function renderRopeFixture(page, mid) {
         await page.evaluate(async (mid) => {
             const { chat_metadata } = await import('./script.js');
-            const panel = await import('./scripts/extensions/fold/panel.js');
+            const panel = await import('./scripts/extensions/sanguine/panel.js');
             chat_metadata.fold = {
                 v: 2,
                 state: {
@@ -75,12 +75,12 @@ test.describe('fold — the three-altitude UI affordances', () => {
 
     test('editing a quantity in place commits a ledger user event', async ({ page }) => {
         await renderRopeFixture(page, 1);
-        const row = page.locator('#foldTracker .fold_tracker_body .fold_item').filter({ hasText: 'Rope' });
+        const row = page.locator('#sanguineTracker .sanguine_tracker_body .sanguine_item').filter({ hasText: 'Rope' });
         await expect(row).toHaveCount(1);
-        await expect(row.locator('.fold_editable')).toContainText('3');
+        await expect(row.locator('.sanguine_editable')).toContainText('3');
 
         // Click the count, select all, type a new one, commit with Enter.
-        const qty = row.locator('.fold_editable');
+        const qty = row.locator('.sanguine_editable');
         // The moving-panel surface sits over the chat and Playwright's actionability check treats
         // it as intercepting the click; the handler fires fine, so force past the check.
         // eslint-disable-next-line playwright/no-force-option
@@ -90,7 +90,7 @@ test.describe('fold — the three-altitude UI affordances', () => {
         await page.keyboard.press('Enter');
 
         // The panel reflects the committed edit…
-        await expect(row.locator('.fold_editable')).toContainText('5');
+        await expect(row.locator('.sanguine_editable')).toContainText('5');
 
         // …and the chronicle gained a USER event carrying the +2 delta — the §8 edit-in-place
         // contract ("every commit is a user event in the ledger").
@@ -107,7 +107,7 @@ test.describe('fold — the three-altitude UI affordances', () => {
     test('a locked scene field renders (fixed) in the injected block', async ({ page }) => {
         await page.evaluate(async () => {
             const { chat_metadata } = await import('./script.js');
-            const state = await import('./scripts/extensions/fold/state.js');
+            const state = await import('./scripts/extensions/sanguine/state.js');
             chat_metadata.fold = {
                 v: 2,
                 state: {
@@ -123,7 +123,7 @@ test.describe('fold — the three-altitude UI affordances', () => {
         });
 
         const block = await page.evaluate(async () => {
-            const state = await import('./scripts/extensions/fold/state.js');
+            const state = await import('./scripts/extensions/sanguine/state.js');
             return state.render();
         });
 
@@ -139,7 +139,7 @@ test.describe('fold — the three-altitude UI affordances', () => {
         const mid = 5;
         await page.evaluate(async (mid) => {
             const { chat_metadata } = await import('./script.js');
-            const panel = await import('./scripts/extensions/fold/panel.js');
+            const panel = await import('./scripts/extensions/sanguine/panel.js');
             const target = document.createElement('div');
             target.className = 'mes';
             target.setAttribute('mesid', String(mid));
@@ -170,17 +170,17 @@ test.describe('fold — the three-altitude UI affordances', () => {
             panel.render();
         }, mid);
 
-        const row = page.locator('#foldTracker .fold_tracker_body .fold_item').filter({ hasText: 'Rope' });
+        const row = page.locator('#sanguineTracker .sanguine_tracker_body .sanguine_item').filter({ hasText: 'Rope' });
         await expect(row).toHaveCount(1);
 
         // Open the cause-link trail, click the contributor.
-        await row.locator('.fold_item_head').click();
-        const jump = row.locator('.fold_trail_row.fold_trail_jump');
+        await row.locator('.sanguine_item_head').click();
+        const jump = row.locator('.sanguine_trail_row.sanguine_trail_jump');
         await expect(jump).toHaveCount(1);
         await jump.click();
 
         // The causing message received the jump-target flash — the scroll and highlight are the
         // observable side effect of `jumpToMessage` (§8, altitude 3).
-        await expect(page.locator(`.mes[mesid="${mid}"].fold_jump_target`)).toHaveCount(1);
+        await expect(page.locator(`.mes[mesid="${mid}"].sanguine_jump_target`)).toHaveCount(1);
     });
 });

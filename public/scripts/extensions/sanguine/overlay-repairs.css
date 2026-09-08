@@ -1,0 +1,758 @@
+/*
+ * sanguine/overlay-repairs.css: the Repairs tab.
+ *
+ * Injected by `overlay-repairs.js` at import time, the same way `overlay.js` injects `overlay.css`:
+ * the manifest declares exactly one stylesheet and `style.css` holds it.
+ *
+ * What this sheet may spend.
+ *
+ *   · SIX TYPE STEPS from `style.css` `:root`, and nothing between them. `--s-display` is the clock
+ *     hour and does NOT appear here, the verdict stamp is the loudest thing on this surface and it
+ *     is still only `--s-title`, because a redesign that starts by breaking the type scale's own
+ *     rule has no standing to cite it. `--s-micro` is uppercase letter-spaced labels only.
+ *   · FOUR OPACITY STOPS, and they mean TIME. That is why evidence sits at `--o-now` while the
+ *     ledger sits at `--o-context`: the model is speaking NOW about the question in front of you,
+ *     and the applied rows are already history. Dimming evidence would misfile testimony as
+ *     history, which is precisely the judgement the card is asking the player to make.
+ *   · THREE SEMANTIC HUES, one per verdict, and each is paired with a stamped WORD so colour is
+ *     never the only channel:
+ *         gone   `--fold-crit`  crimson, a row leaves the record
+ *         amount `--fold-warn`  ember, a number nothing will announce is wrong
+ *         merge  `--fold-rel`   violet, a relation asserted between two rows
+ *     `--fold-fresh` (the theme accent) is spent on exactly one thing: the "✓ applied" tick.
+ *     Chrome, the coverage bar, the run button, the disclosure arrows, never takes a semantic hue.
+ *
+ * Class naming.
+ *
+ * Every class here is `sanguine_rep_*`. `tests/sanguine-root-class-collision.test.js` exists because
+ * `.sanguine_open` once named both the panel root and a thread's unresolved question, and leaked
+ * `opacity`, `font-size` and `overflow` onto the whole 288px column. No name in this file is within
+ * reach of a panel root class, and the prefix is what keeps it that way.
+ *
+ * Theme.
+ *
+ * Every colour resolves through `--SmartThemeBodyColor`, `--SmartThemeBorderColor`,
+ * `--SmartThemeQuoteColor` and `--SmartThemeBlurTintColor`, or through the four sanguine tokens that
+ * are themselves derived from them. Nothing is hardcoded, so the tab wears whatever the player runs.
+ */
+
+.sanguine_rep {
+    /* A measure, not a width. Evidence is prose and prose set across 760px is prose nobody finishes
+       a line of; the coverage strip and the ledger opt out below, because a bar and a row of values
+       want the whole width. */
+    max-width: 62em;
+    padding-bottom: 1.2em;
+}
+
+/* The live region: announced, never seen. Not `display: none`, which would take it out of the
+   accessibility tree along with everything it is there to say. */
+.sanguine_rep_live {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+.sanguine_rep_note {
+    margin: 0.4em 0;
+    font-size: var(--s-sub);
+    opacity: var(--o-context);
+}
+
+/* Machine-authored values, counts, keys, `60 → 44`, the arrows between them. Tabular figures so a
+   column of numbers lines up and a changed digit is visible without reading the number. */
+.sanguine_rep_val {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Narrator-authored text sits in the body face. The two classes are adjacent siblings inside every
+   value line, and the face is the only thing saying which half a model computed. */
+.sanguine_rep_word {
+    font-family: inherit;
+}
+
+.sanguine_rep_val + .sanguine_rep_val,
+.sanguine_rep_val + .sanguine_rep_word,
+.sanguine_rep_word + .sanguine_rep_val,
+.sanguine_rep_word + .sanguine_rep_word {
+    margin-left: 0.4em;
+}
+
+/* The coverage strip.
+ *
+ * Sticky, because it qualifies everything below it: scroll past "rows 1, 40 of 88" and the ledger
+ * starts reading as a statement about the whole record. Full width, the bar is the one element on
+ * this tab that should use every pixel it can get.
+ */
+
+.sanguine_rep_cover {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 0.8em;
+    max-width: none;
+    padding: 0.45em 0.2em 0.5em 0;
+    margin-bottom: 0.2em;
+    background: var(--SmartThemeBlurTintColor, var(--SmartThemeBotMesBlurTintColor, #1b1b1b));
+    border-bottom: 1px solid var(--fold-hair);
+}
+
+.sanguine_rep_covtext {
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    font-variant-numeric: tabular-nums;
+    opacity: var(--o-context);
+    white-space: nowrap;
+}
+
+/* The span itself is the fact the strip exists to state, so it is the one part at full opacity. */
+.sanguine_rep_covspan {
+    opacity: var(--o-now);
+}
+
+/* Hatched, not empty: an unchecked row is a row nobody has looked at, which is a different claim
+   from a row that is fine. A flat trough would read as the second. */
+.sanguine_rep_bar {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 4em;
+    height: 7px;
+    border-radius: 4px;
+    overflow: hidden;
+    background: repeating-linear-gradient(-45deg,
+        var(--fold-hair) 0 4px,
+        transparent 4px 8px);
+}
+
+.sanguine_rep_fill {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 70%, transparent);
+}
+
+/* A failed pass posed the span and judged none of it. The fill stays where it is, those rows WERE
+   read to the model, and goes crimson-outlined-and-hollow, so the strip cannot be mistaken for
+   coverage the record did not get. */
+.sanguine_rep_fill_void {
+    background: repeating-linear-gradient(-45deg,
+        color-mix(in srgb, var(--fold-crit) 45%, transparent) 0 3px,
+        transparent 3px 7px);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fold-crit) 55%, transparent);
+}
+
+.sanguine_rep_run {
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    color: var(--SmartThemeBodyColor);
+    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
+    border-radius: 0.3em;
+    padding: 0.3em 0.7em;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.sanguine_rep_run:hover {
+    border-color: var(--fold-fresh);
+    color: var(--fold-fresh);
+}
+
+.sanguine_rep_run:focus-visible {
+    outline: 2px solid var(--fold-fresh);
+    outline-offset: 1px;
+}
+
+.sanguine_rep_run:disabled {
+    cursor: progress;
+    opacity: var(--o-standing);
+}
+
+/* Section headings. */
+
+.sanguine_rep_sect {
+    display: flex;
+    align-items: baseline;
+    gap: 0.7em;
+    margin: 1.1em 0 0.5em;
+    font-size: var(--s-micro);
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    opacity: var(--o-standing);
+}
+
+.sanguine_rep_sect_n {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+}
+
+.sanguine_rep_sect_aside {
+    margin-left: auto;
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    font-weight: 400;
+    letter-spacing: 0.04em;
+    text-transform: none;
+}
+
+/* Ask cards: the loud tier.
+ *
+ * `--sanguine-rep-tone` is set once per card and read by the rail, the stamp, the evidence rule and
+ * the apply button, so a verdict's colour is declared in exactly one place per card and cannot
+ * drift between its four uses.
+ */
+
+.sanguine_rep_ask {
+    --sanguine-rep-tone: var(--fold-fresh);
+    position: relative;
+    margin: 0 0 0.7em;
+    padding: 0.7em 0.9em 0.75em 1.1em;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 4%, transparent);
+    border: 1px solid var(--fold-hair);
+    /* The left rail carries the verdict's hue. Three pixels, on the reading edge, so the tier is
+       legible from a scroll position where the stamp is off-screen. */
+    border-left: 3px solid var(--sanguine-rep-tone);
+    border-radius: 0 0.5em 0.5em 0;
+}
+
+.sanguine_rep_ask_gone { --sanguine-rep-tone: var(--fold-crit); }
+.sanguine_rep_ask_amount { --sanguine-rep-tone: var(--fold-warn); }
+.sanguine_rep_ask_merge { --sanguine-rep-tone: var(--fold-rel); }
+
+.sanguine_rep_ask:focus {
+    outline: none;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 8%, transparent);
+    border-color: color-mix(in srgb, var(--sanguine-rep-tone) 55%, transparent);
+}
+
+.sanguine_rep_ask:focus-visible {
+    outline: 2px solid var(--sanguine-rep-tone);
+    outline-offset: 1px;
+}
+
+.sanguine_rep_top {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75em;
+    flex-wrap: wrap;
+}
+
+/*
+ * The verdict stamp.
+ *
+ * `--s-title`/700, uppercase, tracked, and set on a 6° skew, the one diagonal on this surface and
+ * the only place in the extension that uses one. A diagonal is punctuation: it says "this is the
+ * question", once, and it is worth nothing if a second element also leans. Nothing else here skews.
+ */
+.sanguine_rep_stamp {
+    display: inline-block;
+    font-size: var(--s-title);
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    line-height: 1.1;
+    color: var(--sanguine-rep-tone);
+    transform: skewX(-6deg);
+}
+
+.sanguine_rep_subject {
+    font-size: var(--s-body);
+    font-weight: 600;
+}
+
+.sanguine_rep_subject .sanguine_rep_val {
+    font-weight: 600;
+}
+
+.sanguine_rep_chip {
+    margin-left: auto;
+    font-size: var(--s-micro);
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    opacity: var(--o-standing);
+}
+
+/*
+ * Evidence, as testimony.
+ *
+ * Body face because a narrator wrote it, `--s-sub` because it is prose about the subject rather than
+ * the subject, and full `--o-now` opacity because the model is speaking about the record as it
+ * stands NOW. Never italic: a forty-row wall of italics was the old design's texture and italics at
+ * 11.7px cost legibility exactly where the judgement is made.
+ */
+.sanguine_rep_ev {
+    margin: 0.45em 0 0.15em;
+    padding: 0.1em 0.4em 0.1em 0.8em;
+    border-left: 2px solid var(--sanguine-rep-tone);
+    font-size: var(--s-sub);
+    font-style: normal;
+    line-height: 1.5;
+    opacity: var(--o-now);
+}
+
+.sanguine_rep_ev::before { content: '“'; opacity: 0.6; }
+.sanguine_rep_ev::after { content: '”'; opacity: 0.6; }
+
+/* The consequence line: machine voice, so mono, and one rank below the evidence it qualifies. */
+.sanguine_rep_mech {
+    margin-top: 0.35em;
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    font-variant-numeric: tabular-nums;
+    opacity: var(--o-context);
+}
+
+/* Cluster members. */
+
+.sanguine_rep_members {
+    list-style: none;
+    margin: 0.5em 0 0;
+    padding: 0;
+}
+
+.sanguine_rep_member {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.5em;
+    padding: 0.3em 0 0.3em 0.1em;
+    border-top: 1px solid var(--fold-hair);
+    font-size: var(--s-sub);
+}
+
+.sanguine_rep_member_label {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5em;
+    cursor: pointer;
+}
+
+.sanguine_rep_member_box {
+    accent-color: var(--sanguine-rep-tone);
+    transform: translateY(1px);
+    cursor: pointer;
+}
+
+.sanguine_rep_member_name {
+    font-weight: 600;
+}
+
+.sanguine_rep_ev_member {
+    flex: 1 1 100%;
+    margin: 0.1em 0 0.1em 1.5em;
+}
+
+/* Card actions. */
+
+.sanguine_rep_acts {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.6em;
+    margin-top: 0.65em;
+}
+
+.sanguine_rep_btn {
+    font-family: inherit;
+    font-size: var(--s-sub);
+    font-weight: 600;
+    color: var(--SmartThemeBodyColor);
+    border: 1px solid transparent;
+    border-radius: 0.35em;
+    padding: 0.35em 1em;
+    cursor: pointer;
+}
+
+.sanguine_rep_btn:focus-visible {
+    outline: 2px solid var(--sanguine-rep-tone);
+    outline-offset: 1px;
+}
+
+/* Apply wears the verdict's own colour. It is the button that changes the world, and it should not
+   be possible to press it without having seen which verdict you were agreeing to. */
+.sanguine_rep_apply {
+    background: color-mix(in srgb, var(--sanguine-rep-tone) 22%, transparent);
+    border-color: color-mix(in srgb, var(--sanguine-rep-tone) 55%, transparent);
+}
+
+.sanguine_rep_apply:hover {
+    background: color-mix(in srgb, var(--sanguine-rep-tone) 34%, transparent);
+}
+
+.sanguine_rep_apply:disabled {
+    opacity: var(--o-dormant);
+    cursor: default;
+}
+
+/* Dismiss is the cheap path and looks it, but it is NOT the quiet path. Closing the tab is the
+   quiet path, and it costs nothing, which is the whole point of the redesign. */
+.sanguine_rep_dismiss {
+    font-weight: 400;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 7%, transparent);
+    border-color: var(--fold-hair);
+}
+
+.sanguine_rep_dismiss:hover {
+    border-color: var(--SmartThemeBodyColor);
+}
+
+.sanguine_rep_view {
+    margin-left: auto;
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    color: var(--SmartThemeQuoteColor, #d4a753);
+    background: none;
+    border: none;
+    padding: 0.2em 0.1em;
+    cursor: pointer;
+    opacity: var(--o-context);
+}
+
+.sanguine_rep_view:hover {
+    opacity: var(--o-now);
+    text-decoration: underline;
+}
+
+.sanguine_rep_view:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: 1px;
+}
+
+.sanguine_rep_hint {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    opacity: var(--o-dormant);
+}
+
+/* The ledger: the quiet tier.
+ *
+ * `--o-context` for the whole list, lifted to `--o-now` on hover or when anything inside it holds
+ * focus. These rows were judged safe by the conservation line before they landed, so they are
+ * reference rather than testimony, but they are still an audit trail, and an audit trail you
+ * cannot read on demand is decoration.
+ */
+
+.sanguine_rep_ledger {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-width: none;
+}
+
+.sanguine_rep_ledgroup {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6em;
+    margin-top: 0.55em;
+    font-size: var(--s-micro);
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    opacity: var(--o-standing);
+}
+
+.sanguine_rep_led {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.6em;
+    padding: 0.35em 0.2em;
+    border-bottom: 1px solid var(--fold-hair);
+    font-size: var(--s-sub);
+    opacity: var(--o-context);
+}
+
+.sanguine_rep_led:hover,
+.sanguine_rep_led:focus-within {
+    opacity: var(--o-now);
+}
+
+.sanguine_rep_vchip {
+    flex: 0 0 5.2em;
+    font-size: var(--s-micro);
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+/* The three ask verdicts keep their hue on the ledger, because "you answered this one" is worth
+   knowing at a glance. The conserving three take the body colour: an applied rename is not a
+   warning about anything, and spending a semantic hue on it would be spending it on chrome. */
+.sanguine_rep_led_gone .sanguine_rep_vchip { color: var(--fold-crit); }
+.sanguine_rep_led_amount .sanguine_rep_vchip { color: var(--fold-warn); }
+.sanguine_rep_led_merge .sanguine_rep_vchip { color: var(--fold-rel); }
+
+.sanguine_rep_what {
+    flex: 1 1 16em;
+}
+
+/* The one place `--fold-fresh` is spent on this tab, and it is spent on the word "applied", which
+   carries the same fact for a reader who cannot see the colour at all. */
+.sanguine_rep_tick {
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    color: var(--fold-fresh);
+    white-space: nowrap;
+}
+
+.sanguine_rep_why,
+.sanguine_rep_undo {
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    color: var(--SmartThemeQuoteColor, #d4a753);
+    background: none;
+    border: none;
+    padding: 0.1em 0.3em;
+    cursor: pointer;
+    opacity: var(--o-standing);
+}
+
+.sanguine_rep_why:hover,
+.sanguine_rep_undo:hover:not(:disabled) {
+    opacity: var(--o-now);
+    text-decoration: underline;
+}
+
+.sanguine_rep_why:focus-visible,
+.sanguine_rep_undo:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: 1px;
+}
+
+/* Present, disabled, and carrying its reason in the tooltip. A row whose undo vanished would leave
+   the player believing there was one they missed. */
+.sanguine_rep_undo:disabled {
+    color: inherit;
+    opacity: var(--o-dormant);
+    cursor: default;
+    text-decoration: line-through;
+}
+
+.sanguine_rep_ev_led {
+    flex: 1 1 100%;
+    margin: 0.1em 0 0.2em 5.8em;
+    border-left-color: var(--fold-hair);
+}
+
+.sanguine_rep_revert {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.7em;
+    margin: 0.6em 0 0;
+}
+
+.sanguine_rep_revertbtn {
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    color: var(--SmartThemeBodyColor);
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 7%, transparent);
+    border: 1px solid var(--fold-hair);
+    border-radius: 0.35em;
+    padding: 0.3em 0.8em;
+    cursor: pointer;
+}
+
+.sanguine_rep_revertbtn:hover:not(:disabled) {
+    border-color: var(--fold-warn);
+}
+
+.sanguine_rep_revertbtn:focus-visible {
+    outline: 2px solid var(--fold-warn);
+    outline-offset: 1px;
+}
+
+.sanguine_rep_revertbtn:disabled {
+    opacity: var(--o-dormant);
+    cursor: default;
+}
+
+.sanguine_rep_revertnote {
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    opacity: var(--o-standing);
+}
+
+/* Prior passes. */
+
+.sanguine_rep_prior {
+    margin: 0.3em 0;
+    opacity: var(--o-standing);
+}
+
+.sanguine_rep_prior[open] {
+    opacity: var(--o-context);
+}
+
+.sanguine_rep_prior_head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6em;
+    cursor: pointer;
+    font-size: var(--s-sub);
+    list-style: none;
+    padding: 0.25em 0;
+}
+
+.sanguine_rep_prior_head::-webkit-details-marker { display: none; }
+.sanguine_rep_prior_head::before { content: '▸ '; opacity: var(--o-standing); }
+.sanguine_rep_prior[open] .sanguine_rep_prior_head::before { content: '▾ '; }
+
+.sanguine_rep_prior_head:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: 1px;
+}
+
+/* Refusals: dormant. */
+
+.sanguine_rep_refused {
+    margin: 0.9em 0 0;
+    opacity: var(--o-dormant);
+}
+
+.sanguine_rep_refused[open] {
+    opacity: var(--o-standing);
+}
+
+.sanguine_rep_refused_head {
+    cursor: pointer;
+    font-size: var(--s-micro);
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    list-style: none;
+}
+
+.sanguine_rep_refused_head::-webkit-details-marker { display: none; }
+.sanguine_rep_refused_head::before { content: '▸ '; }
+.sanguine_rep_refused[open] .sanguine_rep_refused_head::before { content: '▾ '; }
+
+.sanguine_rep_refused_head:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: 1px;
+}
+
+.sanguine_rep_refrow {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6em;
+    padding: 0.25em 0 0.1em 1em;
+    font-size: var(--s-sub);
+}
+
+.sanguine_rep_reason {
+    flex: 0 0 auto;
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+}
+
+/* Empty and failed. */
+
+.sanguine_rep_clear {
+    padding: 1.6em 1em 1.2em;
+    text-align: center;
+}
+
+.sanguine_rep_clear_head {
+    margin: 0 0 0.4em;
+    font-size: var(--s-title);
+    font-weight: 700;
+}
+
+.sanguine_rep_clear_scope {
+    max-width: 34em;
+    margin: 0 auto;
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    font-variant-numeric: tabular-nums;
+    opacity: var(--o-context);
+}
+
+.sanguine_rep_failed {
+    padding: 1em 0.2em 0.6em;
+}
+
+/* The one thing on this tab that earns crit as a whole statement: nothing was written, and that has
+   to be read before anything else on the surface. */
+.sanguine_rep_failed_head {
+    margin: 0 0 0.35em;
+    font-size: var(--s-body);
+    font-weight: 700;
+    color: var(--fold-crit);
+}
+
+.sanguine_rep_failed_note {
+    max-width: 36em;
+    margin: 0;
+    font-size: var(--s-sub);
+    opacity: var(--o-context);
+}
+
+/* The keyboard line. */
+
+.sanguine_rep_keys {
+    margin: 1.2em 0 0;
+    padding: 0.45em 0.2em 0.1em 0;
+    border-top: 1px solid var(--fold-hair);
+    font-family: var(--fold-mono);
+    font-size: var(--s-micro);
+    letter-spacing: 0.04em;
+    text-align: center;
+    opacity: var(--o-dormant);
+}
+
+/* Small screens.
+ *
+ * 1000px is the extension's existing breakpoint (`style.css`:232) and SillyTavern's own mobile
+ * cutover, where the overlay stops being a dialog and becomes the screen. Two things have to give:
+ * the coverage strip cannot hold four items on one line, and a keyboard line is advice for a device
+ * that has no keyboard.
+ */
+@media (max-width: 1000px) {
+    .sanguine_rep_cover {
+        flex-wrap: wrap;
+        gap: 0.4em 0.7em;
+    }
+
+    .sanguine_rep_bar {
+        flex: 1 1 100%;
+        order: 3;
+    }
+
+    .sanguine_rep_run {
+        margin-left: auto;
+        padding: 0.45em 0.9em;
+    }
+
+    .sanguine_rep_keys {
+        display: none;
+    }
+
+    /* A tap target, not a text link. The undo and why controls are the only way back from an
+       applied repair, and 10.5px of text is not a target. */
+    .sanguine_rep_why,
+    .sanguine_rep_undo {
+        padding: 0.4em 0.6em;
+    }
+
+    .sanguine_rep_ev_led {
+        margin-left: 0.4em;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    /* The skew is static and stays, it is punctuation, not motion. Nothing on this tab animates,
+       which is deliberate: a surface that asks for a judgement should not be moving while you make
+       it. This block exists so the next person does not add one. */
+    .sanguine_rep_ask {
+        transition: none;
+    }
+}

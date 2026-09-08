@@ -1,0 +1,873 @@
+/*
+ * sanguine/overlay-cast.css: the cast tab's dossier.
+ *
+ * A third sheet, injected by `overlay-cast.js` at import time for the same reason `overlay.css` is
+ * injected by `overlay.js`: `addExtensionStyle` (extensions.js:781) takes exactly one filename from
+ * the manifest, and `style.css` has it.
+ *
+ * The four rules this sheet is written against.
+ *
+ * They are the panel's, restated because a second surface is where a design system quietly forks.
+ *
+ *   1. SIX type steps and no seventh. `--s-display` … `--s-micro`, declared in `style.css` `:root`.
+ *      `--s-micro` appears here on uppercase tracked labels ONLY, the section headings and the
+ *      trail's field names. There is no lowercase prose at that size anywhere in this file.
+ *   2. FOUR opacity stops, and they mean time. `--o-now` for what is true this turn, `--o-context`
+ *      for this scene, `--o-standing` for what does not tick, `--o-dormant` for what is over. A
+ *      superseded trail value is `--o-dormant` because it IS over; it is not dimmed for emphasis.
+ *   3. Mono is load-bearing. Turn stamps, agenda positions and machine keys take `--fold-mono` and
+ *      tabular figures; every field a model wrote is body-face prose. The typeface tells you who
+ *      produced the value without you having to think about it.
+ *   4. Hue is severity and state, never category and never chrome. `--fold-crit` is threat and a
+ *      hostile disposition; `--fold-warn` is wary and a moderate wound; `--fold-rel` is the
+ *      relational axis. The index's selected row takes the THEME accent, because "which row am I
+ *      on" is chrome, spending a semantic colour on it is how a tracker loses the ability to say
+ *      "urgent" (`overlay.css` makes the same argument about the rail).
+ *
+ * The overlay is a reading surface, so prose sits near full `--mainFontSize` rather than at the
+ * panel's 0.78×.
+ */
+
+/* Two panes.
+ *
+ * The index is a fixed column and the record takes the rest, because the index's width is set by
+ * the longest name and the record's is set by how much prose fits on a line. `min-width: 0` on both
+ * so a long unbroken name cannot push the grid wider than the panel.
+ */
+
+.sanguine_cast {
+    display: grid;
+    /* `min(11em, 30%)` rather than any `minmax()` on the index, and it took a measurement to get
+       here. A grid track with a fixed maximum takes that maximum whether or not the row fits, so
+       both `minmax(8em, 11em)` and `minmax(0, 11em)` held 165px at a 480px dialog and pushed the
+       record to 88px with the panel scrolling sideways, a horizontal scrollbar on a reading
+       surface. `min()` makes the index's width conditional on the container's: 11em while there is
+       room, a share of it when there is not, and never wider than the box it is in. */
+    grid-template-columns: min(11em, 30%) minmax(0, 1fr);
+    gap: 0 1.1em;
+    align-items: start;
+    min-width: 0;
+}
+
+.sanguine_cast_index {
+    min-width: 0;
+    /* Sticky rather than scrolling on its own: two independent scrollbars inside a dialog that is
+       itself inside a scrolling panel is one scrollbar too many, and the index is short. */
+    position: sticky;
+    top: 0;
+    padding-right: 0.7em;
+    border-right: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+}
+
+.sanguine_cast_record {
+    min-width: 0;
+    /* The dossier's own split answers to THIS box, not to the viewport, and it has to: the dialog is
+       `min(760px, 94vw)` (`overlay.css`), so on a 2560px monitor the record pane is still ~390px and
+       a viewport query would cheerfully split it into two 24-character columns. A container query
+       measures the thing the columns actually live in. Browsers without support get the
+       single-column default, which is the safe half of the answer rather than the broken one. */
+    container-type: inline-size;
+}
+
+/* The index. */
+
+.sanguine_cast_group + .sanguine_cast_group {
+    margin-top: 0.7em;
+}
+
+.sanguine_cast_group_head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5em;
+    margin: 0 0 0.25em;
+    font-size: var(--s-micro);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    opacity: var(--o-standing);
+}
+
+.sanguine_cast_list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.sanguine_cast_entry {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.4em;
+    width: 100%;
+    padding: 0.25em 0.4em;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: var(--s-body);
+    text-align: start;
+    cursor: pointer;
+    opacity: var(--o-context);
+    transition: background-color 0.12s ease, opacity 0.12s ease;
+}
+
+.sanguine_cast_entry:hover {
+    opacity: var(--o-now);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 10%, transparent);
+}
+
+/* Never removed, only replaced. */
+.sanguine_cast_entry:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: -2px;
+    opacity: var(--o-now);
+}
+
+/* Chrome, so it takes the theme accent and leaves the semantic axis alone. A bar and a weight as
+   well as a wash, so it survives a theme whose accent is a near-neighbour of its background. */
+.sanguine_cast_entry_on {
+    opacity: var(--o-now);
+    font-weight: 600;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 16%, transparent);
+    box-shadow: inset 2px 0 0 var(--SmartThemeQuoteColor, #d4a753);
+}
+
+.sanguine_cast_entry_name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sanguine_cast_entry_tail {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    flex: 0 0 auto;
+}
+
+/* The flag, where the flagged person is. Fresh rather than the accent: being singled out is a state
+   of the record, which is what the semantic axis is for. */
+.sanguine_cast_entry_star {
+    font-size: var(--s-micro);
+    color: var(--fold-fresh, #d4a753);
+}
+
+.sanguine_cast_entry_threat {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-micro);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--fold-crit, #c94d5f);
+}
+
+/* Announced, never drawn. Used where an icon or a pip carries state that a screen reader would
+   otherwise never hear. */
+.sanguine_cast_sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* The header band. */
+
+.sanguine_cast_band {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4em 0.7em;
+    padding: 0 0 0.5em;
+    margin-bottom: 0.6em;
+    border-bottom: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+}
+
+.sanguine_cast_name {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    font-size: var(--s-title);
+    font-weight: 600;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+}
+
+/* Names a story wrote, so prose. `--o-standing`: an alias does not tick. */
+.sanguine_cast_aka {
+    flex: 1 1 100%;
+    margin: -0.15em 0 0;
+    font-size: var(--s-sub);
+    font-style: italic;
+    opacity: var(--o-standing);
+    overflow-wrap: anywhere;
+}
+
+.sanguine_cast_chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3em;
+}
+
+.sanguine_cast_chip {
+    display: inline-flex;
+    align-items: center;
+    font-size: var(--s-micro);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    border: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+    border-radius: 3px;
+    padding: 0.15em 0.45em;
+    white-space: nowrap;
+}
+
+/* In the room, this turn. */
+.sanguine_cast_here {
+    opacity: var(--o-now);
+    border-color: color-mix(in srgb, var(--fold-fresh, #d4a753) 60%, transparent);
+}
+
+/* Somewhere else, true of the world, not of the scene. */
+.sanguine_cast_away {
+    opacity: var(--o-context);
+}
+
+/* The hedge. Warn, because "we cannot place them" is a caveat the reader has to carry, and warn is
+   the axis's word for that. */
+.sanguine_cast_hedge {
+    color: var(--fold-warn, #d67a46);
+    border-color: color-mix(in srgb, var(--fold-warn, #d67a46) 55%, transparent);
+    opacity: var(--o-context);
+}
+
+/* Finished with. */
+.sanguine_cast_gone {
+    opacity: var(--o-dormant);
+    text-decoration: line-through;
+}
+
+.sanguine_cast_kind {
+    opacity: var(--o-standing);
+}
+
+.sanguine_cast_threat {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--fold-crit, #c94d5f);
+    border-color: var(--fold-crit, #c94d5f);
+    opacity: var(--o-now);
+}
+
+/* Disposition, enlarged.
+ *
+ * The panel hides the word in a `title` because 288px has room for the shape and nothing else. Here
+ * both are drawn: the shape carries the ordinal faster, and the word is the half that survives for a
+ * reader who cannot distinguish the fill. `.sanguine_feels_*` in `style.css` supplies the colour, so
+ * the two surfaces cannot drift apart on what "wary" looks like.
+ */
+
+.sanguine_cast_disposition {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45em;
+}
+
+.sanguine_cast_pips {
+    /* Roughly three times the panel's 0.32em pip. Big enough to count without looking. */
+    gap: 0.22em;
+}
+
+.sanguine_cast_pips .sanguine_pip {
+    width: 0.62em;
+    height: 0.62em;
+}
+
+.sanguine_cast_disposition_word {
+    font-size: var(--s-body);
+    font-weight: 600;
+    color: inherit;
+    opacity: var(--o-now);
+}
+
+.sanguine_cast_disposition_of {
+    font-size: var(--s-sub);
+    opacity: var(--o-standing);
+}
+
+/* The person-of-interest toggle. */
+
+.sanguine_cast_poi {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4em;
+    margin-left: auto;
+    padding: 0.25em 0.6em;
+    border: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: var(--s-sub);
+    cursor: pointer;
+    opacity: var(--o-standing);
+    transition: opacity 0.12s ease, border-color 0.12s ease;
+}
+
+.sanguine_cast_poi:hover {
+    opacity: var(--o-now);
+}
+
+.sanguine_cast_poi:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: 1px;
+    opacity: var(--o-now);
+}
+
+/* Pressed, and saying so three ways, the filled star, the colour, and `aria-pressed` itself. A
+   toggle whose only "on" is a colour is a toggle half the readers cannot read. */
+.sanguine_cast_poi[aria-pressed='true'] {
+    opacity: var(--o-now);
+    color: var(--fold-fresh, #d4a753);
+    border-color: var(--fold-fresh, #d4a753);
+    background: color-mix(in srgb, var(--fold-fresh, #d4a753) 12%, transparent);
+}
+
+.sanguine_cast_poi_icon {
+    font-size: 0.85em;
+    opacity: 0.4;
+}
+
+.sanguine_cast_poi[aria-pressed='true'] .sanguine_cast_poi_icon {
+    opacity: 1;
+}
+
+/* The record's two columns. */
+
+/*
+ * One column until there is room for two, and the two are not equal: the left side holds short
+ * values (a fact, a place, a strip of chips, an agenda track) and the right holds the prose the
+ * scene turns on, so an even split would starve the half that is actually being read.
+ */
+.sanguine_cast_columns {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.9em 1.4em;
+    align-items: start;
+}
+
+@container (min-width: 24em) {
+    .sanguine_cast_columns {
+        grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    }
+}
+
+.sanguine_cast_col {
+    min-width: 0;
+}
+
+.sanguine_cast_field + .sanguine_cast_field,
+.sanguine_cast_field + .sanguine_cast_meta {
+    margin-top: 0.7em;
+}
+
+/* The only thing `--s-micro` is for. */
+.sanguine_cast_label {
+    margin: 0 0 0.15em;
+    font-size: var(--s-micro);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    opacity: var(--o-standing);
+}
+
+/* Everything a model wrote. Body face, reading size. */
+.sanguine_cast_prose {
+    margin: 0;
+    font-size: var(--s-sub);
+    line-height: 1.45;
+    opacity: var(--o-context);
+    overflow-wrap: anywhere;
+}
+
+/* The description block.
+ *
+ * Appearance, clothing, manner and background, grouped and given the top of the left column. It is
+ * a group rather than four loose fields because the four are read together, "what does this person
+ * look like" is one question, and because the group is where the flag's boundary is drawn.
+ *
+ * `--o-context` on the prose (inherited from `.sanguine_cast_prose`) is right for all four: what
+ * somebody is wearing is true for this scene, and what they permanently look like is true for every
+ * scene, so neither is `--o-now` and neither is over. */
+
+.sanguine_cast_described {
+    margin-bottom: 0.7em;
+    padding-bottom: 0.7em;
+    border-bottom: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+}
+
+/* The flag's purchase, marked. `--fold-rel`: the relational axis, the same hue the trail's field
+   names take, because a person of interest is a relationship the player declared, not a severity.
+   A rule rather than a fill: the field has to read as the same kind of thing as the two above it,
+   with a margin note saying where it came from. */
+.sanguine_cast_field_poi {
+    padding-left: 0.6em;
+    border-left: 2px solid var(--fold-rel, #8b73d4);
+}
+
+/* Nothing to mark when there is nothing bought. A dossier with no flagged fields should not carry a
+   rule down its side implying the section is special. */
+.sanguine_cast_described > .sanguine_cast_empty {
+    margin-top: 0.7em;
+}
+
+/* What they are after and what they have on you. A step up in size and opacity from the standing
+   facts, because the motive is what the scene turns on, the panel makes the same call by giving
+   `wants` its own line rather than folding it into the predicate. */
+.sanguine_cast_motive {
+    font-size: var(--s-body);
+    opacity: var(--o-now);
+}
+
+.sanguine_cast_empty,
+.sanguine_cast_note {
+    margin: 0;
+    font-size: var(--s-sub);
+    line-height: 1.4;
+    opacity: var(--o-dormant);
+}
+
+/* An answer about the record itself rather than about the person, warn, because it qualifies what
+   is on screen. */
+.sanguine_cast_note {
+    color: var(--fold-warn, #d67a46);
+    opacity: var(--o-context);
+}
+
+.sanguine_cast_missing {
+    display: grid;
+    gap: 0.3em;
+    padding: 0.6em 0.2em;
+}
+
+.sanguine_cast_strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3em;
+}
+
+/* Derived values, everywhere they appear: group counts, turn stamps, agenda positions, the raw key
+   on a not-found. Mono and tabular, so a column of them lines up and so the face says fold computed
+   this rather than a narrator writing it. */
+.sanguine_cast_num {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    opacity: var(--o-standing);
+    overflow-wrap: anywhere;
+}
+
+.sanguine_cast_meta {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0.1em 0.7em;
+    margin: 0.8em 0 0;
+    padding-top: 0.6em;
+    border-top: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+}
+
+.sanguine_cast_meta dt {
+    font-size: var(--s-micro);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    opacity: var(--o-dormant);
+    align-self: baseline;
+}
+
+.sanguine_cast_meta dd {
+    margin: 0;
+}
+
+/* The standing agenda.
+ *
+ * A track, not a clock face. `panel.js` `dialRow` argues it at length: a doom filling and a plan
+ * filling look identical if you draw them the same, and one of them is good news. So no urgency
+ * colour here at any position, the relational hue instead, because an agenda is something an actor
+ * is doing to the world.
+ */
+
+.sanguine_cast_drive {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+}
+
+.sanguine_cast_drive_track {
+    display: inline-flex;
+    gap: 0.18em;
+}
+
+.sanguine_cast_drive_seg {
+    width: 0.5em;
+    height: 0.85em;
+    border-radius: 1px;
+    background: currentColor;
+    opacity: 0.2;
+}
+
+.sanguine_cast_drive_seg.on {
+    background: var(--fold-rel, #8b73d4);
+    opacity: var(--o-now);
+}
+
+/* The change history.
+ *
+ * The richest thing on this tab, and the reason `MAX_TRAIL` exists. Each row is one write this
+ * record survived: which field moved, what it moved TO, what it replaced, and the turn, with a
+ * click through to the message that caused it wherever the pass left an anchor.
+ */
+
+/* Full width, under both columns, see the note in `dossier`. A change row is prose plus the prose
+   it replaced, and it is the one thing on this tab that has to be read rather than glanced at. */
+.sanguine_cast_history {
+    margin-top: 1em;
+    padding-top: 0.7em;
+    border-top: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+}
+
+.sanguine_cast_changes {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.sanguine_cast_change + .sanguine_cast_change {
+    border-top: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+}
+
+/* One grid whether the row is a button or a div, so an unanchored entry sits in the same columns as
+   an anchored one rather than reflowing the list around the ones fold cannot link. */
+.sanguine_cast_change_body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0 0.6em;
+    width: 100%;
+    padding: 0.35em 0.3em;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    text-align: start;
+}
+
+button.sanguine_cast_change_body {
+    cursor: pointer;
+}
+
+button.sanguine_cast_change_body:hover {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 9%, transparent);
+}
+
+button.sanguine_cast_change_body:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: -2px;
+}
+
+/* Which field moved. Uppercase and tracked, so `--s-micro` is legitimate. */
+.sanguine_cast_change_field {
+    grid-column: 1;
+    font-size: var(--s-micro);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--fold-rel, #8b73d4);
+    opacity: var(--o-now);
+}
+
+/* What it became, current, so `--o-now`, and prose, because a model wrote it. */
+.sanguine_cast_change_to {
+    grid-column: 1;
+    font-size: var(--s-sub);
+    line-height: 1.4;
+    opacity: var(--o-now);
+    overflow-wrap: anywhere;
+}
+
+/* What it replaced. `--o-dormant` means "over, moot, or left behind", which is the literal status of
+   a superseded value, this is the opacity axis used for time and not for emphasis. */
+.sanguine_cast_change_from {
+    grid-column: 1;
+    font-size: var(--s-sub);
+    line-height: 1.35;
+    opacity: var(--o-dormant);
+    overflow-wrap: anywhere;
+}
+
+.sanguine_cast_change_body .sanguine_cast_num {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    align-self: start;
+    opacity: var(--o-dormant);
+}
+
+.sanguine_cast_more {
+    margin-top: 0.35em;
+    padding: 0.2em 0.5em;
+    border: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: var(--s-micro);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    cursor: pointer;
+    opacity: var(--o-standing);
+}
+
+.sanguine_cast_more:hover {
+    opacity: var(--o-now);
+}
+
+.sanguine_cast_more:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: 1px;
+    opacity: var(--o-now);
+}
+
+/* The secret: what they know that the point-of-view character does not. Blurred until the reader
+   reaches for it, the one place on the tab a spoiler is worth defending. The model reads it
+   plainly in the injected block; this is the player's view only. */
+.sanguine_cast_secret {
+    filter: blur(6px);
+    user-select: none;
+    transition: filter 0.15s ease;
+}
+
+.sanguine_cast_secret:hover,
+.sanguine_cast_secret:focus-within {
+    filter: none;
+    user-select: auto;
+}
+
+/* The per-line undo, on the change it reverses. Quiet until the row is reached for, the same
+   reveal rule every other destructive-ish control in this tab follows, so a list of changes reads
+   as a history rather than a row of buttons. */
+.sanguine_cast_change_undo {
+    margin: 0.15em 0 0.4em;
+    padding: 0.15em 0.5em;
+    border: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+    border-radius: 3px;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: var(--s-micro);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+}
+
+.sanguine_cast_change:hover .sanguine_cast_change_undo,
+.sanguine_cast_change_undo:focus-visible {
+    opacity: var(--o-standing);
+}
+
+.sanguine_cast_change_undo:hover {
+    opacity: var(--o-now);
+    border-color: var(--fold-warn);
+    color: var(--fold-warn);
+}
+
+/* Motion. */
+
+@media (prefers-reduced-motion: reduce) {
+    .sanguine_cast_entry,
+    .sanguine_cast_poi {
+        transition: none;
+    }
+}
+
+/* The lorebook link.
+ *
+ * The pane at the head of the left column: what a World Info entry says about this person, whether
+ * sanguine or the player wrote it, and the controls that pair the two.
+ *
+ * Why it reads as a quotation and not as another field.
+ *
+ * Everything else in this record is derived, a fold over events, a value extraction wrote. This is
+ * somebody else's writing, quoted. So it takes the one treatment nothing else on the tab uses: a
+ * rule down its left edge in the relational hue and a tinted ground, the way a blockquote is set.
+ * A reader has to be able to tell the source from the derivation at a glance, because the whole
+ * point of the link is that the source wins.
+ *
+ * `--fold-rel` rather than the theme accent, and it is the same argument `.sanguine_cast_field_poi`
+ * makes: a link is a pairing the player declared between two records. It is not a severity and it
+ * is not freshness.
+ */
+
+.sanguine_cast_lore {
+    margin: 0 0 0.8em;
+    padding: 0.55em 0.7em;
+    border-left: 2px solid var(--fold-rel, #8b73d4);
+    border-radius: 0 4px 4px 0;
+    background: color-mix(in srgb, var(--fold-rel, #8b73d4) 7%, transparent);
+}
+
+/* Heading, source and provenance on one wrapping line: what this is, which book it came out of,
+   and who wrote it. Three answers, one row, no paragraph. */
+.sanguine_cast_lore_head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.3em 0.6em;
+    margin: 0 0 0.4em;
+    font-size: var(--s-micro);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    opacity: var(--o-standing);
+}
+
+/* The book and entry name. Mono, because it is an address into a file rather than prose, the same
+   call `.sanguine_cast_num` makes for every other value fold did not write. */
+.sanguine_cast_lore_src {
+    font-family: var(--fold-mono);
+    font-size: var(--s-meta);
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    opacity: var(--o-dormant);
+    overflow-wrap: anywhere;
+}
+
+/* A stale link. `--fold-warn`, because it qualifies what is on screen rather than reporting a
+   failure: the record below is complete and correct, it simply has no authored half any more. */
+.sanguine_cast_lore_stale {
+    color: var(--fold-warn, #d67a46);
+    opacity: var(--o-context);
+}
+
+/* Who owns the entry. Said in words, not by a colour or an icon: "yours, read-only" is the whole
+   safety property, and a player who learns it by losing a hand-written card has learned it too
+   late. */
+.sanguine_cast_lore_own {
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: var(--s-meta);
+    opacity: var(--o-dormant);
+}
+
+.sanguine_cast_lore_theirs {
+    color: var(--fold-rel, #8b73d4);
+    opacity: var(--o-context);
+}
+
+/* The authored text itself. Body face and `--o-now`: it is not a footnote, and it is the sentence
+   the player opened this record to read. Capped and scrolled rather than truncated, a dossier can
+   be four thousand characters and the record must not become that dossier's page. */
+.sanguine_cast_lore_text {
+    max-height: 14em;
+    overflow-y: auto;
+    margin: 0;
+    font-size: var(--s-sub);
+    line-height: 1.5;
+    opacity: var(--o-now);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.sanguine_cast_lore_controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35em;
+    margin-top: 0.55em;
+}
+
+/* Real buttons, same shape as the person-of-interest toggle so the tab has one control language. */
+.sanguine_cast_lore_btn {
+    padding: 0.2em 0.55em;
+    border: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: var(--s-meta);
+    cursor: pointer;
+    opacity: var(--o-standing);
+    transition: opacity 0.12s ease, border-color 0.12s ease;
+}
+
+.sanguine_cast_lore_btn:hover {
+    opacity: var(--o-now);
+}
+
+.sanguine_cast_lore_btn:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: 1px;
+    opacity: var(--o-now);
+}
+
+/* Pressed says so three ways, exactly as the flag does: the colour, the fill, and `aria-pressed`. */
+.sanguine_cast_lore_carry[aria-pressed='true'] {
+    opacity: var(--o-now);
+    color: var(--fold-rel, #8b73d4);
+    border-color: var(--fold-rel, #8b73d4);
+    background: color-mix(in srgb, var(--fold-rel, #8b73d4) 14%, transparent);
+}
+
+.sanguine_cast_lore_pick {
+    width: 100%;
+    max-width: 100%;
+    padding: 0.25em 0.4em;
+    border: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+    border-radius: 4px;
+    background: var(--SmartThemeBlurTintColor, transparent);
+    color: inherit;
+    font-family: inherit;
+    font-size: var(--s-sub);
+}
+
+/* The index's link mark. Dimmer than the person-of-interest star and set before it, because the
+   star is a claim about the narrator's prompt and this is a fact about the record. */
+.sanguine_cast_entry_book {
+    font-size: 0.75em;
+    opacity: var(--o-dormant);
+}
+
+/* Small screens.
+ *
+ * 1000px, the extension's existing breakpoint (`style.css`, and `overlay.css` where the rail moves
+ * to the bottom). Below it the overlay is the whole screen, and the index stops being a column
+ * beside the record and becomes a band above it, a 8em column of names next to a full-bleed sheet
+ * is neither an index nor a record. The dossier's own split needs no rule here: it is a container
+ * query, so it has already collapsed by the time the record pane is this narrow.
+ */
+
+@media (max-width: 1000px) {
+    .sanguine_cast {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0.8em;
+    }
+
+    .sanguine_cast_index {
+        position: static;
+        max-height: 34vh;
+        overflow-y: auto;
+        padding: 0 0 0.6em;
+        border-right: none;
+        border-bottom: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+    }
+
+    .sanguine_cast_poi {
+        margin-left: 0;
+    }
+}

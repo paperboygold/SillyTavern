@@ -328,7 +328,7 @@ test.describe('fold — chronicle', () => {
         // The character has to have coins before spending them, or the delta is rejected as a
         // removal of something never held — which is itself the rule working.
         await page.evaluate(async () => {
-            const chronicle = await import('./scripts/extensions/fold/chronicle.js');
+            const chronicle = await import('./scripts/extensions/sanguine/chronicle.js');
             chronicle.recordUserEvent({
                 summary: 'Started out with a purse of silver coins and no rope',
                 keywords: ['silver', 'coins'],

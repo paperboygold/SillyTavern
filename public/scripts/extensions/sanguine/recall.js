@@ -1,5 +1,5 @@
 /**
- * fold/recall.js — fusing every retrieval source into one ranked evidence block.
+ * fold/recall.js: fusing every retrieval source into one ranked evidence block.
  *
  * SillyTavern already retrieves from several places, but they never meet: World Info scans
  * keywords and injects at its own depth, the vectors extension runs a similarity query and
@@ -18,22 +18,81 @@ import { extension_settings } from '../../extensions.js';
 import { getTokenCountAsync } from '../../tokenizers.js';
 import { getStringHash } from '../../utils.js';
 import * as chronicle from './chronicle.js';
+import * as observe from './observe.js';
 import { fuse, rankFused, renderEvidence, selectEvidence } from './recall-table.js';
 
-/** Relative trust per source, feeding the RRF weight. */
+/**
+ * Relative trust per source, feeding the RRF weight.
+ *
+ * Recency is a SOURCE, not a score adjustment.
+ *
+ * Scribe weights retrieved chunks by recency inside its budget planner
+ * (`rag_budget_manager.rs`), which means inventing a decay curve and a blend factor. fold needs
+ * neither: reciprocal rank fusion exists to combine RANKINGS, and "most recent first" is a ranking.
+ * So recency enters as a third list beside the chronicle's keyword overlap and the vector store's
+ * similarity, and `fuse` combines it with the accumulator merge it already uses, `merge_acc`, the
+ * pair monoid, proved a commutative monoid in `HashTrinityCore.fusion_is_commutative_monoid`.
+ *
+ * The multi-source agreement signal then comes free: an event that is both recent AND topical
+ * arrives with `n = 2` and outranks one that is merely either.
+ *
+ * Weighted below the other two deliberately. Recency should break ties and lift the recent past
+ * when a scene has moved on; it must not bury a directly relevant memory under whatever happened
+ * last.
+ */
 export const SOURCE_WEIGHTS = {
     chronicle: 1.0,
     vectors: 1.0,
+    recency: 0.5,
 };
 
 /** Text of World Info entries activated for this generation, refreshed per scan. */
 let coveredTexts = [];
 
 /**
+ * What recall actually did for the last generation, kept so the Chronicle tab can show it.
+ *
+ * Why the record lives here and not where the plan does.
+ *
+ * `index.js` already holds the last plan in a module-scoped `pendingPlan`, and reading that would
+ * have meant exporting a handle out of the extension's entry point, the file that wires SillyTavern
+ * to everything else. It is also the wrong half of the story: `pendingPlan` is what was RETRIEVED,
+ * and the question the view has to answer is what was INJECTED, which is decided one layer down in
+ * `select` and decided AGAIN when `WORLD_INFO_ACTIVATED` re-runs it against the real covered set.
+ * A reader looking at the first answer would be looking at a block that was already replaced.
+ *
+ * Recording it at the bottom of `select` means the record is whatever ran last, by construction,
+ * with no second code path to keep in sync.
+ *
+ * @type {{chat: string, at: number, query: string, budget: number, topK: number, covered: number,
+ *   sources: Array<{label: string, weight: number, count: number}>, candidates: number,
+ *   ranked: object[], items: object[], tokens: number, skipped: object, dropped: object[],
+ *   passes: number}|null}
+ */
+let lastRecall = null;
+
+/**
+ * The last recall selection, or null when this chat has not run one.
+ *
+ * Stamped with the chat it was taken from and refused when that no longer matches, so a chat switch
+ * cannot leave the previous campaign's retrieval on screen looking like this one's. That is a check
+ * rather than a `CHAT_CHANGED` listener on purpose: a missed event would fail silently and wrongly,
+ * where a stale stamp simply reads as "nothing yet".
+ *
+ * @returns {object|null} The record.
+ */
+export function lastSelection() {
+    if (!lastRecall) {
+        return null;
+    }
+    return lastRecall.chat === String(getCurrentChatId() ?? '') ? lastRecall : null;
+}
+
+/**
  * Record what World Info is about to put in the prompt.
  *
  * Activated entries are already going to be shown to the model, so fold's job is not to rank them
- * — it is to avoid paying tokens to repeat them. Constant entries are skipped: they are
+ *, it is to avoid paying tokens to repeat them. Constant entries are skipped: they are
  * unconditional by author intent and say nothing about this turn's topic.
  *
  * @param {Array<object>} entries Activated World Info entries.
@@ -55,7 +114,7 @@ export function clearActivatedWorldInfo() {
  *
  * Routed through `/api/vector/query-multi` rather than `/query`, because the single-collection
  * route builds `hashes` from the unfiltered result set while building `metadata` from the
- * threshold-filtered one — the two are not index-aligned, and `score_threshold` silently does
+ * threshold-filtered one, the two are not index-aligned, and `score_threshold` silently does
  * nothing. The multi route filters before grouping, so it is correct.
  *
  * @param {string} queryText Query text.
@@ -81,7 +140,7 @@ export async function queryVectors(queryText, topK) {
         // chronicle event anchors and cross-source dedup works.
         return hashes.map(String);
     } catch (error) {
-        console.warn('[fold] vector query failed; continuing without it', error);
+        console.warn('[sanguine] vector query failed; continuing without it', error);
         return [];
     }
 }
@@ -134,15 +193,26 @@ export async function gather({ messages, queryText, budget, topK = 5, template }
         usableVectorKeys.push(key);
     }
 
-    const fused = fuse([
-        { keys: events.map(e => `evt:${e.key}`), weight: SOURCE_WEIGHTS.chronicle },
-        { keys: usableVectorKeys, weight: SOURCE_WEIGHTS.vectors },
-    ]);
+    // The recency ranking over the same candidates, newest first. Events already carry `t`, so
+    // this costs a sort and nothing else, no decay constant, no blend factor, no new table.
+    const byRecency = [...events]
+        .sort((a, b) => (b.event?.t ?? 0) - (a.event?.t ?? 0))
+        .map(e => `evt:${e.key}`);
+
+    // Labelled, so every fused item can say which of the three found it and where in that list it
+    // came. The labels are the only thing turning "score 0.031" into "the chronicle put it first".
+    const sources = [
+        { label: 'chronicle', keys: events.map(e => `evt:${e.key}`), weight: SOURCE_WEIGHTS.chronicle },
+        { label: 'vectors', keys: usableVectorKeys, weight: SOURCE_WEIGHTS.vectors },
+        { label: 'recency', keys: byRecency, weight: SOURCE_WEIGHTS.recency },
+    ];
+
+    const fused = fuse(sources);
 
     const ranked = rankFused(fused);
 
     // Token counting is async in SillyTavern, so cost every candidate up front and hand the
-    // selector a synchronous lookup — that keeps the selection logic pure and testable.
+    // selector a synchronous lookup, that keeps the selection logic pure and testable.
     const costs = new Map();
     await Promise.all(ranked.map(async ({ key }) => {
         const text = meta.get(key)?.text;
@@ -151,7 +221,14 @@ export async function gather({ messages, queryText, budget, topK = 5, template }
         }
     }));
 
-    const plan = { ranked, meta, costs, budget, template };
+    // `query` and `topK` are carried only so the view can say what was asked for; nothing in the
+    // selection path reads them.
+    const plan = {
+        ranked, meta, costs, budget, template,
+        query: String(queryText ?? ''),
+        topK,
+        sources: sources.map(s => ({ label: s.label, weight: s.weight, count: s.keys.length })),
+    };
     return { ...select(plan), plan };
 }
 
@@ -160,13 +237,13 @@ export async function gather({ messages, queryText, budget, topK = 5, template }
  *
  * Split out from `gather` because of an ordering problem: generation interceptors run before the
  * World Info scan, so at injection time the covered set is a turn stale. Re-selecting when
- * WORLD_INFO_ACTIVATED fires fixes that without repeating the vector query — retrieval and
+ * WORLD_INFO_ACTIVATED fires fixes that without repeating the vector query, retrieval and
  * scoring are already done, only the filtering changes.
  *
  * @param {object} plan A plan from gather().
  * @returns {{text: string, items: object[], tokens: number, skipped: object}} The block.
  */
-export function select({ ranked, meta, costs, budget, template }) {
+export function select({ ranked, meta, costs, budget, template, query = '', topK = 0, sources = [] }) {
     const selection = selectEvidence({
         ranked,
         meta,
@@ -175,6 +252,40 @@ export function select({ ranked, meta, costs, budget, template }) {
         // Roughly four characters per token is the fallback when counting failed for an item.
         costOf: (key, text) => costs.get(key) ?? Math.ceil(text.length / 4),
     });
+
+    // Evidence the budget could not afford. Retrieval that silently drops its best-ranked tail is
+    // indistinguishable from retrieval that found nothing, which is exactly the confusion a budget
+    // constant should not be allowed to hide behind.
+    //
+    // ⚠ This read `selection.skipped?.length`, and `skipped` is the four-integer tally, an object,
+    // with no `length`. So the condition was `undefined` on every generation this extension has ever
+    // run and the counter has never once fired. The one instrument watching the budget was reporting
+    // "never binds" because it was never asked.
+    if (selection.skipped?.budget) {
+        observe.noteCap('recall-budget', selection.skipped.budget);
+    }
+
+    // Everything the Chronicle tab's Recall view shows, captured at the point of decision. Two
+    // selections run per generation (the interceptor's, then the re-selection once World Info has
+    // said what it is injecting); the second overwrites the first, which is correct, it is the one
+    // whose block reaches the model. `passes` keeps the fact that it happened twice.
+    const wasSameGeneration = lastRecall?.ranked === ranked;
+    lastRecall = {
+        chat: String(getCurrentChatId() ?? ''),
+        ranked,
+        at: Date.now(),
+        query,
+        topK,
+        sources,
+        budget,
+        covered: coveredTexts.length,
+        candidates: ranked.length,
+        items: selection.items,
+        tokens: selection.tokens,
+        skipped: selection.skipped,
+        dropped: selection.dropped,
+        passes: wasSameGeneration ? (lastRecall.passes ?? 1) + 1 : 1,
+    };
 
     return {
         text: renderEvidence(selection.items, template),

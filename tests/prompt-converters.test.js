@@ -1319,8 +1319,8 @@ describe('cachingAtDepthForOpenRouterClaude', () => {
     });
 });
 
-describe('toGeminiSchema — an empty enum member is how a schema says "no answer"', () => {
-    // ── The measured failure ──
+describe('toGeminiSchema, an empty enum member is how a schema says "no answer"', () => {
+    // The measured failure.
     //
     // Google answers a schema containing an empty enum member with
     //

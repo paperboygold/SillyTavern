@@ -8,7 +8,7 @@ import {
     segmentText,
 } from '../public/scripts/extensions/sanguine-gloss/trie.js';
 
-describe('sanguine-gloss trie — longest match tokenizer', () => {
+describe('sanguine-gloss trie, longest match tokenizer', () => {
     test('inserts and finds single character and multi-character matches', () => {
         const root = createTrieNode();
         insertTrie(root, '金', { say: 'jīn', mean: 'gold' });

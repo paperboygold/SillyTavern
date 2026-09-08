@@ -8,8 +8,12 @@ import { afterAll, beforeAll, describe, expect, test } from '@jest/globals';
 // needing a config.yaml in the test environment
 process.env.SILLYTAVERN_GIT_BACKEND = 'auto';
 
-// The extensions endpoint resolves the built-in extensions folder relative to the repo root
+// The original cwd is tests/; the config path must be set before `src/endpoints/extensions.js`
+// loads, or `getConfig()` exits the process at module load. chdir first, then set it.
 const originalCwd = process.cwd();
+process.chdir(path.resolve(originalCwd, '..'));
+const { setConfigFilePath } = await import('../src/util.js');
+setConfigFilePath(path.join(process.cwd(), 'config.yaml'));
 beforeAll(() => process.chdir(path.resolve(originalCwd, '..')));
 afterAll(() => process.chdir(originalCwd));
 

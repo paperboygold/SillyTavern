@@ -1,0 +1,340 @@
+/*
+ * sanguine/overlay.css: the detail overlay's shell.
+ *
+ * A second sheet rather than more of `style.css`, for two reasons. `addExtensionStyle`
+ * (extensions.js:781) takes exactly one filename from the manifest, so this one is injected by
+ * `overlay.js` at import time instead; and the panel and the overlay are different surfaces with
+ * different jobs, which the file boundary says out loud.
+ *
+ * What is inherited, and what is ours.
+ *
+ * Every colour here comes from SillyTavern's theme variables, so the overlay wears whatever the
+ * player runs. The two doctrines the panel established carry over unchanged:
+ *
+ *   1. Derived and computed values are set in the mono face (`--fold-mono`); anything a narrator
+ *      wrote is set as prose in the body face. The typeface tells you who produced the value.
+ *   2. The semantic axis, `--fold-fresh` / `-warn` / `-crit` / `-rel`, declared in `style.css`
+ *      `:root`: is reserved for MEANING. The rail's selected state is chrome, not meaning, so it
+ *      takes `--SmartThemeQuoteColor` directly and leaves the semantic vars alone. Spending the
+ *      urgency colour on "which tab am I on" is how a tracker loses the ability to say "urgent".
+ *
+ * Type size.
+ *
+ * The panel sets `calc(var(--mainFontSize) * 0.78)` because it is an instrument crammed into 288px.
+ * The overlay is a reading surface, so it sits at full `--mainFontSize` and only steps down for
+ * chrome: labels on the rail, the placeholder's footnotes.
+ */
+
+/* The frame. */
+
+.popup.sanguine_overlay_popup {
+    width: min(760px, 94vw);
+    height: min(80vh, 640px);
+    max-width: 94vw;
+    /* `.popup` sets `min-height: fit-content`, which a tall tab body would win against and grow the
+       dialog past the viewport. The overlay is a fixed frame with scrolling panels inside it. */
+    min-height: 0;
+    padding: 4px 10px;
+    text-align: start;
+    font-size: var(--mainFontSize);
+}
+
+/* `.popup .popup-body` is `height: 100%` but neither it nor `.popup-content` is a flex column, so
+   without this the shell has no height to fill. Same fix `.swipe_picker_popup` needs
+   (public/style.css:1300). */
+.sanguine_overlay_popup .popup-body,
+.sanguine_overlay_popup .popup-content {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.sanguine_overlay {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    gap: 0.75em;
+    text-align: start;
+    color: var(--SmartThemeBodyColor);
+}
+
+/* The rail. */
+
+.sanguine_overlay_rail {
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 auto;
+    width: 9.5em;
+    gap: 0.15em;
+    padding-right: 0.6em;
+    border-right: 1px solid var(--SmartThemeBorderColor, rgba(128, 128, 128, 0.35));
+    overflow-y: auto;
+}
+
+.sanguine_overlay_tab {
+    display: flex;
+    align-items: center;
+    gap: 0.55em;
+    width: 100%;
+    padding: 0.45em 0.6em;
+    border: none;
+    /* Two rounded corners only: the tab is attached to the panel it opens, and a fully rounded pill
+       reads as a free-floating button that happens to be next to one. */
+    border-radius: 6px 0 0 6px;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: calc(var(--mainFontSize) * 0.92);
+    text-align: start;
+    cursor: pointer;
+    opacity: 0.72;
+    transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+
+.sanguine_overlay_tab:hover {
+    opacity: 1;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 12%, transparent);
+}
+
+/* Never removed, only replaced: `:focus-visible` is the only thing telling a keyboard user where
+   they are on the rail. */
+.sanguine_overlay_tab:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: -2px;
+    opacity: 1;
+}
+
+.sanguine_overlay_tab_on {
+    opacity: 1;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 18%, transparent);
+    /* A weight and a bar, not only a colour, the selected tab has to survive a theme whose accent
+       is a near-neighbour of its background, and has to be readable without colour at all. */
+    font-weight: 600;
+    box-shadow: inset 2px 0 0 var(--SmartThemeQuoteColor, #d4a753);
+}
+
+.sanguine_overlay_tab_icon {
+    flex: 0 0 1.1em;
+    text-align: center;
+    opacity: 0.85;
+}
+
+.sanguine_overlay_tab_label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The stage. */
+
+.sanguine_overlay_stage {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+}
+
+.sanguine_overlay_panel {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 0.2em 0.4em 0.6em 0;
+    line-height: 1.45;
+}
+
+/* The panel is `tabindex="0"` so its scrollbar answers to the keyboard; that makes it focusable,
+   and a focusable region needs to show when it holds focus. */
+.sanguine_overlay_panel:focus-visible {
+    outline: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 60%, transparent);
+    outline-offset: -1px;
+}
+
+/* The record `open({ tab, focus })` navigated to. A tab calls `context.reveal(node)` to earn this.
+   Left bar plus a wash: the wash alone disappears under a light theme, the bar alone is easy to
+   miss halfway down a long list. */
+.sanguine_overlay_hit {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 14%, transparent);
+    box-shadow: inset 2px 0 0 var(--SmartThemeQuoteColor, #d4a753);
+    border-radius: 0 4px 4px 0;
+}
+
+.sanguine_overlay_hit:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: 1px;
+}
+
+/* Placeholders. */
+
+.sanguine_overlay_placeholder {
+    max-width: 44em;
+    padding: 0.6em 0.2em;
+}
+
+/* An unfinished state, which is exactly what the warn colour is for, this is the semantic axis
+   being used for meaning rather than for decoration. */
+.sanguine_overlay_placeholder_flag {
+    color: var(--fold-warn, #d67a46);
+    font-weight: 600;
+    margin: 0 0 0.4em;
+}
+
+/* Narrator-facing prose: body face, full size. */
+.sanguine_overlay_placeholder_blurb {
+    margin: 0 0 0.6em;
+    opacity: 0.9;
+}
+
+.sanguine_overlay_placeholder_how {
+    margin: 0 0 0.9em;
+    font-size: calc(var(--mainFontSize) * 0.88);
+    opacity: 0.62;
+}
+
+.sanguine_overlay_keys {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.2em 0.8em;
+    margin: 0;
+    font-size: calc(var(--mainFontSize) * 0.85);
+}
+
+.sanguine_overlay_keys dt {
+    opacity: 0.55;
+}
+
+.sanguine_overlay_keys dd {
+    margin: 0;
+}
+
+/* Machine keys are computed values, so they take the instrument face, the same rule that puts
+   money and clocks in mono over in the panel. */
+.sanguine_overlay_key {
+    font-family: var(--fold-mono, var(--monoFontFamily, ui-monospace, monospace));
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    margin: 0;
+}
+
+.sanguine_overlay_failed {
+    padding: 0.6em 0.2em;
+    color: var(--fold-crit, #c94d5f);
+}
+
+/* Motion. */
+
+/*
+ * Overrides `pop-in`/`pop-out` (popup.css:87, 117) for this dialog only. A reading surface that
+ * scales up from the middle of the screen reads as an alert; a short rise reads as a drawer opening,
+ * which is what this is. Exit is faster than entry, leaving should never feel like waiting.
+ *
+ * The popup layer tears the dialog down inside `runAfterAnimation` (utils.js:2223), which listens
+ * for `animationend`, so these have to remain real animations rather than transitions.
+ */
+@keyframes sanguine_overlay_in {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes sanguine_overlay_out {
+    from {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+    to {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+}
+
+.popup.sanguine_overlay_popup[opening] {
+    animation: sanguine_overlay_in 200ms ease-out;
+}
+
+.popup.sanguine_overlay_popup[closing] {
+    animation: sanguine_overlay_out 150ms ease-in;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    /* Not `animation: none`: `runAfterAnimation` checks whether an animation exists and skips
+       waiting for `animationend` when there is none, so removing it entirely would change the
+       teardown path rather than only the look. A 1ms animation still fires the event. */
+    .popup.sanguine_overlay_popup[opening],
+    .popup.sanguine_overlay_popup[closing] {
+        animation-duration: 1ms;
+    }
+
+    .sanguine_overlay_tab {
+        transition: none;
+    }
+}
+
+/* Small screens.
+ *
+ * 1000px is the extension's existing breakpoint (`style.css` line 232) and SillyTavern's own mobile
+ * cutover. Below it the overlay stops being a dialog on top of the chat and becomes the screen: a
+ * full-bleed sheet with the rail as a bottom bar, where a thumb already expects to find it.
+ */
+@media (max-width: 1000px) {
+    .popup.sanguine_overlay_popup {
+        width: 100dvw;
+        height: 100dvh;
+        max-width: 100dvw;
+        max-height: 100dvh;
+        border-radius: 0;
+        border: none;
+        padding: 4px 8px;
+    }
+
+    /* Column-reverse rather than reordering the DOM: the rail must stay FIRST in the source, so a
+       screen reader and the Tab key both meet the tabs before the panel they control. */
+    .sanguine_overlay {
+        flex-direction: column-reverse;
+        gap: 0.4em;
+    }
+
+    .sanguine_overlay_rail {
+        flex-direction: row;
+        width: auto;
+        padding: 0.3em 0 0;
+        border-right: none;
+        border-top: 1px solid var(--SmartThemeBorderColor, rgba(128, 128, 128, 0.35));
+        overflow-x: auto;
+        overflow-y: hidden;
+    }
+
+    .sanguine_overlay_tab {
+        flex: 1 1 0;
+        flex-direction: column;
+        gap: 0.2em;
+        min-width: 4.2em;
+        padding: 0.4em 0.3em;
+        border-radius: 6px 6px 0 0;
+        text-align: center;
+        font-size: calc(var(--mainFontSize) * 0.8);
+    }
+
+    .sanguine_overlay_tab_on {
+        box-shadow: inset 0 -2px 0 var(--SmartThemeQuoteColor, #d4a753);
+    }
+
+    .sanguine_overlay_tab_icon {
+        flex: 0 0 auto;
+        font-size: 1.15em;
+    }
+
+    .sanguine_overlay_panel {
+        padding-right: 0.2em;
+    }
+}

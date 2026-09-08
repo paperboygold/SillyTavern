@@ -7,7 +7,7 @@ import { isMobile } from './RossAscends-mods.js';
 import { getTokenCountAsync } from './tokenizers.js';
 import { addLongPressEvent, clamp, copyText, timestampToMoment } from './utils.js';
 import { chat, deleteSwipe, ensureSwipes, isMessageSwipeable, isSwipingAllowed, swipe, syncMesToSwipe } from '/script.js';
-import { isSteered, steerForMessage } from './extensions/fold/steer-table.js';
+import { isSteered, steerForMessage } from './extensions/sanguine/steer-table.js';
 
 /**
  * Returns whether a swipe picker can be opened for the message.
@@ -274,7 +274,7 @@ async function openSwipePicker(messageId) {
             const steer = steerForMessage(message, index);
             if (isSteered(steer)) {
                 const steerChip = document.createElement('div');
-                steerChip.classList.add('fold_swipe_picker_steer');
+                steerChip.classList.add('sanguine_swipe_picker_steer');
                 const steerIcon = document.createElement('i');
                 steerIcon.classList.add('fa-solid', 'fa-fw', 'fa-wand-magic-sparkles');
                 steerChip.append(steerIcon);

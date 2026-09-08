@@ -1,8 +1,8 @@
-// THE HASHMAP TRINITY — one structure, the merge is the only freedom.
+// THE HASHMAP TRINITY, one structure, the merge is the only freedom.
 //
 // The JavaScript mirror of proof/Substrate/Algebra/HashTrinity.lean and lyrium's
-// src/hash.rs. There is ONE data structure — the hashmap (the dictionary-as-
-// applicative K → V; here, Map) — and ONE operation, insert_with(f) (update a key
+// src/hash.rs. There is ONE data structure, the hashmap (the dictionary-as-
+// applicative K → V; here, Map), and ONE operation, insert_with(f) (update a key
 // by MERGING the new value with the old via f). The merge f is the ONLY freedom;
 // the three "forms of hashmap" are that one operation under the trinity of merges:
 //
@@ -12,36 +12,36 @@
 //   | Map         | replace (last write)  | B   (1) | lookup · the value · the seed     |
 //   | Accumulator | a monoid (+/++)       | B/U (/) | counting · combine · the field    |
 //
-//   (+ the 4th: Graph — ++ over keys, the / turned on the keys themselves.)
+//   (+ the 4th: Graph, ++ over keys, the / turned on the keys themselves.)
 //
 // Every stateful operation in this site goes through insert_with. Learn the merge;
 // the rest is a choice of f.
 
 // THE ONE OPERATION. Update key k by merging the new value with the old via
-// f(new, old); if the key is absent, insert the new value. The merge f —
-// collision resolution — is the only thing that changes between the forms.
+// f(new, old); if the key is absent, insert the new value. The merge f,
+// collision resolution, is the only thing that changes between the forms.
 export const insert_with = (m, f, k, v) =>
   (m.set(k, m.has(k) ? f(v, m.get(k)) : v), m);
 
-// Total lookup — the Map face read, with a floor for absent keys.
+// Total lookup, the Map face read, with a floor for absent keys.
 export const lookup = (m, k, dflt) => (m.has(k) ? m.get(k) : dflt);
 
-// ───────── THE TRINITY OF MERGES — one operation, three (+1) forms ─────────
+// THE TRINITY OF MERGES, one operation, three (+1) forms.
 
-// NB (0): the idempotent merge — once in, in. → Set.
+// NB (0): the idempotent merge, once in, in. → Set.
 export const merge_nb = (nu, old) => nu || old;
 
-// B (1): replace — take the new value (last write). → Map.
+// B (1): replace, take the new value (last write). → Map.
 export const merge_b = (nu, _old) => nu;
 
-// B/U (/): a monoid merge — combine. Here (number, +), a counter. → Accumulator.
+// B/U (/): a monoid merge, combine. Here (number, +), a counter. → Accumulator.
 export const merge_bu = (nu, old) => nu + old;
 
-// B/U (/): the pair monoid — additive accumulation of {sum, n} (a mean's seed).
+// B/U (/): the pair monoid, additive accumulation of {sum, n} (a mean's seed).
 // Same Accumulator form as merge_bu, over the componentwise additive monoid.
 export const merge_acc = (nu, old) => ({ sum: nu.sum + old.sum, n: nu.n + old.n });
 
-// The 4th: ++ over keys (V = Array) — link. → Graph / adjacency.
+// The 4th: ++ over keys (V = Array), link. → Graph / adjacency.
 export const merge_graph = (nu, old) => old.concat(nu);
 
 // Recursor helpers: arrays/iterables fold into the one Table operation. These are deliberately
@@ -54,7 +54,7 @@ export const table_from = (xs, key, val, merge = merge_graph) =>
 export const table_values = (m) => Array.from(m.values());
 export const table_entries = (m) => Array.from(m.entries());
 
-// ───────── the tests (hash.rs §tests, runnable: import { self_test }) ─────────
+// the tests (hash.rs §tests, runnable: import { self_test }).
 
 export const self_test = () => {
   const eq = (a, b, name) => {

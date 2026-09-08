@@ -4,10 +4,12 @@
     "license": "AGPL-3.0",
     "scripts": {
         "test": "npm run test:unit && npm run test:e2e",
-        "test:unit": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.config.json",
+        "test:unit": "npm run test:gloss && npm run test:jest",
         "test:e2e": "playwright test",
         "lint": "eslint \"**/*.js\" ./*.js",
-        "lint:fix": "eslint \"**/*.js\" ./*.js --fix"
+        "lint:fix": "eslint \"**/*.js\" ./*.js --fix",
+        "test:gloss": "node --test sanguine-gloss-*.test.js",
+        "test:jest": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.config.json"
     },
     "dependencies": {
         "@playwright/test": "^1.56.1",

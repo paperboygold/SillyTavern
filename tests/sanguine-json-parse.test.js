@@ -1,11 +1,14 @@
-import { describe, expect, test } from './test-harness.js';
+import { describe, expect, test } from '@jest/globals';
 
 import {
+    analyzeExtraction,
     analyzeJson,
     balancedRegions,
+    closeUnbalanced,
     coerceExtraction,
     looksTruncated,
     parseLooseJson,
+    pickObject,
 } from '../public/scripts/extensions/sanguine/json-parse.js';
 
 describe('parseLooseJson', () => {
@@ -29,7 +32,7 @@ describe('parseLooseJson', () => {
     });
 
     test('tier 3: a bare object embedded in prose', () => {
-        expect(parseLooseJson('Sure thing: {"a":1} — let me know if you need more.'))
+        expect(parseLooseJson('Sure thing: {"a":1}, let me know if you need more.'))
             .toEqual({ a: 1 });
     });
 
@@ -41,7 +44,7 @@ describe('parseLooseJson', () => {
     test('recovers an object followed by prose containing a stray brace', () => {
         // A greedy /\{[\s\S]*\}/ spans to the LAST brace anywhere in the reply, so an emoticon
         // after the object was enough to produce invalid JSON and abandon the whole cycle.
-        expect(parseLooseJson('Here you go: {"events":[]} — hope that helps :} cheers'))
+        expect(parseLooseJson('Here you go: {"events":[]}, hope that helps :} cheers'))
             .toEqual({ events: [] });
     });
 
@@ -105,7 +108,7 @@ describe('balancedRegions', () => {
     });
 });
 
-describe('looksTruncated — retryable, as distinct from garbage', () => {
+describe('looksTruncated, retryable, as distinct from garbage', () => {
     test('detects a reply cut off mid-object', () => {
         expect(looksTruncated('{"events":[{"summary":"The party reached the')).toBe(true);
     });
@@ -123,9 +126,12 @@ describe('looksTruncated — retryable, as distinct from garbage', () => {
         expect(looksTruncated('I am sorry, I cannot comply with that request.')).toBe(false);
     });
 
-    test('analyzeJson reports truncation alongside a null value', () => {
+    test('analyzeJson now RECOVERS a truncated reply, and still reports it as truncated', () => {
+        // Was: value null, cycle abandoned, one extra LLM call to ask again. The reply already
+        // contained everything the model managed to say; only the closing brackets were missing.
         const analysis = analyzeJson('{"events":[{"summary":"cut off here');
-        expect(analysis.value).toBeNull();
+        expect(analysis.value).toEqual({ events: [{ summary: 'cut off here' }] });
+        // Still flagged, so the counter keeps recording that the budget is running short.
         expect(analysis.truncated).toBe(true);
     });
 
@@ -156,5 +162,120 @@ describe('coerceExtraction', () => {
         for (const junk of [null, undefined, 42, true, 'not json at all']) {
             expect(coerceExtraction(junk)).toBeNull();
         }
+    });
+});
+
+/*
+ * The failure that cost one chat every single extraction. `deepseek-v4-pro` with reasoning_effort
+ * on an 800-token budget spends the whole allowance thinking and returns nothing, a complete,
+ * well-formed, empty reply. That has no unterminated structure, so `looksTruncated` says false, the
+ * cycle is filed as garbage, and the retry that would have fixed it never runs.
+ */
+describe('empty is a budget failure, not a garbage one', () => {
+    test('an empty reply is flagged empty rather than truncated', () => {
+        for (const reply of ['', '   ', '\n\n']) {
+            const analysis = analyzeJson(reply);
+            expect(analysis.empty).toBe(true);
+            expect(analysis.truncated).toBe(false);
+            expect(analysis.value).toBeNull();
+        }
+    });
+
+    test('looksTruncated genuinely cannot see it, which is why the flag exists', () => {
+        expect(looksTruncated('')).toBe(false);
+    });
+
+    test('prose is neither empty nor truncated, retrying it just burns tokens', () => {
+        const analysis = analyzeJson('I cannot help with that request.');
+        expect(analysis.empty).toBe(false);
+        expect(analysis.truncated).toBe(false);
+    });
+
+    test('a cut-off object is still truncated, not empty', () => {
+        const analysis = analyzeJson('{"events": [{"s": "she opened the');
+        expect(analysis.truncated).toBe(true);
+        expect(analysis.empty).toBe(false);
+    });
+
+    test('success reports neither flag', () => {
+        const analysis = analyzeJson('{"a": 1}');
+        expect(analysis.value).toEqual({ a: 1 });
+        expect(analysis.empty).toBe(false);
+        expect(analysis.truncated).toBe(false);
+    });
+
+    test('coercion carries the flag through both request paths', () => {
+        // generateRaw hands back a string; a connection profile hands back parsed content. A null
+        // or undefined is neither, and is the same budget failure an empty string is.
+        expect(analyzeExtraction('').empty).toBe(true);
+        expect(analyzeExtraction(null).empty).toBe(true);
+        expect(analyzeExtraction(undefined).empty).toBe(true);
+        expect(analyzeExtraction({ events: [] }).empty).toBe(false);
+    });
+});
+
+/*
+ * Recovery. Measured on a real chat: extract:retry-truncated fired twice in thirteen attempts, each
+ * costing a second LLM call for a reply that already contained everything the model managed to say.
+ */
+describe('pickObject, later beats richer', () => {
+    test('a correction supersedes the draft it corrects', () => {
+        // The old rule took the object with the most keys, which can return the draft the model
+        // itself rejected, and a draft parses exactly as well as an answer.
+        const draft = { events: ['a'], entities: {}, scene: {} };
+        const final = { events: ['b'] };
+        expect(pickObject([draft, final])).toBe(final);
+    });
+
+    test('an empty envelope never wins', () => {
+        const real = { events: ['a'] };
+        expect(pickObject([real, {}])).toBe(real);
+    });
+
+    test('all-empty falls back to the last rather than throwing', () => {
+        expect(pickObject([{}, {}])).toEqual({});
+    });
+
+    test('disjoint fragments are one answer split in two', () => {
+        expect(pickObject([{ events: [1] }, { entities: [2] }]))
+            .toEqual({ events: [1], entities: [2] });
+    });
+
+    test('overlapping fragments are a draft and a correction, and are NOT merged', () => {
+        expect(pickObject([{ events: [1], scene: 'x' }, { events: [2] }])).toEqual({ events: [2] });
+    });
+});
+
+describe('closeUnbalanced, recover a cut-off reply without a second call', () => {
+    test('closes nested structures innermost first', () => {
+        const parsed = JSON.parse(closeUnbalanced('{"events": [{"s": "she opened the door"'));
+        expect(parsed.events[0].s).toBe('she opened the door');
+    });
+
+    test('terminates a string cut mid-word, keeping the partial value', () => {
+        const parsed = JSON.parse(closeUnbalanced('{"events": [{"s": "she opened the doo'));
+        expect(parsed.events[0].s).toBe('she opened the doo');
+    });
+
+    test('drops the incomplete member after the last comma', () => {
+        const parsed = JSON.parse(closeUnbalanced('{"a": 1, "b": 2, "c"'));
+        expect(parsed).toEqual({ a: 1, b: 2 });
+    });
+
+    test('a brace inside a string does not open a structure', () => {
+        const parsed = JSON.parse(closeUnbalanced('{"s": "a {curly} aside", "t": [1'));
+        expect(parsed.s).toBe('a {curly} aside');
+        expect(parsed.t).toEqual([1]);
+    });
+
+    test('analyzeJson recovers truncation end to end, and still reports it', () => {
+        const analysis = analyzeJson('{"events": [{"s": "the door gave way"');
+        expect(analysis.value.events[0].s).toBe('the door gave way');
+        // Still flagged, so the counter records that the model is running out of budget.
+        expect(analysis.truncated).toBe(true);
+    });
+
+    test('prose is not rescued into a fake object', () => {
+        expect(analyzeJson('I cannot help with that request.').value).toBeNull();
     });
 });

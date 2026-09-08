@@ -46,12 +46,12 @@ module.exports = {
             },
         },
         {
-            // Node scripts that live beside the fold extension (harvest.js and evaluate.js run on
+            // Node scripts that live beside the sanguine extension (harvest.js and evaluate.js run on
             // the command line over the chat data, not in the browser).
             files: [
-                'public/scripts/extensions/fold/harvest.js',
-                'public/scripts/extensions/fold/evaluate.js',
-                'public/scripts/extensions/fold/compare.js',
+                'public/scripts/extensions/sanguine/harvest.js',
+                'public/scripts/extensions/sanguine/evaluate.js',
+                'public/scripts/extensions/sanguine/compare.js',
             ],
             env: {
                 node: true,
@@ -98,7 +98,8 @@ module.exports = {
         // Vendored verbatim from the Sanguine proof corpus — do not lint or reformat.
         'public/scripts/extensions/sanguine/lib/**',
         'public/scripts/extensions/sanguine-gloss/lib/**',
-        'public/scripts/extensions/fold/lib/**',
+        // Generated from Unicode's Unihan database — 27k rows of data, not hand-written code.
+        'public/scripts/extensions/sanguine-gloss/data/char-floor.js',
     ],
     rules: {
         'jsdoc/no-undefined-types': ['warn', { disableReporting: true, markVariablesAsUsed: true }],

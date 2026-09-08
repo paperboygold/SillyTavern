@@ -6,7 +6,7 @@ import process from 'node:process';
 import express from 'express';
 import sanitize from 'sanitize-filename';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
-import { inlineForExport } from './fold-ledger.js';
+import { inlineForExport } from './sanguine-ledger.js';
 import _ from 'lodash';
 
 import validateAvatarUrlMiddleware from '../middleware/validateFileName.js';

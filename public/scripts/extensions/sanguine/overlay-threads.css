@@ -1,0 +1,598 @@
+/*
+ * sanguine/overlay-threads.css: the Threads tab.
+ *
+ * A third sheet, for the reason the second one exists: `addExtensionStyle` (extensions.js:781)
+ * takes exactly one filename from the manifest and `style.css` holds it, so `overlay.js` injects
+ * `overlay.css` at import time and this tab injects its own the same way. The file boundary is also
+ * the ownership boundary, the shell owns the frame, this owns what a thread looks like.
+ *
+ * What is borrowed, and from where.
+ *
+ * Nothing here invents a scale. Every size is one of the six steps declared in `style.css` `:root`
+ * (`--s-display` … `--s-micro`), every opacity is one of the four stops (`--o-now` … `--o-dormant`),
+ * every hue is one of the four semantic vars (`--fold-fresh`, `--fold-warn`, `--fold-crit`,
+ * `--fold-rel`) or the theme's own accent. The three doctrines those encode, restated because this
+ * sheet is where they get tested:
+ *
+ *   TYPE      Six steps and no seventh. `--s-micro` is for UPPERCASE tracked labels only, chips,
+ *             field labels, section headings, never for lowercase prose.
+ *   OPACITY   Means HOW CURRENT and nothing else. A settled thread is dormant; a thread the last
+ *             window touched is now. It never doubles as emphasis and never encodes severity.
+ *   HUE       Means state change and severity only. A doom clock filling is bad; a progress track
+ *             filling is good; they must not read the same, and neither may be drawn in the colour
+ *             the other one earns. The pin is UI chrome, a selection state, so it takes the
+ *             theme accent directly and leaves the semantic vars alone, exactly as the overlay
+ *             rail's selected tab does.
+ *
+ * Mono vs prose.
+ *
+ * A value fold DERIVED, a dial position, a turn number, a clock reading, a key, is set in
+ * `--fold-mono` with `tabular-nums`. Anything a narrator or the model wrote is set as prose in the
+ * body face. The typeface says who produced the value, which is the difference between a record and
+ * a spreadsheet of assertions.
+ */
+
+.sanguine_thr {
+    display: flex;
+    flex-direction: column;
+    gap: 1.1em;
+    max-width: 46em;
+    padding: 0.2em 0.2em 1em;
+}
+
+/* What is current.
+ *
+ * Two lines, and the difference between them is the whole point: the first is what the PLAYER says
+ * they are pushing on, the second is what the MODEL reports the last window actually mentioned.
+ * They are separated rather than merged because one is intent and the other is evidence.
+ */
+
+.sanguine_thr_current {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3em;
+    padding: 0.55em 0.7em;
+    border: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+    border-radius: 6px;
+}
+
+.sanguine_thr_current_line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.4em;
+}
+
+.sanguine_thr_none {
+    font-size: var(--s-sub);
+    opacity: var(--o-dormant);
+}
+
+/* A name that scrolls its real row into view. Never a second copy of the record: a key with two
+   nodes in one tab has two things to reveal, and the shell can only highlight one. */
+.sanguine_thr_jump {
+    padding: 0.1em 0.5em;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: var(--s-sub);
+    cursor: pointer;
+    text-align: start;
+}
+
+/* The player's own selection: the interface accent, filled. This is chrome, "which one did I
+   choose", not a claim about the fiction, so it must not spend a semantic hue. */
+.sanguine_thr_jump.is_pin {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 20%, transparent);
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 55%, transparent);
+    font-weight: 600;
+}
+
+/* The model's report: no hue at all, only a dotted edge. A dotted border reads as "observed" where
+   a solid one reads as "chosen", and the two claims stay legible with colour turned off entirely. */
+.sanguine_thr_jump.is_play {
+    border: 1px dotted var(--SmartThemeBorderColor, rgba(128, 128, 128, 0.55));
+    opacity: var(--o-context);
+}
+
+.sanguine_thr_jump:hover {
+    opacity: var(--o-now);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 12%, transparent);
+}
+
+.sanguine_thr_jump:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: 1px;
+}
+
+/* Sections. */
+
+.sanguine_thr_section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35em;
+}
+
+.sanguine_thr_heading {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5em;
+    margin: 0;
+    padding-bottom: 0.2em;
+    border-bottom: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+}
+
+.sanguine_thr_heading_label {
+    font-size: var(--s-micro);
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    opacity: var(--o-standing);
+}
+
+/* A count is derived, so it is mono and tabular. */
+.sanguine_thr_count {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    opacity: var(--o-dormant);
+}
+
+/* One line saying what belongs in a section, or how to read the two claims above. Prose, so the
+   body face and a prose step, never the micro floor. */
+.sanguine_thr_note {
+    margin: 0;
+    font-size: var(--s-sub);
+    line-height: 1.4;
+    opacity: var(--o-standing);
+}
+
+.sanguine_thr_list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15em;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+/* A thread. */
+
+.sanguine_thr_row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15em;
+    padding: 0.35em 0.4em 0.35em 0.5em;
+    border-radius: 4px;
+    border-left: 2px solid transparent;
+}
+
+/* Opacity is HOW CURRENT. Four stops, no fifth, and it says nothing about severity. */
+.sanguine_thr_row.is_now {
+    opacity: var(--o-now);
+}
+
+.sanguine_thr_row.is_context {
+    opacity: var(--o-context);
+}
+
+.sanguine_thr_row.is_standing {
+    opacity: var(--o-standing);
+}
+
+.sanguine_thr_row.is_over {
+    opacity: var(--o-dormant);
+}
+
+/* Reading and operating a row are the same act here, so anything the pointer or the keyboard is
+   inside comes back to full strength, a dimmed control is a control you cannot check before you
+   press it. */
+.sanguine_thr_row:hover,
+.sanguine_thr_row:focus-within {
+    opacity: var(--o-now);
+    background: color-mix(in srgb, var(--SmartThemeBodyColor, #ccc) 5%, transparent);
+}
+
+/* The pinned row, marked on the row itself and not only in the strip above, the accent again,
+   because this is still the same selection state. */
+.sanguine_thr_row.is_pinned {
+    border-left-color: var(--SmartThemeQuoteColor, #d4a753);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 7%, transparent);
+}
+
+.sanguine_thr_head {
+    display: flex;
+    align-items: center;
+    gap: 0.45em;
+    min-width: 0;
+}
+
+/* The disclosure. A real button with `aria-expanded`, so the record announces itself as openable
+   rather than being a div that happens to react to clicks. */
+.sanguine_thr_disc {
+    display: flex;
+    align-items: baseline;
+    gap: 0.35em;
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0.1em 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    text-align: start;
+    cursor: pointer;
+}
+
+.sanguine_thr_disc:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: 2px;
+    border-radius: 3px;
+}
+
+.sanguine_thr_caret {
+    flex: 0 0 auto;
+    font-size: var(--s-meta);
+    opacity: var(--o-standing);
+    transition: transform 0.15s ease;
+}
+
+.sanguine_thr_row.is_open .sanguine_thr_caret {
+    transform: rotate(90deg);
+}
+
+/* The name of the stake: a name, so the name step. */
+.sanguine_thr_name {
+    font-size: var(--s-body);
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+/* Chips.
+ *
+ * Uppercase and tracked, which is what licenses the micro step. Each says one thing about state,
+ * and only the ones that ARE severity or state change take a hue.
+ */
+
+.sanguine_thr_marks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25em;
+}
+
+.sanguine_thr_chip {
+    padding: 0.05em 0.4em;
+    border-radius: 3px;
+    border: 1px solid currentColor;
+    font-size: var(--s-micro);
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+/* Chosen by the player, chrome, filled in the accent. */
+.sanguine_thr_chip.is_pin {
+    color: var(--SmartThemeQuoteColor, #d4a753);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 18%, transparent);
+}
+
+/* Reported by the model, no hue, dotted, the same distinction the strip above draws. */
+.sanguine_thr_chip.is_play {
+    border-style: dotted;
+    opacity: var(--o-context);
+}
+
+/* Perceivable-but-unquantified, the same violet the panel's hidden dial wears. */
+.sanguine_thr_chip.is_veiled {
+    color: var(--fold-rel);
+}
+
+/* A doom that filled: the thing everyone was racing has happened. This is the one state on a thread
+   that is unambiguously bad, so it is the one that gets the critical hue. */
+.sanguine_thr_chip.is_fired {
+    color: var(--fold-crit);
+}
+
+/* A track that filled: the thing the characters were working toward is done. Fresh, never critical
+, drawing an achievement in the alarm colour is the exact confusion this codebase measured. */
+.sanguine_thr_chip.is_done {
+    color: var(--fold-fresh);
+}
+
+/* Settled, moot, recalled, elsewhere: outcomes and geography, not severities. No hue. */
+.sanguine_thr_chip.is_shut,
+.sanguine_thr_chip.is_moot,
+.sanguine_thr_chip.is_back,
+.sanguine_thr_chip.is_away {
+    opacity: var(--o-standing);
+}
+
+/* Dials.
+ *
+ * A doom is a Blades clock face: discrete segments, warning-coloured, critical past three quarters.
+ * A progress track is a continuous bar in the fresh hue with no urgency state at all. Segments
+ * answer "how many turns left"; a bar answers "how far along". They are different questions and
+ * they are drawn as different objects.
+ */
+
+.sanguine_thr_meter {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    flex: 0 0 auto;
+}
+
+.sanguine_thr_dial {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.12em;
+    color: var(--fold-warn);
+}
+
+.sanguine_thr_dial.is_urgent {
+    color: var(--fold-crit);
+}
+
+.sanguine_thr_dial.is_hidden {
+    color: var(--fold-rel);
+}
+
+.sanguine_thr_seg {
+    width: 0.3em;
+    height: 0.62em;
+    border-radius: 0.08em;
+    background: currentColor;
+    opacity: 0.22;
+}
+
+.sanguine_thr_seg.on {
+    opacity: 1;
+}
+
+/* Named but never quantified: one hatched mark says something is closing in without saying how
+   near, which is the honest thing to show and, not incidentally, the more frightening one. */
+.sanguine_thr_seg.is_unknown {
+    width: 1.3em;
+    opacity: 0.55;
+    background: repeating-linear-gradient(115deg, currentColor 0 2px, transparent 2px 4px);
+}
+
+.sanguine_thr_track {
+    display: inline-block;
+    width: 5em;
+    height: 0.36em;
+    border-radius: 0.18em;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--fold-fresh) 22%, transparent);
+}
+
+.sanguine_thr_track i {
+    display: block;
+    height: 100%;
+    background: var(--fold-fresh);
+}
+
+/* The fraction. Derived, so mono and tabular, the numbers must not shuffle sideways as a dial
+   ticks past ten. */
+.sanguine_thr_num {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    opacity: var(--o-standing);
+    white-space: nowrap;
+}
+
+/* Make Active. */
+
+.sanguine_thr_pin {
+    flex: 0 0 auto;
+    padding: 0.15em 0.4em;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font-size: var(--s-meta);
+    cursor: pointer;
+    opacity: 0.35;
+    transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.sanguine_thr_row:hover .sanguine_thr_pin,
+.sanguine_thr_row:focus-within .sanguine_thr_pin {
+    opacity: 0.8;
+}
+
+/* Pressed. Not hidden behind a hover, because the pinned state has to be visible from across the
+   list: `aria-pressed` says it to a screen reader and the accent says it to everyone else. */
+.sanguine_thr_pin.is_on,
+.sanguine_thr_row:hover .sanguine_thr_pin.is_on {
+    opacity: 1;
+    color: var(--SmartThemeQuoteColor, #d4a753);
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor, #d4a753) 45%, transparent);
+}
+
+.sanguine_thr_pin:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: 1px;
+    opacity: 1;
+}
+
+/* The prose. */
+
+/* What happens when it completes, or what acting would settle, the line of prose a meter is
+   attached to, never a meter with a label. Model-written, so the body face. */
+.sanguine_thr_lead {
+    margin: 0 0 0 1.1em;
+    font-size: var(--s-sub);
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+/* The record. */
+
+.sanguine_thr_detail {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5em;
+    margin: 0.35em 0 0.2em 1.1em;
+    padding-left: 0.7em;
+    border-left: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+}
+
+.sanguine_thr_fields {
+    display: grid;
+    grid-template-columns: minmax(6.5em, auto) 1fr;
+    gap: 0.25em 0.9em;
+    margin: 0;
+}
+
+/* Field labels are fold's own vocabulary rather than anything a narrator wrote, and they are
+   uppercase and tracked, the one thing the micro step exists for. */
+.sanguine_thr_label {
+    font-size: var(--s-micro);
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    opacity: var(--o-standing);
+    padding-top: 0.15em;
+}
+
+.sanguine_thr_value {
+    margin: 0;
+    font-size: var(--s-sub);
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+/* Derived: a position, a count, a turn, a clock reading. The face is the provenance. */
+.sanguine_thr_value.is_derived {
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    opacity: var(--o-standing);
+}
+
+/* Actions. */
+
+.sanguine_thr_acts {
+    display: flex;
+    gap: 0.3em;
+}
+
+.sanguine_thr_act {
+    min-width: 2em;
+    padding: 0.15em 0.5em;
+    border: 1px solid var(--fold-hair, rgba(128, 128, 128, 0.22));
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: var(--s-sub);
+    cursor: pointer;
+    opacity: var(--o-standing);
+    transition: opacity 0.15s ease, border-color 0.15s ease;
+}
+
+.sanguine_thr_act:hover {
+    opacity: var(--o-now);
+    border-color: var(--SmartThemeQuoteColor, #d4a753);
+}
+
+.sanguine_thr_act:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #d4a753);
+    outline-offset: 1px;
+    opacity: var(--o-now);
+}
+
+/* Destroys a row. The critical hue is earned here, this is severity, stated before the press
+   rather than after it. */
+.sanguine_thr_act.is_danger:hover,
+.sanguine_thr_act.is_danger:focus-visible {
+    color: var(--fold-crit);
+    border-color: var(--fold-crit);
+}
+
+/* Keys and failures. */
+
+/* The key `open({ tab, focus })` navigates by. A machine value, so the instrument face. */
+.sanguine_thr_key {
+    margin: 0;
+    font-family: var(--fold-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--s-meta);
+    opacity: var(--o-dormant);
+    overflow-wrap: anywhere;
+}
+
+/* A focus key that matches nothing. The shell cannot tell a stale key from a live one, so it opens
+   the tab regardless and the tab says what happened, an unexplained blank costs the player longer
+   than the sentence does. Warn, because this is a state worth noticing and not a failure. */
+.sanguine_thr_lost {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2em;
+    margin: 0;
+    padding: 0.5em 0.7em;
+    border-left: 2px solid var(--fold-warn);
+    border-radius: 0 4px 4px 0;
+    font-size: var(--s-sub);
+    background: color-mix(in srgb, var(--fold-warn) 8%, transparent);
+}
+
+.sanguine_thr_empty {
+    margin: 0;
+    max-width: 34em;
+    font-size: var(--s-sub);
+    line-height: 1.5;
+    opacity: var(--o-standing);
+}
+
+/* Motion. */
+
+@media (prefers-reduced-motion: reduce) {
+
+    .sanguine_thr_caret,
+    .sanguine_thr_pin,
+    .sanguine_thr_act {
+        transition: none;
+    }
+}
+
+/* Small screens.
+ *
+ * 1000px is the extension's existing breakpoint and the point at which the overlay becomes the
+ * screen. The head stops being one line: a name, a chip strip and a dial cannot share a row at
+ * 360px without the name ellipsing away, and the name is the thing you are reading.
+ */
+@media (max-width: 1000px) {
+    .sanguine_thr_head {
+        flex-wrap: wrap;
+    }
+
+    .sanguine_thr_disc {
+        flex: 1 1 100%;
+    }
+
+    /* Touch targets, not hover targets: a control that only appears on hover has no state a finger
+       can reach, so the pin sits at full strength here. */
+    .sanguine_thr_pin {
+        opacity: 0.8;
+        padding: 0.35em 0.6em;
+    }
+
+    .sanguine_thr_act {
+        padding: 0.35em 0.7em;
+    }
+
+    .sanguine_thr_fields {
+        grid-template-columns: 1fr;
+        gap: 0.05em;
+    }
+
+    .sanguine_thr_label {
+        padding-top: 0.3em;
+    }
+}
